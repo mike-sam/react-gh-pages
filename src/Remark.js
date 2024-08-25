@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 
-function Form({input, setInput, remark, setRemark, amount}) {
+function Remark({input, setInput, remark, setRemark, amount}) {
     const handleRemarkChange = (e) => {
         setRemark(e.target.value);
     }
@@ -11,20 +11,11 @@ function Form({input, setInput, remark, setRemark, amount}) {
         // 如果有其他状态需要清空，也在这里处理
     };
 
-    const handleSubmit = (e) => {
-        // Handle form submission logic here
-        e.preventDefault();
-        // 提交表单的逻辑
-    };
 
     return (
-        <form onSubmit={handleSubmit}>
-        <div className="form-container">
-        
-        <textarea value={remark} onChange={handleRemarkChange} />
-        <button onClick={handleSubmit}>提交</button>
-        </div>
-        </form>
+        <>
+        <textarea id="content-remark" value={remark} onChange={handleRemarkChange} />
+        </>
     );
 //   return (
 //     <div className="row row-no-wrap m-10">
@@ -41,4 +32,4 @@ function Form({input, setInput, remark, setRemark, amount}) {
 //   );
 }
 
-export default Form;
+export default Remark;

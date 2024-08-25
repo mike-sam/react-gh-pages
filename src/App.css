@@ -154,15 +154,18 @@ input,textarea {
 
 .form-container {
   display: flex;
-  justify-content: space-between;
+  flex-wrap: nowrap;
+  margin-top: 10px !important;
+  justify-content: space-around;
 }
 
-#calculator {
-  width: 50%;
-  /* 其他样式 */
+
+.grid {
+  display: grid;
+  width: 100%;
 }
 
-#content-remark {
-  width: 50%;
-  /* 其他样式 */
+.grid-2 {
+  grid-template-columns: calc(100% - 80px) 80px;
+  grid-template-rows: 1fr;
 }

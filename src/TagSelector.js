@@ -4,7 +4,7 @@ import React, { useState } from 'react';
 function TagSelector({ input, setInput, setRemark }) {
     // const [input, setInput] = useState('');
     const [selectedTag, setSelectedTag] = useState(null);
-    const tags = ['餐饮美食', '日常购物', '医疗保健', '交通出行', '休闲娱乐', '服饰美容', '旅游放松', '水电网', '人情往来', '家居硬体', '房贷房租物管', '车贷', '宠物', '其他'];
+    const tags = ['餐饮美食', '日常购物', '医疗保健', '交通出行', '自我增值','休闲娱乐', '服饰美容', '旅游放松', '水电网', '人情往来', '家居硬体', '房贷房租物管', '车贷', '宠物', '其他'];
     const handleReset = () => {
         setInput('');
         setRemark('');
@@ -24,15 +24,19 @@ function TagSelector({ input, setInput, setRemark }) {
     };
 
     return (
-        <div className="tag-container">
+        <>
+        <div className="input-container grid grid-2">
             <input type="text" value={input} onChange={handleInputChange} />
             <button onClick={handleReset}>清空</button>
+        </div>
+        <div className="tag-container">
             {tags.map(tag => (
                 <div key={tag} className={`tag ${selectedTag === tag ? 'selected' : ''}`} onClick={() => selectTag(tag)}>
                     {tag}
                 </div>
             ))}
         </div>
+        </>
     );
 }
 
