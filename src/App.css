@@ -244,3 +244,35 @@ input,textarea {
   padding: 8px 16px;
   margin: 5px 0px;
 }
+
+.input-group {
+  margin-bottom: 5px;
+}
+
+.input-group label {
+  display: block;
+  margin-bottom: 3px;
+  font-weight: bold;
+}
+
+.radio-group {
+  display: flex;
+  flex-wrap: wrap;
+}
+
+.radio-label {
+  margin-right: 10px;
+  display: flex;
+  align-items: center;
+}
+
+.radio-label input {
+  margin-right: 5px;
+}
+
+.custom-input {
+  width: 100%;
+  padding: 5px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+}

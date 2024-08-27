@@ -11,7 +11,7 @@ function App() {
   const tags = ['餐饮美食', '日常购物', '医疗保健', '交通出行', '自我增值','休闲娱乐', '服饰美容', '旅游放松', '水电网', '人情往来', '家居硬体', '房贷房租物管', '宠物', '其他'];
   const [input, setInput] = useState('');       // 管理输入内容的状态
   const [remark, setRemark] = useState('');     // 管理备注的状态
-  const [amount, setAmount] = useState('0');    // 管理金额的状态
+  const [amount, setAmount] = useState('');    // 管理金额的状态
   const [location, setLocation] = useState(''); // 管理地理位置的状态
   
   const handleSubmit = (e) => {

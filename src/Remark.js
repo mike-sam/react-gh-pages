@@ -22,35 +22,71 @@ function Remark({ remark, setRemark, selectedTag, input, amount }) {
         if (selectedTag === '交通出行' && input === '打油') {
             return (
                 <div className="special-inputs">
-                    <select 
-                        className="remark-select"
-                        value={carPlate} 
-                        onChange={(e) => {
-                            setCarPlate(e.target.value);
-                            if (e.target.value !== 'other') {
-                                setCustomCarPlate('');
-                            }
-                        }}
-                    >
-                        <option value="">Select Car Plate</option>
-                        {carPlates.map(plate => <option key={plate} value={plate}>{plate}</option>)}
-                        <option value="other">Other</option>
-                    </select>
+                    <div className="input-group">
+                        <label>Car Plate:</label>
+                        <div className="radio-group">
+                            {carPlates.map(plate => (
+                                <label key={plate} className="radio-label">
+                                    <input
+                                        type="radio"
+                                        value={plate}
+                                        checked={carPlate === plate}
+                                        onChange={(e) => setCarPlate(e.target.value)}
+                                    />
+                                    {plate}
+                                </label>
+                            ))}
+                            <label className="radio-label">
+                                <input
+                                    type="radio"
+                                    value="other"
+                                    checked={carPlate === 'other'}
+                                    onChange={(e) => setCarPlate(e.target.value)}
+                                />
+                                Other
+                            </label>
+                        </div>
+                    </div>
                     {carPlate === 'other' && (
-                        <input 
-                            type="text" 
-                            value={customCarPlate} 
-                            onChange={(e) => setCustomCarPlate(e.target.value)} 
-                            placeholder="输入车牌号码"
-                        />
+                        <div className="input-group">
+                            <input 
+                                type="text" 
+                                value={customCarPlate} 
+                                onChange={(e) => setCustomCarPlate(e.target.value)} 
+                                placeholder="Enter custom plate number"
+                                className="custom-input"
+                            />
+                        </div>
                     )}
-                    <select value={fuelType} onChange={(e) => setFuelType(e.target.value)} className="remark-select">
-                        <option value="">Select Fuel Type</option>
-                        <option value="ron95">RON95</option>
-                        <option value="ron97">RON97</option>
-                    </select>
-                    <input type="number" value={mileage} onChange={(e) => setMileage(e.target.value)} placeholder="Mileage" />
-                    <input type="number" value={tripInfo} onChange={(e) => setTripInfo(e.target.value)} placeholder="Trip (km)" />
+                    <div className="input-group">
+                        <label>Fuel Type:</label>
+                        <div className="radio-group">
+                            <label className="radio-label">
+                                <input
+                                    type="radio"
+                                    value="ron95"
+                                    checked={fuelType === 'ron95'}
+                                    onChange={(e) => setFuelType(e.target.value)}
+                                />
+                                RON95
+                            </label>
+                            <label className="radio-label">
+                                <input
+                                    type="radio"
+                                    value="ron97"
+                                    checked={fuelType === 'ron97'}
+                                    onChange={(e) => setFuelType(e.target.value)}
+                                />
+                                RON97
+                            </label>
+                        </div>
+                    </div>
+                    <div className="input-group">
+                        <input type="number" value={mileage} onChange={(e) => setMileage(e.target.value)} placeholder="Mileage" className="custom-input" />
+                    </div>
+                    <div className="input-group">
+                        <input type="number" value={tripInfo} onChange={(e) => setTripInfo(e.target.value)} placeholder="Trip (km)" className="custom-input" />
+                    </div>
                     <p>Average Price/km: RM {averagePrice}</p>
                 </div>
             );
@@ -76,3 +112,4 @@ function Remark({ remark, setRemark, selectedTag, input, amount }) {
 }
 
 export default Remark;
+
