@@ -3,22 +3,35 @@ import React, { useState } from 'react';
 function Calculator({amount, setAmount}) {
 
   const handleButtonClick = (value) => {
+    let tmpAmount = amount.toString();
+    let char_1 = '';
+    let char_2 = '';
+    if (tmpAmount.length >= 1){
+        char_1 = tmpAmount.charAt(tmpAmount.length - 1);
+    }
+    if (tmpAmount.length >= 2){
+        char_2 = tmpAmount.substr(tmpAmount.length - 2,1);
+    }
     switch(value){
         case 'C':
             setAmount('');
             break;
         case '=':
             try {
-                setAmount(eval(amount).toString());
-            } catch {
-                setAmount('Error');
+                setAmount(eval(amount).toFixed(2));
+            } catch (error) {
+                setAmount('Error'+ error);
             }
             break;
         case '0':
-            if(parseInt(amount) == 0){
-                setAmount(value);
+            if(parseInt(amount) === 0 || amount == ''){
+                setAmount('');
             } else {
-                setAmount(amount + value);
+                if(isNaN(char_1)){
+                    setAmount(amount);
+                } else {
+                    setAmount(amount + value);
+                }
             }
             break;
         case 'SGD':
@@ -28,7 +41,41 @@ function Calculator({amount, setAmount}) {
             setAmount((amount / 3.3).toFixed(2));
             break;
         default:
-            setAmount(amount + value);
+            if(char_1 === '0' && char_2 === '0'){
+                setAmount(value);
+            } else {
+                if(char_1 === '0' && char_2 === '0' && amount.length <= 2){
+                    setAmount(amount.slice(0,-1) + value);
+                } else {
+                    setAmount(amount + value);
+                }
+                // setAmount(amount + value);
+            }
+            // if(char_1 === '0'){
+            //     if(char_2 === '0'){
+            //         setAmount(amount);
+            //     } else {
+            //         if(value === '0'){
+            //             setAmount(amount);
+            //         } else {
+            //             if (char_2 === '0'){
+            //                 setAmount(value);
+            //             }
+            //         }
+            //         // if(!isNaN(amount)){
+            //         //     setAmount(amount + value);
+            //         // } else {
+            //         //     if(char_2 === '0'){
+            //         //         setAmount(value);
+            //         //     }
+            //         // }
+            //     }
+                
+            // } else if(tmpAmount.substr(tmpAmount.length-1) === '0' && !isNaN(parseInt(char_2)) && char_2 === '0'){
+            //     setAmount(tmpAmount.substr(0,tmpAmount.length-1)+value);
+            // } else {
+            //     setAmount(amount + value);
+            // }
             break;
     }
   };
