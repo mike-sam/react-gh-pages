@@ -8,7 +8,7 @@ import './App.css';
 
 function App() {
   const [selectedTag, setSelectedTag] = useState(null);
-  const tags = ['餐饮美食', '日常购物', '医疗保健', '交通出行', '自我增值','休闲娱乐', '服饰美容', '旅游放松', '水电网', '人情往来', '家居硬体', '房贷房租物管', '宠物', '其他'];
+  const tags = ['餐饮美食', '日常购物', '医疗保健', '交通出行', '自我增值', '投资金融', '休闲娱乐', '服饰美容', '旅游放松', '水电气网', '人情往来', '居家生活', '宠物', '其他'];
   const [input, setInput] = useState('');       // 管理输入内容的状态
   const [remark, setRemark] = useState('');     // 管理备注的状态
   const [amount, setAmount] = useState('');    // 管理金额的状态
