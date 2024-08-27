@@ -24,7 +24,7 @@ function Calculator({amount, setAmount}) {
             }
             break;
         case '0':
-            if(parseInt(amount) === 0 || amount == ''){
+            if(parseInt(amount) === 0 || amount === ''){
                 setAmount('');
             } else {
                 if(isNaN(char_1)){
