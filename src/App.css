@@ -250,9 +250,7 @@ input,textarea {
 }
 
 .input-group label {
-  display: block;
-  margin-bottom: 3px;
-  font-weight: bold;
+  display: flex;
 }
 
 .radio-group {
