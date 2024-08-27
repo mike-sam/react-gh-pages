@@ -28,7 +28,7 @@ function App() {
       <hr/>
       <div className="form-container">
         <Calculator amount={amount} setAmount={setAmount} />
-        <Remark input={input} setInput={setInput} remark={remark} setRemark={setRemark} amount={amount} selectedTag={selectedTag} amount={amount}  />
+        <Remark input={input} setInput={setInput} remark={remark} setRemark={setRemark} amount={amount} selectedTag={selectedTag} />
       </div>
       <button className="submit" onClick={handleSubmit}>提交</button>
       <Geolocation setLocation={setLocation} />
