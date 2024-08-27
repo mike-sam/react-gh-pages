@@ -8,7 +8,7 @@ import './App.css';
 
 function App() {
   const [selectedTag, setSelectedTag] = useState(null);
-  const tags = ['餐饮美食', '日常购物', '医疗保健', '交通出行', '自我增值','休闲娱乐', '服饰美容', '旅游放松', '水电网', '人情往来', '家居硬体', '房贷房租物管', '车贷', '宠物', '其他'];
+  const tags = ['餐饮美食', '日常购物', '医疗保健', '交通出行', '自我增值','休闲娱乐', '服饰美容', '旅游放松', '水电网', '人情往来', '家居硬体', '房贷房租物管', '宠物', '其他'];
   const [input, setInput] = useState('');       // 管理输入内容的状态
   const [remark, setRemark] = useState('');     // 管理备注的状态
   const [amount, setAmount] = useState('0');    // 管理金额的状态
@@ -28,7 +28,7 @@ function App() {
       <hr/>
       <div className="form-container">
         <Calculator amount={amount} setAmount={setAmount} />
-        <Remark input={input} setInput={setInput} remark={remark} setRemark={setRemark} amount={amount} selectedTag={selectedTag} />
+        <Remark input={input} setInput={setInput} remark={remark} setRemark={setRemark} amount={amount} selectedTag={selectedTag} amount={amount}  />
       </div>
       <button className="submit" onClick={handleSubmit}>提交</button>
       <Geolocation setLocation={setLocation} />
