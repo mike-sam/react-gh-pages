@@ -1,14 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import Remark from './Remark';
-
 
 function TagSelector({ input, setInput, remark, setRemark, setAmount, selectedTag, setSelectedTag, tags, amount }) {
-   
-
     const handleReset = () => {
         setInput('');
         setRemark('');
-        setAmount('0');
+        setAmount('');
+        setSelectedTag('');
         // 如果有其他状态需要清空，也在这里处理
     };
 
@@ -54,7 +51,7 @@ function TagSelector({ input, setInput, remark, setRemark, setAmount, selectedTa
             {secondTags[selectedTag] ? (
                 <ul className="second-tag">
                     {secondTags[selectedTag].map((tag, index) => (
-                        <li key={index} onClick={() => handleSecondaryTagClick(tag)}>{tag}</li>
+                        <li className={`tag ${tag === input ? 'selected' : ''}`} key={index} onClick={() => handleSecondaryTagClick(tag)}>{tag}</li>
                     ))}
                 </ul>
             ) : selectedTag ? (
