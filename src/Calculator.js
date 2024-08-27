@@ -37,8 +37,10 @@ function Calculator({amount, setAmount}) {
         case 'SGD':
             setAmount((amount * 3.3).toFixed(2));
             break;
-        case 'MYR':
-            setAmount((amount / 3.3).toFixed(2));
+        case 'CNY':
+            setAmount((amount / 1.55).toFixed(2));
+            break;
+        case 'NNN':
             break;
         default:
             if(char_1 === '0' && char_2 === '0'){
@@ -77,7 +79,9 @@ function Calculator({amount, setAmount}) {
         <button className="calc-key" onClick={() => handleButtonClick('+')}>+</button>
         <button className="calc-key" onClick={() => handleButtonClick('=')}>=</button>
         <button className="calc-key currency" onClick={() => handleButtonClick('SGD')}>SGD</button>
-        <button className="calc-key currency" onClick={() => handleButtonClick('MYR')}>MYR</button>
+        <button className="calc-key currency" onClick={() => handleButtonClick('CNY')}>CNY</button>
+        <button className="calc-key currency hide" onClick={() => handleButtonClick('')}>NNN</button>
+        <button className="calc-key currency hide" onClick={() => handleButtonClick('')}>NNN</button>
       </div>
     </div>
   );
