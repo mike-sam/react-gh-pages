@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 
 function Remark({ remark, setRemark, selectedTag, input, amount }) {
-    const [carPlate, setCarPlate] = useState('');
+    const [carPlate, setCarPlate] = useState('WD6060E');
     const [customCarPlate, setCustomCarPlate] = useState('');
     const [fuelType, setFuelType] = useState('ron95');
     const [mileage, setMileage] = useState('');
@@ -19,7 +19,8 @@ function Remark({ remark, setRemark, selectedTag, input, amount }) {
     }, [amount, tripInfo, selectedTag, input]);
 
     const renderSpecialInputs = () => {
-        if (selectedTag === '交通出行' && input === '打油') {
+        let vehicle_related = ['打油', '洗车美容', '维修保养', '车险','停车费','车贷'];
+        if (selectedTag === '交通出行' && vehicle_related.includes(input)) {
             return (
                 <div className="special-inputs">
                     <div className="input-group">
@@ -58,36 +59,43 @@ function Remark({ remark, setRemark, selectedTag, input, amount }) {
                             />
                         </div>
                     )}
-                    <div className="input-group">
-                        <label>Fuel Type:</label>
-                        <div className="radio-group">
-                            <label className="radio-label">
-                                <input
-                                    type="radio"
-                                    value="ron95"
-                                    checked={fuelType === 'ron95'}
-                                    onChange={(e) => setFuelType(e.target.value)}
-                                />
-                                RON95
-                            </label>
-                            <label className="radio-label">
-                                <input
-                                    type="radio"
-                                    value="ron97"
-                                    checked={fuelType === 'ron97'}
-                                    onChange={(e) => setFuelType(e.target.value)}
-                                />
-                                RON97
-                            </label>
+                    {input === '打油' && (
+                        <>
+                        <div className="input-group">
+                            <label>Fuel Type:</label>
+                            <div className="radio-group">
+                                <label className="radio-label">
+                                    <input
+                                        type="radio"
+                                        value="ron95"
+                                        checked={fuelType === 'ron95'}
+                                        onChange={(e) => setFuelType(e.target.value)}
+                                    />
+                                    RON95
+                                </label>
+                                <label className="radio-label">
+                                    <input
+                                        type="radio"
+                                        value="ron97"
+                                        checked={fuelType === 'ron97'}
+                                        onChange={(e) => setFuelType(e.target.value)}
+                                    />
+                                    RON97
+                                </label>
+                            </div>
                         </div>
-                    </div>
-                    <div className="input-group">
-                        <input type="number" value={mileage} onChange={(e) => setMileage(e.target.value)} placeholder="Mileage" className="custom-input" />
-                    </div>
-                    <div className="input-group">
-                        <input type="number" value={tripInfo} onChange={(e) => setTripInfo(e.target.value)} placeholder="Trip (km)" className="custom-input" />
-                    </div>
-                    <p>Average Price/km: RM {averagePrice}</p>
+                        <div className="input-group">
+                            <input type="number" value={tripInfo} onChange={(e) => setTripInfo(e.target.value)} placeholder="Trip (km)" className="custom-input" />
+                        </div>
+                        <p>Average Price/km: RM {averagePrice}</p>
+                        </>
+                    )}
+                    {!['车贷','洗车美容'].includes(input) && (
+                        <div className="input-group">
+                            <input type="number" value={mileage} onChange={(e) => setMileage(e.target.value)} placeholder="Mileage" className="custom-input" />
+                        </div>
+                    )}
+                    
                 </div>
             );
         } else {
