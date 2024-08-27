@@ -51,31 +51,6 @@ function Calculator({amount, setAmount}) {
                 }
                 // setAmount(amount + value);
             }
-            // if(char_1 === '0'){
-            //     if(char_2 === '0'){
-            //         setAmount(amount);
-            //     } else {
-            //         if(value === '0'){
-            //             setAmount(amount);
-            //         } else {
-            //             if (char_2 === '0'){
-            //                 setAmount(value);
-            //             }
-            //         }
-            //         // if(!isNaN(amount)){
-            //         //     setAmount(amount + value);
-            //         // } else {
-            //         //     if(char_2 === '0'){
-            //         //         setAmount(value);
-            //         //     }
-            //         // }
-            //     }
-                
-            // } else if(tmpAmount.substr(tmpAmount.length-1) === '0' && !isNaN(parseInt(char_2)) && char_2 === '0'){
-            //     setAmount(tmpAmount.substr(0,tmpAmount.length-1)+value);
-            // } else {
-            //     setAmount(amount + value);
-            // }
             break;
     }
   };
@@ -101,8 +76,8 @@ function Calculator({amount, setAmount}) {
         <button className="calc-key" onClick={() => handleButtonClick('.')}>.</button>
         <button className="calc-key" onClick={() => handleButtonClick('+')}>+</button>
         <button className="calc-key" onClick={() => handleButtonClick('=')}>=</button>
-        <button className="calc-key" onClick={() => handleButtonClick('SGD')}>SGD</button>
-        <button className="calc-key" onClick={() => handleButtonClick('MYR')}>MYR</button>
+        <button className="calc-key currency" onClick={() => handleButtonClick('SGD')}>SGD</button>
+        <button className="calc-key currency" onClick={() => handleButtonClick('MYR')}>MYR</button>
       </div>
     </div>
   );

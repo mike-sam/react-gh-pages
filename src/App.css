@@ -66,6 +66,9 @@ body {
   cursor: pointer;
   background-color: #bfe2ff;
 }
+.calc-key.currency {
+  background-color: #c0bfff;
+}
 button.calc-key{
   border-radius: 0px;
   border: 0px;
