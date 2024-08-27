@@ -1,19 +1,35 @@
 import React, { useState } from 'react';
 
-function Calculator() {
-  const [amount, setAmount] = useState('0');
+function Calculator({amount, setAmount}) {
 
   const handleButtonClick = (value) => {
-    if (value === 'C') {
-      setAmount('');
-    } else if (value === '=') {
-      try {
-        setAmount(eval(amount).toString());
-      } catch {
-        setAmount('Error');
-      }
-    } else {
-      setAmount(amount === '0' ? value : amount + value);
+    switch(value){
+        case 'C':
+            setAmount('');
+            break;
+        case '=':
+            try {
+                setAmount(eval(amount).toString());
+            } catch {
+                setAmount('Error');
+            }
+            break;
+        case '0':
+            if(parseInt(amount) == 0){
+                setAmount(value);
+            } else {
+                setAmount(amount + value);
+            }
+            break;
+        case 'SGD':
+            setAmount((amount * 3.3).toFixed(2));
+            break;
+        case 'MYR':
+            setAmount((amount / 3.3).toFixed(2));
+            break;
+        default:
+            setAmount(amount + value);
+            break;
     }
   };
 
@@ -38,6 +54,8 @@ function Calculator() {
         <button className="calc-key" onClick={() => handleButtonClick('.')}>.</button>
         <button className="calc-key" onClick={() => handleButtonClick('+')}>+</button>
         <button className="calc-key" onClick={() => handleButtonClick('=')}>=</button>
+        <button className="calc-key" onClick={() => handleButtonClick('SGD')}>SGD</button>
+        <button className="calc-key" onClick={() => handleButtonClick('MYR')}>MYR</button>
       </div>
     </div>
   );

@@ -102,6 +102,31 @@ button.calc-key{
   width: 100%;
   /* max-width: 50vw; */
 }
+.input-container input {
+  margin-right: 5px;
+}
+button.submit {
+  margin-top: 10px;
+  height: 35px;
+}
+.input-container button, button.submit {
+  cursor: pointer;
+  width: 100%;
+  background-color: #ff3838;
+  border: 0px;
+  padding: 3px 5px;
+  border-radius: 5px;
+  color: white;
+}
+button.submit {
+  background-color: #373aeb;
+}
+button.submit:hover  {
+  background-color: #12147c;
+}
+.input-container button:hover{
+  background-color: #b80000;
+}
 .row {
   display: flex;
   justify-content: space-around;
@@ -169,3 +194,4 @@ input,textarea {
   grid-template-columns: calc(100% - 80px) 80px;
   grid-template-rows: 1fr;
 }
+

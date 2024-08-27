@@ -1,16 +1,9 @@
 import React, { useState } from 'react';
 
-function Remark({input, setInput, remark, setRemark, amount}) {
+function Remark({input, setInput, remark, setRemark, amount, selectedTag}) {
     const handleRemarkChange = (e) => {
         setRemark(e.target.value);
     }
-
-    const handleReset = () => {
-        setInput('');
-        setRemark('');
-        // 如果有其他状态需要清空，也在这里处理
-    };
-
 
     return (
         <>
