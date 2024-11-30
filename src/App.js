@@ -104,7 +104,7 @@ function App() {
         <Remark input={input} setInput={setInput} remark={remark} setCarPlate={setCarPlate} carPlate={carPlate} setRemark={setRemark} amount={amount} selectedTag={selectedTag} />
       </div>
       <button className="submit" onClick={handleSubmit}>提交</button>
-      <Geolocation setLocation={setLocation} />
+      <Geolocation location={location} setLocation={setLocation} />
       <Output output={output} />
       <Log setLog={setLog} log={log} />
     </div>
