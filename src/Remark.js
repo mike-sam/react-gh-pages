@@ -147,8 +147,9 @@ function Remark({ remark, setRemark, setCarPlate, carPlate, selectedTag, input, 
     useEffect(() => {
         setRemark(() => {
             if (selectedTag === '交通出行') {
-                let anotherAveragePrice = fuelType === 'ron95' ? amount*(2.05/3.15)/parseFloat(tripInfo) : amount*(3.15/2.05)/parseFloat(tripInfo);
+                let anotherFuelPrice = fuelType === 'ron95' ? 3.15 : 2.05;
                 let anotherFuelType = fuelType === 'ron95' ? 'ron97' : 'ron95';
+                let anotherAveragePrice = (anotherFuelPrice*averageLitterPer100Km/100).toFixed(2);
                 const sections = {
                     carPlate: carPlate && `CarPlate: ${carPlate}`,
                     fuelInfo: input === '打油' && [
