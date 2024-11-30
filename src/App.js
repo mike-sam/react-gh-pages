@@ -4,6 +4,8 @@ import TagSelector from './TagSelector';
 import Calculator from './Calculator';
 import Remark from './Remark';
 import Geolocation from './Geolocation';
+import Log from './Log';
+import Output from './Output';
 import './App.css';
 
 function App() {
@@ -13,12 +15,77 @@ function App() {
   const [remark, setRemark] = useState('');     // 管理备注的状态
   const [amount, setAmount] = useState('');    // 管理金额的状态
   const [location, setLocation] = useState(''); // 管理地理位置的状态
+  const [log, setLog] = useState([]); 
+  const [output, setOutput] = useState('');
   
-  const handleSubmit = (e) => {
-    // Handle form submission logic here
+  async function pushToGsheet(contents) {
+    const gs_appscript_url = 'https://script.google.com/macros/s/AKfycbyUOZimpAo5_hOCv1cvG6rXgns0htqk-lymPUlte7yoRFh_8V427Egnzpsv8PnpnjWXRw/exec';
+    try {
+      const response = await fetch(gs_appscript_url, {
+        method: "POST",
+        mode: "no-cors",
+        redirect: "follow",
+        body: JSON.stringify(contents),
+        headers: {
+          "Content-type": "application/json; charset=UTF-8"
+        }
+      });
+       // Convert response to string for logging
+       const responseText = JSON.stringify(response);
+       console.log("Success:", responseText);
+       return responseText;
+    } catch (error) {
+      console.error("Error:", error.toString());
+      throw error;
+    }
+  }  
+  function datetimetoYMDHIS(inputDateTime = new Date()){
+    let date = inputDateTime;
+    let year = date.getFullYear();
+    let month = date.getMonth() + 1;
+    let day = date.getDate();
+    let hours = date.getHours();
+    let minutes = date.getMinutes();
+    let seconds = date.getSeconds();
+    return year + "-" + month.toString().padStart(2,"0") + "-" + day.toString().padStart(2,"0") + " " + hours.toString().padStart(2,"0") + ":" + minutes.toString().padStart(2,"0") + ":" + seconds.toString().padStart(2,"0");
+  }
+  function datetimetoYM(inputDateTime = new Date()){
+    let date = inputDateTime;
+    let year = date.getFullYear();
+    let month = date.getMonth() + 1;
+    let day = date.getDate();
+    let hours = date.getHours();
+    let minutes = date.getMinutes();
+    let seconds = date.getSeconds();
+    return year + month.toString().padStart(2,"0");
+  }
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    // 提交表单的逻辑
-};
+    const separator = '|'
+    let submitted_value = input+separator+amount+separator+selectedTag+separator+remark+separator+location;
+    console.log({submitted_value});
+    const shortcutUrl = 'shortcuts://run-shortcut?name=WebRecordExpenses&input=text&text='+encodeURIComponent(submitted_value);
+    let contents_for_gsheets = {
+        timestamp: datetimetoYMDHIS(),
+        title: input,
+        yearmonth: datetimetoYM(),
+        amount: amount,
+        remark: remark,
+        geolocation: location,
+        tag: selectedTag,
+    };
+    setOutput(`<a href="${shortcutUrl}">${shortcutUrl}</a>`);
+    submitted_value = datetimetoYMDHIS() + separator + submitted_value;
+    setLog(prevLog => [submitted_value,...prevLog]);
+    // document.getElementById("record").appendChild(_p_ele);
+    // document.getElementById('empty-btn').click();
+    
+    // Handle form submission logic here
+    
+    await pushToGsheet(contents_for_gsheets);
+      
+      // 提交表单的逻辑
+  };
   // const [input, setInput] = useState('');
   // const [remark, setRemark] = useState('');
   return (
@@ -32,6 +99,8 @@ function App() {
       </div>
       <button className="submit" onClick={handleSubmit}>提交</button>
       <Geolocation setLocation={setLocation} />
+      <Output output={output} />
+      <Log setLog={setLog} log={log} />
     </div>
   );
 }

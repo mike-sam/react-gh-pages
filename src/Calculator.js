@@ -24,15 +24,17 @@ function Calculator({amount, setAmount}) {
             }
             break;
         case '0':
-            if(parseInt(amount) === 0 || amount === ''){
-                setAmount('');
-            } else {
+            // if(parseInt(amount) === 0 || amount === ''){
+            //     setAmount('');
+            // } else {
                 if(isNaN(char_1)){
                     setAmount(amount);
                 } else {
-                    setAmount(amount + value);
+                    // setAmount(amount + value);
+                    const numericPart = (amount + value).replace(/[^0-9]/g, '');
+                    setAmount((parseFloat(numericPart) / 100).toFixed(2));
                 }
-            }
+            // }
             break;
         case 'SGD':
             setAmount((amount * 3.3).toFixed(2));
@@ -42,17 +44,26 @@ function Calculator({amount, setAmount}) {
             break;
         case 'NNN':
             break;
+        case '←':
+            setAmount(amount.slice(0, -1));
+            break;
         default:
-            if(char_1 === '0' && char_2 === '0'){
-                setAmount(value);
+            if(/[0-9]/.test(value)) {
+                const numericPart = (amount + value).replace(/[^0-9]/g, '');
+                setAmount((parseFloat(numericPart) / 100).toFixed(2));
             } else {
-                if(char_1 === '0' && char_2 === '0' && amount.length <= 2){
-                    setAmount(amount.slice(0,-1) + value);
-                } else {
-                    setAmount(amount + value);
-                }
-                // setAmount(amount + value);
+                setAmount(amount + value);
             }
+            // if(char_1 === '0' && char_2 === '0'){
+            //     setAmount(value);
+            // } else {
+            //     if(char_1 === '0' && char_2 === '0' && amount.length <= 2){
+            //         setAmount(amount.slice(0,-1) + value);
+            //     } else {
+            //         setAmount(amount + value);
+            //     }
+            //     // setAmount(amount + value);
+            // }
             break;
     }
   };
@@ -75,7 +86,7 @@ function Calculator({amount, setAmount}) {
         <button className="calc-key" onClick={() => handleButtonClick('3')}>3</button>
         <button className="calc-key" onClick={() => handleButtonClick('-')}>-</button>
         <button className="calc-key" onClick={() => handleButtonClick('0')}>0</button>
-        <button className="calc-key" onClick={() => handleButtonClick('.')}>.</button>
+        <button className="calc-key" onClick={() => handleButtonClick('←')}>←</button>
         <button className="calc-key" onClick={() => handleButtonClick('+')}>+</button>
         <button className="calc-key" onClick={() => handleButtonClick('=')}>=</button>
         <button className="calc-key currency" onClick={() => handleButtonClick('SGD')}>SGD</button>

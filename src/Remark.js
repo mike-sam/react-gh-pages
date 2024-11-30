@@ -2,11 +2,12 @@ import React, { useState, useEffect } from 'react';
 
 function Remark({ remark, setRemark, selectedTag, input, amount }) {
     const [carPlate, setCarPlate] = useState('WD6060E');
-    const [customCarPlate, setCustomCarPlate] = useState('');
+    const [fuelPrice, setFuelPrice] = useState('2.05');
     const [fuelType, setFuelType] = useState('ron95');
     const [mileage, setMileage] = useState('');
     const [tripInfo, setTripInfo] = useState('');
     const [averagePrice, setAveragePrice] = useState(0);
+    const [averageLitterPer100Km, setLitterPer100Km] = useState(0);
 
     const carPlates = ['PPQ8777', 'WD6060E'];
 
@@ -15,9 +16,32 @@ function Remark({ remark, setRemark, selectedTag, input, amount }) {
             const price = parseFloat(amount) || 0;
             const trip = parseFloat(tripInfo) || 1;
             setAveragePrice((price / trip).toFixed(2));
+            setLitterPer100Km((trip/(price/fuelPrice)).toFixed(2));
         }
     }, [amount, tripInfo, selectedTag, input]);
 
+    const validateCarPlate = (e) => {
+        if (e.key === 'Backspace' || e.key === 'Delete') {
+            const value = e.target.value;
+            setCarPlate(value);
+        } else {
+            const value = e.target.value;
+            const sanitizedValue = value.replace(/[^a-z0-9\s]/gi, '');
+            setCarPlate(sanitizedValue);
+        }
+    };
+
+    const validateFuelPrice = (e) => {
+        if (e.key === 'Backspace') {
+            setFuelPrice(prev => prev.slice(0, -1));
+        } else if (e.key === 'Delete'){
+            setFuelPrice('');
+        } else {
+            const value = e.target.value;
+            const sanitizedValue = value.replace(/[^0-9\.]/gi, '');
+            setFuelPrice(sanitizedValue);
+        }
+    };
     const renderSpecialInputs = () => {
         let vehicle_related = ['打油', '洗车美容', '维修保养', '车险','停车费','车贷'];
         if (selectedTag === '交通出行' && vehicle_related.includes(input)) {
@@ -41,19 +65,19 @@ function Remark({ remark, setRemark, selectedTag, input, amount }) {
                                 <input
                                     type="radio"
                                     value="other"
-                                    checked={carPlate === 'other'}
+                                    checked={!carPlates.includes(carPlate)}
                                     onChange={(e) => setCarPlate(e.target.value)}
                                 />
                                 Other
                             </label>
                         </div>
                     </div>
-                    {carPlate === 'other' && (
+                    {!carPlates.includes(carPlate) && (
                         <div className="input-group">
                             <input 
                                 type="text" 
-                                value={customCarPlate} 
-                                onChange={(e) => setCustomCarPlate(e.target.value)} 
+                                value={carPlate == 'other'?'':carPlate}
+                                onChange={validateCarPlate}
                                 placeholder="Enter custom plate number"
                                 className="custom-input"
                             />
@@ -69,7 +93,7 @@ function Remark({ remark, setRemark, selectedTag, input, amount }) {
                                         type="radio"
                                         value="ron95"
                                         checked={fuelType === 'ron95'}
-                                        onChange={(e) => setFuelType(e.target.value)}
+                                        onChange={(e) => {setFuelType(e.target.value);setFuelPrice(2.05)}}
                                     />
                                     RON95
                                 </label>
@@ -78,16 +102,19 @@ function Remark({ remark, setRemark, selectedTag, input, amount }) {
                                         type="radio"
                                         value="ron97"
                                         checked={fuelType === 'ron97'}
-                                        onChange={(e) => setFuelType(e.target.value)}
+                                        onChange={(e) => {setFuelType(e.target.value);setFuelPrice(3.15)}}
                                     />
                                     RON97
                                 </label>
                             </div>
                         </div>
                         <div className="input-group">
+                            <input type="number" value={fuelPrice} onChange={validateFuelPrice} placeholder="Fuel Price per litter" className="custom-input" />
+                        </div>
+                        <div className="input-group">
                             <input type="number" value={tripInfo} onChange={(e) => setTripInfo(e.target.value)} placeholder="Trip (km)" className="custom-input" />
                         </div>
-                        <p>Average Price/km: RM {averagePrice}</p>
+                        <p>RM{averagePrice}/km <code style={{color:'red'}}>or</code> {averageLitterPer100Km} litter for 100 km</p>
                         </>
                     )}
                     {!['车贷','洗车美容'].includes(input) && (
@@ -95,7 +122,6 @@ function Remark({ remark, setRemark, selectedTag, input, amount }) {
                             <input type="number" value={mileage} onChange={(e) => setMileage(e.target.value)} placeholder="Mileage" className="custom-input" />
                         </div>
                     )}
-                    
                 </div>
             );
         } else {
@@ -111,6 +137,28 @@ function Remark({ remark, setRemark, selectedTag, input, amount }) {
         return null;
     };
 
+    const formatRemark = () => {
+        const sections = {
+            carPlate: carPlate && `CarPlate: ${carPlate}`,
+            fuelInfo: input === '打油' && [
+                `ODO: ${mileage}`,
+                tripInfo && `Trip: ${tripInfo}km`,
+                `Fuel Type: ${fuelType.toUpperCase()}`,
+                `RM${averagePrice}/km or ${averageLitterPer100Km} litter for 100 km`,
+            ],
+            mileage: !['车贷','洗车美容'].includes(input) && 
+                mileage && `Mileage: ${mileage}`
+        };
+
+        return Object.values(sections)
+            .flat()
+            .filter(Boolean)
+            .join('\n');
+    };
+
+    useEffect(() => {
+        setRemark(formatRemark());
+    }, [carPlate, fuelType, tripInfo, averagePrice, mileage, input]);
     return (
         <div id="remark-container">
             {renderSpecialInputs()}
