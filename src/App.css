@@ -5,6 +5,12 @@
   .tag {
       padding: 6px 12px;
   }
+  
+}
+@media screen and (max-width: 600px) {
+  #calculator {
+    align-items: start!important;
+  }
   .app-container {
     max-width: 600px;
   }
@@ -12,13 +18,11 @@
     width: 30px !important;
   }
   .radio-label {
-    /* margin-right: 0px !important; */
+    margin: 2px !important;
+    font-size: 10pt
   }
   .radio-group {
-    /* flex-wrap: nowrap !important; */
-  }
-  #calculator {
-    align-items: start!important;
+    flex-wrap: nowrap !important;
   }
 }
 @media screen and (min-width: 900px) {
@@ -295,4 +299,5 @@ input,textarea {
   white-space: nowrap;
   width: 100%;
   overflow: overlay;
+  max-width: calc(100vw - 20px);
 }

@@ -15,7 +15,8 @@ function Remark({ remark, setRemark, setCarPlate, carPlate, selectedTag, input, 
             const price = parseFloat(amount) || 0;
             const trip = parseFloat(tripInfo) || 1;
             setAveragePrice((price / trip).toFixed(2));
-            let kmPer100Km = trip/(price/fuelPrice);
+            let totalLitter = price/fuelPrice;
+            let kmPer100Km = totalLitter/trip*100;
             setLitterPer100Km('');
             if(typeof(kmPer100Km) == 'number' && kmPer100Km != Infinity){
                 setLitterPer100Km(kmPer100Km.toFixed(2));
@@ -48,6 +49,9 @@ function Remark({ remark, setRemark, setCarPlate, carPlate, selectedTag, input, 
     const renderSpecialInputs = () => {
         let vehicle_related = ['打油', '洗车美容', '维修保养', '车险','停车费','车贷'];
         if (selectedTag === '交通出行' && vehicle_related.includes(input)) {
+            let anotherFuelPrice = fuelType === 'ron95' ? 3.15 : 2.05;
+            let anotherFuelType = fuelType === 'ron95' ? 'ron97' : 'ron95';
+            let anotherAveragePrice = (anotherFuelPrice*averageLitterPer100Km/100).toFixed(2);
             return (
                 <div className="special-inputs">
                     <div className="input-group">
@@ -120,7 +124,7 @@ function Remark({ remark, setRemark, setCarPlate, carPlate, selectedTag, input, 
                         <div className="input-group">
                             <input type="number" value={tripInfo} onChange={(e) => setTripInfo(e.target.value)} placeholder="Trip (km)" className="custom-input" />
                         </div>
-                        {averagePrice > 0 && (<p>RM{averagePrice}/km <code style={{color:'red'}}>or</code> {averageLitterPer100Km} litter for 100 km</p>)}
+                        {averagePrice > 0 && (<p>RM{averagePrice}/km[{fuelType}] RM{anotherAveragePrice}/km[{anotherFuelType}] <code style={{color:'red'}}>or</code> {averageLitterPer100Km} litter for 100 km</p>)}
                         </>
                     )}
                 </div>
@@ -143,16 +147,19 @@ function Remark({ remark, setRemark, setCarPlate, carPlate, selectedTag, input, 
     useEffect(() => {
         setRemark(() => {
             if (selectedTag === '交通出行') {
+                let anotherAveragePrice = fuelType === 'ron95' ? amount*(2.05/3.15)/parseFloat(tripInfo) : amount*(3.15/2.05)/parseFloat(tripInfo);
+                let anotherFuelType = fuelType === 'ron95' ? 'ron97' : 'ron95';
                 const sections = {
                     carPlate: carPlate && `CarPlate: ${carPlate}`,
                     fuelInfo: input === '打油' && [
-                        `ODO: ${mileage}`,
                         tripInfo && `Trip: ${tripInfo}km`,
                         `Fuel Type: ${fuelType.toUpperCase()}`,
-                        `RM${averagePrice}/km or ${averageLitterPer100Km} litter for 100 km`,
+                        `RM${averagePrice}/km[${fuelType}]`,
+                        `RM${anotherAveragePrice}/km[${anotherFuelType}]`,
+                        `${averageLitterPer100Km} litter for 100 km`,
                     ],
                     mileage: !['车贷','洗车美容'].includes(input) && 
-                        mileage && `Mileage: ${mileage}`
+                        mileage && `ODO: ${mileage}`
                 };
         
                 return Object.values(sections)
