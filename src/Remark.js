@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 
-function Remark({ remark, setRemark, selectedTag, input, amount }) {
-    const [carPlate, setCarPlate] = useState('WD6060E');
+function Remark({ remark, setRemark, setCarPlate, carPlate, selectedTag, input, amount }) {
     const [fuelPrice, setFuelPrice] = useState('2.05');
     const [fuelType, setFuelType] = useState('ron95');
     const [mileage, setMileage] = useState('');

@@ -13,6 +13,7 @@ function App() {
   const tags = ['餐饮美食', '日常购物', '医疗保健', '交通出行', '自我增值', '投资金融', '休闲娱乐', '服饰美容', '旅游放松', '水电气网', '人情往来', '居家生活', '宠物', '其他'];
   const [input, setInput] = useState('');       // 管理输入内容的状态
   const [remark, setRemark] = useState('');     // 管理备注的状态
+  const [carPlate, setCarPlate] = useState('');     // 管理备注的状态
   const [amount, setAmount] = useState('');    // 管理金额的状态
   const [location, setLocation] = useState(''); // 管理地理位置的状态
   const [log, setLog] = useState([]); 
@@ -63,7 +64,6 @@ function App() {
     e.preventDefault();
     const separator = '|'
     let submitted_value = input+separator+amount+separator+selectedTag+separator+remark+separator+location;
-    console.log({submitted_value});
     const shortcutUrl = 'shortcuts://run-shortcut?name=WebRecordExpenses&input=text&text='+encodeURIComponent(submitted_value);
     const contents_for_gsheets = {
         timestamp: formatDateTime(new Date(), 'YMDHIS'),
@@ -75,7 +75,7 @@ function App() {
         tag: selectedTag,
     };
     setOutput(`<a href="${shortcutUrl}">${shortcutUrl}</a>`);
-    submitted_value = datetimetoYMDHIS() + separator + submitted_value;
+    submitted_value = formatDateTime(new Date(), 'YMDHIS') + separator + submitted_value;
     setLog(prevLog => [submitted_value,...prevLog]);
     // document.getElementById("record").appendChild(_p_ele);
     // document.getElementById('empty-btn').click();
@@ -84,7 +84,13 @@ function App() {
     
     await pushToGsheet(contents_for_gsheets);
       
-      // 提交表单的逻辑
+    // Reset all form fields after successful submission
+    setInput('');
+    setRemark('');
+    setAmount('');
+    setSelectedTag('');
+    setLocation('');
+    setCarPlate('');
   };
   // const [input, setInput] = useState('');
   // const [remark, setRemark] = useState('');
@@ -95,7 +101,7 @@ function App() {
       <hr/>
       <div className="form-container">
         <Calculator amount={amount} setAmount={setAmount} />
-        <Remark input={input} setInput={setInput} remark={remark} setRemark={setRemark} amount={amount} selectedTag={selectedTag} />
+        <Remark input={input} setInput={setInput} remark={remark} setCarPlate={setCarPlate} carPlate={carPlate} setRemark={setRemark} amount={amount} selectedTag={selectedTag} />
       </div>
       <button className="submit" onClick={handleSubmit}>提交</button>
       <Geolocation setLocation={setLocation} />
