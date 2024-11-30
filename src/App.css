@@ -295,7 +295,7 @@ input,textarea {
   border-radius: 4px;
 }
 
-.output {
+.output,.log {
   white-space: nowrap;
   width: 100%;
   overflow: overlay;
