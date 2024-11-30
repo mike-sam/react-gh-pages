@@ -39,36 +39,36 @@ function App() {
       throw error;
     }
   }  
-  function datetimetoYMDHIS(inputDateTime = new Date()){
-    let date = inputDateTime;
-    let year = date.getFullYear();
-    let month = date.getMonth() + 1;
-    let day = date.getDate();
-    let hours = date.getHours();
-    let minutes = date.getMinutes();
-    let seconds = date.getSeconds();
-    return year + "-" + month.toString().padStart(2,"0") + "-" + day.toString().padStart(2,"0") + " " + hours.toString().padStart(2,"0") + ":" + minutes.toString().padStart(2,"0") + ":" + seconds.toString().padStart(2,"0");
-  }
-  function datetimetoYM(inputDateTime = new Date()){
-    let date = inputDateTime;
-    let year = date.getFullYear();
-    let month = date.getMonth() + 1;
-    let day = date.getDate();
-    let hours = date.getHours();
-    let minutes = date.getMinutes();
-    let seconds = date.getSeconds();
-    return year + month.toString().padStart(2,"0");
-  }
+  const formatDateTime = (date = new Date(), format = 'YMDHIS') => {
+    const pad = num => num.toString().padStart(2, "0");
+    const parts = {
+      Y: date.getFullYear(),
+      M: pad(date.getMonth() + 1),
+      D: pad(date.getDate()),
+      H: pad(date.getHours()),
+      I: pad(date.getMinutes()),
+      S: pad(date.getSeconds())
+    };
+
+    switch (format) {
+      case 'YMDHIS':
+        return `${parts.Y}-${parts.M}-${parts.D} ${parts.H}:${parts.I}:${parts.S}`;
+      case 'YM':
+        return `${parts.Y}${parts.M}`;
+      default:
+        return '';
+    }
+  };
   const handleSubmit = async (e) => {
     e.preventDefault();
     const separator = '|'
     let submitted_value = input+separator+amount+separator+selectedTag+separator+remark+separator+location;
     console.log({submitted_value});
     const shortcutUrl = 'shortcuts://run-shortcut?name=WebRecordExpenses&input=text&text='+encodeURIComponent(submitted_value);
-    let contents_for_gsheets = {
-        timestamp: datetimetoYMDHIS(),
+    const contents_for_gsheets = {
+        timestamp: formatDateTime(new Date(), 'YMDHIS'),
+        yearmonth: formatDateTime(new Date(), 'YM'),
         title: input,
-        yearmonth: datetimetoYM(),
         amount: amount,
         remark: remark,
         geolocation: location,
