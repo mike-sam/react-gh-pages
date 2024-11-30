@@ -5,6 +5,21 @@
   .tag {
       padding: 6px 12px;
   }
+  .app-container {
+    max-width: 600px;
+  }
+  .custom-input.fuel-price-input {
+    width: 30px !important;
+  }
+  .radio-label {
+    /* margin-right: 0px !important; */
+  }
+  .radio-group {
+    /* flex-wrap: nowrap !important; */
+  }
+  #calculator {
+    align-items: start!important;
+  }
 }
 @media screen and (min-width: 900px) {
   body {
@@ -20,9 +35,6 @@ body {
   height: calc(100vh - 50px);
 }
 
-.app-container {
-  max-width: 600px;
-}
 .tag {
   display: inline-block;
   padding: 5px 10px;

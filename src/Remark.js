@@ -15,7 +15,11 @@ function Remark({ remark, setRemark, setCarPlate, carPlate, selectedTag, input, 
             const price = parseFloat(amount) || 0;
             const trip = parseFloat(tripInfo) || 1;
             setAveragePrice((price / trip).toFixed(2));
-            setLitterPer100Km((trip/(price/fuelPrice)).toFixed(2));
+            let kmPer100Km = trip/(price/fuelPrice);
+            setLitterPer100Km('');
+            if(typeof(kmPer100Km) == 'number' && kmPer100Km != Infinity){
+                setLitterPer100Km(kmPer100Km.toFixed(2));
+            }
         }
     }, [amount, tripInfo, selectedTag, input, fuelPrice]);
 
@@ -78,8 +82,13 @@ function Remark({ remark, setRemark, setCarPlate, carPlate, selectedTag, input, 
                                 value={carPlate === 'other'?'':carPlate}
                                 onChange={validateCarPlate}
                                 placeholder="Enter custom plate number"
-                                className="custom-input"
+                                className="custom-input car-plate-input"
                             />
+                        </div>
+                    )}
+                    {!['车贷','洗车美容'].includes(input) && (
+                        <div className="input-group">
+                            <input type="number" value={mileage} onChange={(e) => setMileage(e.target.value)} placeholder="Mileage" className="custom-input" />
                         </div>
                     )}
                     {input === '打油' && (
@@ -105,21 +114,14 @@ function Remark({ remark, setRemark, setCarPlate, carPlate, selectedTag, input, 
                                     />
                                     RON97
                                 </label>
+                                <input type="number" value={fuelPrice} onChange={validateFuelPrice} placeholder="Fuel Price per litter" className="custom-input fuel-price-input" />
                             </div>
-                        </div>
-                        <div className="input-group">
-                            <input type="number" value={fuelPrice} onChange={validateFuelPrice} placeholder="Fuel Price per litter" className="custom-input" />
                         </div>
                         <div className="input-group">
                             <input type="number" value={tripInfo} onChange={(e) => setTripInfo(e.target.value)} placeholder="Trip (km)" className="custom-input" />
                         </div>
-                        <p>RM{averagePrice}/km <code style={{color:'red'}}>or</code> {averageLitterPer100Km} litter for 100 km</p>
+                        {averagePrice > 0 && (<p>RM{averagePrice}/km <code style={{color:'red'}}>or</code> {averageLitterPer100Km} litter for 100 km</p>)}
                         </>
-                    )}
-                    {!['车贷','洗车美容'].includes(input) && (
-                        <div className="input-group">
-                            <input type="number" value={mileage} onChange={(e) => setMileage(e.target.value)} placeholder="Mileage" className="custom-input" />
-                        </div>
                     )}
                 </div>
             );
