@@ -17,7 +17,7 @@ function Remark({ remark, setRemark, setCarPlate, carPlate, selectedTag, input, 
             setAveragePrice((price / trip).toFixed(2));
             setLitterPer100Km((trip/(price/fuelPrice)).toFixed(2));
         }
-    }, [amount, tripInfo, selectedTag, input]);
+    }, [amount, tripInfo, selectedTag, input, fuelPrice]);
 
     const validateCarPlate = (e) => {
         if (e.key === 'Backspace' || e.key === 'Delete') {
@@ -37,7 +37,7 @@ function Remark({ remark, setRemark, setCarPlate, carPlate, selectedTag, input, 
             setFuelPrice('');
         } else {
             const value = e.target.value;
-            const sanitizedValue = value.replace(/[^0-9\.]/gi, '');
+            const sanitizedValue = value.replace(/[^0-9.]/gi, '');
             setFuelPrice(sanitizedValue);
         }
     };
@@ -75,7 +75,7 @@ function Remark({ remark, setRemark, setCarPlate, carPlate, selectedTag, input, 
                         <div className="input-group">
                             <input 
                                 type="text" 
-                                value={carPlate == 'other'?'':carPlate}
+                                value={carPlate === 'other'?'':carPlate}
                                 onChange={validateCarPlate}
                                 placeholder="Enter custom plate number"
                                 className="custom-input"
@@ -133,31 +133,35 @@ function Remark({ remark, setRemark, setCarPlate, carPlate, selectedTag, input, 
             />
             )
         }
-        return null;
+
     };
 
-    const formatRemark = () => {
-        const sections = {
-            carPlate: carPlate && `CarPlate: ${carPlate}`,
-            fuelInfo: input === '打油' && [
-                `ODO: ${mileage}`,
-                tripInfo && `Trip: ${tripInfo}km`,
-                `Fuel Type: ${fuelType.toUpperCase()}`,
-                `RM${averagePrice}/km or ${averageLitterPer100Km} litter for 100 km`,
-            ],
-            mileage: !['车贷','洗车美容'].includes(input) && 
-                mileage && `Mileage: ${mileage}`
-        };
-
-        return Object.values(sections)
-            .flat()
-            .filter(Boolean)
-            .join('\n');
-    };
+    // const formatRemark = 
 
     useEffect(() => {
-        setRemark(formatRemark());
-    }, [carPlate, fuelType, tripInfo, averagePrice, mileage, input]);
+        setRemark(() => {
+            if (selectedTag === '交通出行') {
+                const sections = {
+                    carPlate: carPlate && `CarPlate: ${carPlate}`,
+                    fuelInfo: input === '打油' && [
+                        `ODO: ${mileage}`,
+                        tripInfo && `Trip: ${tripInfo}km`,
+                        `Fuel Type: ${fuelType.toUpperCase()}`,
+                        `RM${averagePrice}/km or ${averageLitterPer100Km} litter for 100 km`,
+                    ],
+                    mileage: !['车贷','洗车美容'].includes(input) && 
+                        mileage && `Mileage: ${mileage}`
+                };
+        
+                return Object.values(sections)
+                    .flat()
+                    .filter(Boolean)
+                    .join('\n');
+            } else {
+                return remark;
+            }
+        });
+    }, [carPlate, fuelType, tripInfo, averagePrice, mileage, input, setRemark, remark, selectedTag, averageLitterPer100Km]);
     return (
         <div id="remark-container">
             {renderSpecialInputs()}

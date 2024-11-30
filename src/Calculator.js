@@ -1,16 +1,12 @@
-import React, { useState } from 'react';
+import React from 'react';
 
 function Calculator({amount, setAmount}) {
 
   const handleButtonClick = (value) => {
     let tmpAmount = amount.toString();
     let char_1 = '';
-    let char_2 = '';
     if (tmpAmount.length >= 1){
         char_1 = tmpAmount.charAt(tmpAmount.length - 1);
-    }
-    if (tmpAmount.length >= 2){
-        char_2 = tmpAmount.substr(tmpAmount.length - 2,1);
     }
     switch(value){
         case 'C':

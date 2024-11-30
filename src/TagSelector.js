@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 
 function TagSelector({ input, setInput, remark, setRemark, setAmount, selectedTag, setSelectedTag, tags, amount }) {
     const handleReset = () => {
@@ -27,8 +27,9 @@ function TagSelector({ input, setInput, remark, setRemark, setAmount, selectedTa
     const handleInputChange = (e) => setInput(e.target.value);
     const selectTag = (tag) => {
         setInput('');
-        setRemark('');
-        if (selectedTag == tag) {
+        console.log({tag,selectedTag});
+        // setRemark('');
+        if (selectedTag === tag) {
             setSelectedTag('');
             return;
         }
@@ -37,7 +38,7 @@ function TagSelector({ input, setInput, remark, setRemark, setAmount, selectedTa
 
     const handleSecondaryTagClick = (tag) => {
         setInput(tag);
-        setRemark('');
+        // setRemark('');
     };
 
 
