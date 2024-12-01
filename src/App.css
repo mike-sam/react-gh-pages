@@ -253,6 +253,7 @@ input,textarea {
 .help-message {
   margin: 10px 0px 7px 0px;
   font-size: 12px;
+  padding: 3px 10px;
   /* text-align: center; */
   color: #888;
 }

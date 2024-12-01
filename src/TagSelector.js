@@ -45,7 +45,7 @@ function TagSelector({ input, setInput, remark, setRemark, setAmount, selectedTa
     return (
         <>
         <div className="input-container grid grid-2">
-            <input type="text" value={input} onChange={handleInputChange} placeholder="输入或选择" />
+            <input type="text" value={input} onChange={handleInputChange} placeholder="输入或选择" style={{'padding':'10px'}}/>
             <button onClick={handleReset}>清空</button>
         </div>
         <div className="secondary-tags-container">
