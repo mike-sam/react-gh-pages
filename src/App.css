@@ -301,3 +301,10 @@ input,textarea {
   overflow: overlay;
   max-width: calc(100vw - 20px);
 }
+
+.form-row {
+  display: flex;
+  align-items: center;
+  margin: 10px 0;
+  padding: 0 10px;
+}

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Header from './Header';
 import TagSelector from './TagSelector';
 import Calculator from './Calculator';
@@ -18,7 +18,11 @@ function App() {
   const [location, setLocation] = useState(''); // 管理地理位置的状态
   const [log, setLog] = useState([]); 
   const [output, setOutput] = useState('');
-  
+  const [paymentMethod, setPaymentMethod] = useState('');
+  const [paymentOptions, setPaymentOptions] = useState({
+    '[Cash]': { key: '[Cash]', card_num: '[Cash]' },
+    'eWallet': { key: 'eWallet', card_num: 'eWallet' }
+  }); 
   async function pushToGsheet(contents) {
     const gs_appscript_url = 'https://script.google.com/macros/s/AKfycbyUOZimpAo5_hOCv1cvG6rXgns0htqk-lymPUlte7yoRFh_8V427Egnzpsv8PnpnjWXRw/exec';
     try {
@@ -40,7 +44,32 @@ function App() {
       console.error("Error:", error.toString());
       throw error;
     }
-  }  
+  }
+
+  useEffect(() => {
+    const fetchPaymentOptions = async () => {
+      try {
+        const response = await fetch('https://script.google.com/macros/s/AKfycbxW3xA-FWkpC0J_wmqJE_SM5MZ3DhWyJQUx0cuiN0S9lb_d0hHhEdjede6Ul_8Vxa8Mqw/exec');
+        console.log({response})
+        const data = await response.json();
+        // Transform the object into array format we need
+        const transformedData = Object.entries(data)
+        .filter(([key, value]) => value.card_num)
+        .reduce((acc, [key, value]) => {
+          acc[value.bank] = {
+            key: value.bank,
+            card_num: value.card_num
+          };
+          return acc;
+        }, {...paymentOptions});
+        setPaymentOptions(transformedData);
+      } catch (error) {
+        console.error('Error fetching payment options:', error);
+      }
+    };
+    fetchPaymentOptions();
+  }, []);
+
   const formatDateTime = (date = new Date(), format = 'YMDHIS') => {
     const pad = num => num.toString().padStart(2, "0");
     const parts = {
@@ -64,7 +93,7 @@ function App() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     const separator = '|'
-    let submitted_value = input+separator+amount+separator+selectedTag+separator+remark+separator+location;
+    let submitted_value = input+separator+amount+separator+selectedTag+separator+remark+separator+location+separator+paymentMethod;
     console.log({submitted_value});
     const shortcutUrl = 'shortcuts://run-shortcut?name=WebRecordExpenses&input=text&text='+encodeURIComponent(submitted_value);
     
@@ -89,6 +118,7 @@ function App() {
         remark: remark,
         geolocation: location,
         tag: selectedTag,
+        payment_method: paymentMethod,  // Add this line
     };
 
     submitted_value = formatDateTime() + separator + submitted_value;
@@ -122,7 +152,27 @@ function App() {
         <Calculator amount={amount} setAmount={setAmount} />
         <Remark input={input} setInput={setInput} remark={remark} setCarPlate={setCarPlate} carPlate={carPlate} setRemark={setRemark} amount={amount} selectedTag={selectedTag} />
       </div>
+      <div className="form-row">
+      <select 
+        value={paymentMethod}
+        onChange={(e) => setPaymentMethod(e.target.value)}
+        style={{ 
+          flex: 1,
+          padding: '8px',
+          marginRight: '10px',
+          borderRadius: '4px',
+          border: '1px solid #ccc'
+        }}
+      >
+        <option value="">Select payment method</option>
+        {Object.values(paymentOptions).map((option) => (
+          <option key={option.card_num} value={option.card_num}>
+            {option.key} - {option.card_num}
+          </option>
+        ))}
+      </select>
       <button className="submit" onClick={handleSubmit}>提交</button>
+    </div>
       <Geolocation location={location} setLocation={setLocation} />
       <Output output={output} />
       <Log setLog={setLog} log={log} />
