@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import Select from 'react-select';
 import Header from './Header';
 import TagSelector from './TagSelector';
 import Calculator from './Calculator';
@@ -49,7 +50,7 @@ function App() {
   useEffect(() => {
     const fetchPaymentOptions = async () => {
       try {
-        const response = await fetch('https://script.google.com/macros/s/AKfycbxW3xA-FWkpC0J_wmqJE_SM5MZ3DhWyJQUx0cuiN0S9lb_d0hHhEdjede6Ul_8Vxa8Mqw/exec');
+        const response = await fetch('https://script.google.com/macros/s/AKfycbz2NiyxrNvirBRFYy7j-GT8anX1OUKoiv7fTg38-QKYs77TVyPnDYrDlu4N3pbnOVPK7w/exec');
         console.log({response})
         const data = await response.json();
         // Transform the object into array format we need
@@ -152,27 +153,35 @@ function App() {
         <Calculator amount={amount} setAmount={setAmount} />
         <Remark input={input} setInput={setInput} remark={remark} setCarPlate={setCarPlate} carPlate={carPlate} setRemark={setRemark} amount={amount} selectedTag={selectedTag} />
       </div>
-      <div className="form-row">
-      <select 
-        value={paymentMethod}
-        onChange={(e) => setPaymentMethod(e.target.value)}
-        style={{ 
-          flex: 1,
-          padding: '8px',
-          marginRight: '10px',
-          borderRadius: '4px',
-          border: '1px solid #ccc'
+      <Select
+        value={paymentMethod ? {
+          value: paymentMethod,
+          label: Object.values(paymentOptions).find(opt => opt.card_num === paymentMethod)?.key === paymentMethod ? 
+            paymentMethod : 
+            `${Object.values(paymentOptions).find(opt => opt.card_num === paymentMethod)?.key} - ${paymentMethod}`
+        } : null}
+        onChange={(selected) => setPaymentMethod(selected ? selected.value : '')}
+        options={Object.values(paymentOptions).map(option => ({
+          value: option.card_num,
+          label: option.key === option.card_num ? option.key : `${option.key} - ${option.card_num}`
+        }))}
+        isClearable
+        placeholder="Select or search payment method..."
+        styles={{
+          container: (base) => ({
+            ...base,
+            flex: 1,
+            margin: '10px 0px 0px 0px'
+          }),
+          option: (base) => ({
+            ...base,
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis'
+          }),
         }}
-      >
-        <option value="">Select payment method</option>
-        {Object.values(paymentOptions).map((option) => (
-          <option key={option.card_num} value={option.card_num}>
-            {option.key} - {option.card_num}
-          </option>
-        ))}
-      </select>
+      />
       <button className="submit" onClick={handleSubmit}>提交</button>
-    </div>
       <Geolocation location={location} setLocation={setLocation} />
       <Output output={output} />
       <Log setLog={setLog} log={log} />
