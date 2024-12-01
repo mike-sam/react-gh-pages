@@ -1,5 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import Select from 'react-select';
+import DateTimePicker from 'react-datetime-picker';
+import 'react-datetime-picker/dist/DateTimePicker.css';
+import 'react-calendar/dist/Calendar.css';
 import Header from './Header';
 import TagSelector from './TagSelector';
 import Calculator from './Calculator';
@@ -19,6 +22,7 @@ function App() {
   const [location, setLocation] = useState(''); // 管理地理位置的状态
   const [log, setLog] = useState([]); 
   const [output, setOutput] = useState('');
+  const [selectedDateTime, setSelectedDateTime] = useState(new Date());
   const [paymentMethod, setPaymentMethod] = useState('');
   const [paymentOptions, setPaymentOptions] = useState({
     '[Cash]': { key: '[Cash]', card_num: '[Cash]' },
@@ -112,8 +116,8 @@ function App() {
     }, 1000);
     
     const contents_for_gsheets = {
-        timestamp: formatDateTime(new Date(), 'YMDHIS'),
-        yearmonth: formatDateTime(new Date(), 'YM'),
+        timestamp: formatDateTime(selectedDateTime, 'YMDHIS'),
+        yearmonth: formatDateTime(selectedDateTime, 'YM'),
         title: input,
         amount: amount,
         remark: remark,
@@ -153,6 +157,8 @@ function App() {
         <Calculator amount={amount} setAmount={setAmount} />
         <Remark input={input} setInput={setInput} remark={remark} setCarPlate={setCarPlate} carPlate={carPlate} setRemark={setRemark} amount={amount} selectedTag={selectedTag} />
       </div>
+      
+      
       <Select
         value={paymentMethod ? {
           value: paymentMethod,
@@ -181,7 +187,18 @@ function App() {
           }),
         }}
       />
-      <button className="submit" onClick={handleSubmit}>提交</button>
+      <div className="form-row">
+        <div className="datetime-wrapper">
+            <DateTimePicker
+              value={selectedDateTime}
+              onChange={setSelectedDateTime}
+              format="y-MM-dd HH:mm:ss"
+              className="datetime-picker"
+              disableClock={true}
+            />
+        </div>
+        <button className="submit" onClick={handleSubmit}>提交</button>
+      </div>
       <Geolocation location={location} setLocation={setLocation} />
       <Output output={output} />
       <Log setLog={setLog} log={log} />

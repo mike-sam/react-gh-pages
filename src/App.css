@@ -150,7 +150,6 @@ button.calc-key{
   margin-right: 5px;
 }
 button.submit {
-  margin-top: 10px;
   height: 35px;
 }
 .input-container button, button.submit {
@@ -306,5 +305,42 @@ input,textarea {
   display: flex;
   align-items: center;
   margin: 10px 0;
-  padding: 0 10px;
+  /* padding: 0 10px; */
+}
+
+.datetime-wrapper {
+  flex: 0 0 auto;
+  margin-right: 10px;
+}
+
+.datetime-picker {
+  background-color: white;
+}
+
+.datetime-picker .react-datetime-picker__wrapper {
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  padding: 8px;
+  height: 38px;
+  display: flex;
+  align-items: center;
+}
+
+.datetime-picker .react-datetime-picker__inputGroup {
+  font-size: 14px;
+  padding: 0 4px;
+}
+
+.datetime-picker .react-datetime-picker__button {
+  padding: 4px;
+}
+
+.datetime-picker .react-datetime-picker__button svg {
+  stroke: #666;
+}
+
+.datetime-picker .react-calendar {
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.15);
 }
