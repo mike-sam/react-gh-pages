@@ -21,6 +21,7 @@ function App() {
   const [amount, setAmount] = useState('');    // 管理金额的状态
   const [location, setLocation] = useState(''); // 管理地理位置的状态
   const [log, setLog] = useState([]); 
+  const [isSubmitting, setIsSubmitting] = useState(false); // Add new state for tracking submission
   const [output, setOutput] = useState('');
   const [selectedDateTime, setSelectedDateTime] = useState(new Date());
   const [paymentMethod, setPaymentMethod] = useState('');
@@ -97,6 +98,7 @@ function App() {
   };
   const handleSubmit = async (e) => {
     e.preventDefault();
+    setIsSubmitting(true);
     const separator = '|'
     let submitted_value = input+separator+amount+separator+selectedTag+separator+remark+separator+location+separator+paymentMethod;
     console.log({submitted_value});
@@ -109,6 +111,7 @@ function App() {
     setSelectedTag('');
     setLocation('');
     setCarPlate('');
+    setPaymentMethod('');
     // Start loading feedback
     setOutput('Pushing to gsheet');
     const loadingInterval = setInterval(() => {
@@ -143,6 +146,9 @@ function App() {
         setAmount(amount);
         setSelectedTag(selectedTag);
         setLocation(location);
+        setPaymentMethod(paymentMethod);
+    } finally {
+      setIsSubmitting(false);
     }
 
   };
@@ -197,7 +203,9 @@ function App() {
               disableClock={true}
             />
         </div>
-        <button className="submit" onClick={handleSubmit}>提交</button>
+        <button className="submit" onClick={handleSubmit} disabled={isSubmitting}>
+          提交
+        </button>
       </div>
       <Geolocation location={location} setLocation={setLocation} />
       <Output output={output} />
