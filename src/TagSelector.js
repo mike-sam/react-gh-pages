@@ -44,9 +44,14 @@ function TagSelector({ input, setInput, remark, setRemark, setAmount, selectedTa
 
     return (
         <>
-        <div className="input-container grid grid-2">
-            <input type="text" value={input} onChange={handleInputChange} placeholder="输入或选择" style={{'padding':'10px'}}/>
-            <button onClick={handleReset}>清空</button>
+        
+        
+        <div className="tag-container">
+            {tags.map(tag => (
+                <div key={tag} className={`tag ${selectedTag === tag ? 'selected' : ''}`} onClick={() => selectTag(tag)}>
+                    {tag}
+                </div>
+            ))}
         </div>
         <div className="secondary-tags-container">
             {secondTags[selectedTag] ? (
@@ -61,12 +66,9 @@ function TagSelector({ input, setInput, remark, setRemark, setAmount, selectedTa
                 <p className="help-message">请先选择Tag</p>
             )}
         </div>
-        <div className="tag-container">
-            {tags.map(tag => (
-                <div key={tag} className={`tag ${selectedTag === tag ? 'selected' : ''}`} onClick={() => selectTag(tag)}>
-                    {tag}
-                </div>
-            ))}
+        <div className="input-container grid grid-2">
+            <input type="text" value={input} onChange={handleInputChange} placeholder="输入或选择" style={{'padding':'10px'}}/>
+            <button onClick={handleReset}>清空</button>
         </div>
         </>
     );

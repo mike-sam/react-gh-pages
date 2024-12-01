@@ -64,24 +64,24 @@ function Calculator({ amount, setAmount, currency, setCurrency, handleNumber, ha
   return (
     <div id="calculator">
       <div id="keypad">
-        <button className="calc-key" onClick={() => handleButtonClick('C')}>C</button>
+        <button className="calc-key operand" onClick={() => handleButtonClick('C')}>C</button>
         <input type="text" id="content-amount" value={amount} onClick={handleAmountClick} className="amount-display" readOnly />
         <button className="calc-key" onClick={() => handleNumber('7')}>7</button>
         <button className="calc-key" onClick={() => handleNumber('8')}>8</button>
         <button className="calc-key" onClick={() => handleNumber('9')}>9</button>
-        <button className="calc-key" onClick={() => handleOperator('÷')}>÷</button>
+        <button className="calc-key operand" onClick={() => handleOperator('÷')}>÷</button>
         <button className="calc-key" onClick={() => handleNumber('4')}>4</button>
         <button className="calc-key" onClick={() => handleNumber('5')}>5</button>
         <button className="calc-key" onClick={() => handleNumber('6')}>6</button>
-        <button className="calc-key" onClick={() => handleOperator('×')}>×</button>
+        <button className="calc-key operand" onClick={() => handleOperator('×')}>×</button>
         <button className="calc-key" onClick={() => handleNumber('1')}>1</button>
         <button className="calc-key" onClick={() => handleNumber('2')}>2</button>
         <button className="calc-key" onClick={() => handleNumber('3')}>3</button>
-        <button className="calc-key" onClick={() => handleOperator('-')}>-</button>
+        <button className="calc-key operand" onClick={() => handleOperator('-')}>-</button>
         <button className="calc-key" onClick={() => handleNumber('0')}>0</button>
-        <button className="calc-key" onClick={() => handleButtonClick('←')}>←</button>
-        <button className="calc-key" onClick={() => handleOperator('+')}>+</button>
-        <button className="calc-key" onClick={handleEqual}>=</button>
+        <button className="calc-key operand" onClick={() => handleButtonClick('←')}>←</button>
+        <button className="calc-key operand" onClick={() => handleOperator('+')}>+</button>
+        <button className="calc-key operand" onClick={handleEqual}>=</button>
         {currencies.map(curr => (
             <button 
                 key={curr}

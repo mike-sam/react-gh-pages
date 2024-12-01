@@ -80,17 +80,24 @@ body {
   grid-template-rows: 1fr;
   grid-template-columns: calc(100% - 80px) 80px;
 }
+.amount-display {
+  background-color: #fff1ff;
+}
 .calc-key {
   padding: 8px;
   font-size: 14px;
   cursor: pointer;
-  background-color: #bfe2ff;
+  background-color: #fedcff;
+}
+.calc-key.operand {
+  background-color: #dac6ff;
 }
 .calc-key.currency {
-  background-color: #c0bfff;
+  background-color: #af5aff;
+  color: white;
 }
 .calc-key.currency.hide {
-  color: #c0bfff;
+  color: #af5aff;
 }
 button.calc-key{
   border-radius: 0px;
