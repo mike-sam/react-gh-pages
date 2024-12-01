@@ -22,6 +22,7 @@ function App() {
   async function pushToGsheet(contents) {
     const gs_appscript_url = 'https://script.google.com/macros/s/AKfycbyUOZimpAo5_hOCv1cvG6rXgns0htqk-lymPUlte7yoRFh_8V427Egnzpsv8PnpnjWXRw/exec';
     try {
+      setOutput('pushing to gsheet');
       const response = await fetch(gs_appscript_url, {
         method: "POST",
         mode: "no-cors",
@@ -64,7 +65,22 @@ function App() {
     e.preventDefault();
     const separator = '|'
     let submitted_value = input+separator+amount+separator+selectedTag+separator+remark+separator+location;
+    console.log({submitted_value});
     const shortcutUrl = 'shortcuts://run-shortcut?name=WebRecordExpenses&input=text&text='+encodeURIComponent(submitted_value);
+    
+    // Reset all form fields
+    setInput('');
+    setRemark('');
+    setAmount('');
+    setSelectedTag('');
+    setLocation('');
+    setCarPlate('');
+    // Start loading feedback
+    setOutput('Pushing to gsheet');
+    const loadingInterval = setInterval(() => {
+        setOutput(prev => prev + '.');
+    }, 1000);
+    
     const contents_for_gsheets = {
         timestamp: formatDateTime(new Date(), 'YMDHIS'),
         yearmonth: formatDateTime(new Date(), 'YM'),
@@ -74,23 +90,26 @@ function App() {
         geolocation: location,
         tag: selectedTag,
     };
-    setOutput(`<a href="${shortcutUrl}">${shortcutUrl}</a>`);
-    submitted_value = formatDateTime(new Date(), 'YMDHIS') + separator + submitted_value;
+
+    submitted_value = formatDateTime() + separator + submitted_value;
     setLog(prevLog => [submitted_value,...prevLog]);
-    // document.getElementById("record").appendChild(_p_ele);
-    // document.getElementById('empty-btn').click();
     
-    // Handle form submission logic here
-    
-    await pushToGsheet(contents_for_gsheets);
-      
-    // Reset all form fields after successful submission
-    setInput('');
-    setRemark('');
-    setAmount('');
-    setSelectedTag('');
-    setLocation('');
-    setCarPlate('');
+    try {
+        
+        const responseText = await pushToGsheet(contents_for_gsheets);
+        clearInterval(loadingInterval);
+        setOutput(`Success: ${responseText}<br/><a href="${shortcutUrl}">submit through WebRecordExpenses shortcut</a>`);
+    } catch (error) {
+        clearInterval(loadingInterval);
+        setOutput(`Error: ${error.toString()}<br/><a href="${shortcutUrl}">submit through WebRecordExpenses shortcut</a>`);
+        // Revert all form fields if error
+        setInput(input);
+        setRemark(remark);
+        setAmount(amount);
+        setSelectedTag(selectedTag);
+        setLocation(location);
+    }
+
   };
   // const [input, setInput] = useState('');
   // const [remark, setRemark] = useState('');
