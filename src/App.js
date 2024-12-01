@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import Select from 'react-select';
 import Datetime from 'react-datetime';
+import moment from 'moment';
 import 'react-datetime/css/react-datetime.css';
 import Header from './Header';
 import TagSelector from './TagSelector';
@@ -263,12 +264,18 @@ function App() {
         <div className="datetime-wrapper">
         <Datetime
           value={selectedDateTime}
-          onChange={(date) => setSelectedDateTime(date._d || new Date())}
+          onChange={(date) => {
+            // Handle both manual input and picker selection
+            const validDate = moment(date).isValid() ? date : selectedDateTime;
+            setSelectedDateTime(validDate._d || validDate);
+          }}
           dateFormat="YYYY-MM-DD"
           timeFormat="HH:mm:ss"
           inputProps={{
             className: 'datetime-picker',
-            placeholder: 'Select Date and Time'
+            placeholder: 'Select Date and Time',
+            // Enable direct input
+            readOnly: false
           }}
         />
         </div>
