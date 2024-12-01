@@ -205,8 +205,8 @@ function App() {
           }}
         />
         </div>
-        <button className="submit" onClick={handleSubmit} disabled={isSubmitting}>
-          提交
+        <button className="submit" onClick={handleSubmit}  disabled={isSubmitting || !amount || !selectedTag || !input}>
+          {isSubmitting ? '提交中...' : (!amount || !selectedTag || !input)?'请先输入内容':'提交'}
         </button>
       </div>
       <Geolocation location={location} setLocation={setLocation} />
