@@ -14,7 +14,7 @@ import './App.css';
 
 function App() {
   const [selectedTag, setSelectedTag] = useState(null);
-  const tags = ['餐饮美食', '日常购物', '医疗保健', '交通出行', '自我增值', '投资金融', '休闲娱乐', '服饰美容', '旅游放松', '水电气网', '人情往来', '居家生活', '宠物', '其他'];
+  const tags = ['餐饮美食', '日常购物', '医疗保健', '交通出行', '自我增值', '投资金融', '休闲娱乐', '仪容服饰', '旅游放松', '水电气网', '人情往来', '居家生活', '宠物', '其他'];
   const [input, setInput] = useState('');       // 管理输入内容的状态
   const [remark, setRemark] = useState('');     // 管理备注的状态
   const [carPlate, setCarPlate] = useState('');     // 管理备注的状态
@@ -27,8 +27,11 @@ function App() {
   const [selectedDateTime, setSelectedDateTime] = useState(new Date());
   const [paymentMethod, setPaymentMethod] = useState('');
   const [paymentOptions, setPaymentOptions] = useState({
-    '[Cash]': { key: '[Cash]', card_num: '[Cash]' },
-    'eWallet': { key: 'eWallet', card_num: 'eWallet' }
+    'Cash': { key: 'Cash', card_num: 'Cash' },
+    'eWallet1': { key: 'eWallet', card_num: 'TnG' },
+    'eWallet2': { key: 'eWallet', card_num: 'GrabPay' },
+    'eWallet3': { key: 'eWallet', card_num: 'Setel' },
+    'eWallet4': { key: 'eWallet', card_num: 'ShopeePay' }
   }); 
 
   const handleNumber = (num) => {
@@ -95,10 +98,14 @@ function App() {
 
   useEffect(() => {
     const fetchPaymentOptions = async () => {
-      // First check localStorage
-      const cachedData = localStorage.getItem('paymentOptions');
-      if (cachedData) {
-        setPaymentOptions(JSON.parse(cachedData));
+      // Check cache and its expiration
+      const cached = localStorage.getItem('paymentOptions');
+      const cacheTimestamp = localStorage.getItem('paymentOptionsTimestamp');
+      const now = new Date().getTime();
+      const ONE_DAY = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
+      
+      if (cached && cacheTimestamp && (now - parseInt(cacheTimestamp)) < ONE_DAY) {
+        setPaymentOptions(JSON.parse(cached));
         return;
       }
   
@@ -115,9 +122,10 @@ function App() {
             return acc;
           }, {...paymentOptions});
         
-        // Store in localStorage
-        localStorage.setItem('paymentOptions', JSON.stringify(transformedData));
-        setPaymentOptions(transformedData);
+        // Store data with timestamp
+      localStorage.setItem('paymentOptions', JSON.stringify(transformedData));
+      localStorage.setItem('paymentOptionsTimestamp', now.toString());
+      setPaymentOptions(transformedData);
       } catch (error) {
         console.error('Error fetching payment options:', error);
       }
@@ -209,29 +217,6 @@ function App() {
       <Header />
       <TagSelector input={input} setInput={setInput} setRemark={setRemark} setAmount={setAmount} selectedTag={selectedTag} setSelectedTag={setSelectedTag} tags={tags} />
       <hr/>
-      <div className="form-container">
-        <Calculator 
-          amount={amount} 
-          setAmount={setAmount}
-          currency={currency}
-          setCurrency={setCurrency}
-          handleNumber={handleNumber}
-          handleOperator={handleOperator}
-          handleEqual={handleEqual}
-        />
-        <Remark 
-          input={input} 
-          setInput={setInput} 
-          remark={remark} 
-          setCarPlate={setCarPlate} 
-          carPlate={carPlate} 
-          setRemark={setRemark} 
-          amount={amount} 
-          selectedTag={selectedTag} 
-        />
-      </div>
-      
-      
       <Select
         value={paymentMethod ? {
           value: paymentMethod,
@@ -260,24 +245,48 @@ function App() {
           }),
         }}
       />
+      <div className="form-container">
+        <Calculator 
+          amount={amount} 
+          setAmount={setAmount}
+          currency={currency}
+          setCurrency={setCurrency}
+          handleNumber={handleNumber}
+          handleOperator={handleOperator}
+          handleEqual={handleEqual}
+        />
+        <Remark 
+          input={input} 
+          setInput={setInput} 
+          remark={remark} 
+          setCarPlate={setCarPlate} 
+          carPlate={carPlate} 
+          setRemark={setRemark} 
+          amount={amount} 
+          selectedTag={selectedTag} 
+        />
+      </div>
+      
+      
+      
       <div className="form-row">
         <div className="datetime-wrapper">
-        <Datetime
-          value={selectedDateTime}
-          onChange={(date) => {
-            // Handle both manual input and picker selection
-            const validDate = moment(date).isValid() ? date : selectedDateTime;
-            setSelectedDateTime(validDate._d || validDate);
-          }}
-          dateFormat="YYYY-MM-DD"
-          timeFormat="HH:mm:ss"
-          inputProps={{
-            className: 'datetime-picker',
-            placeholder: 'Select Date and Time',
-            // Enable direct input
-            readOnly: false
-          }}
-        />
+          <Datetime
+            value={selectedDateTime}
+            onChange={(date) => {
+              // Handle both manual input and picker selection
+              const validDate = moment(date).isValid() ? date : selectedDateTime;
+              setSelectedDateTime(validDate._d || validDate);
+            }}
+            dateFormat="YYYY-MM-DD"
+            timeFormat="HH:mm:ss"
+            inputProps={{
+              className: 'datetime-picker',
+              placeholder: 'Select Date and Time',
+              // Enable direct input
+              readOnly: false
+            }}
+          />
         </div>
         <button className="submit" onClick={handleSubmit}  disabled={isSubmitting || !amount || !selectedTag || !input}>
           {isSubmitting ? '提交中...' : (!amount || !selectedTag || !input)?'请先输入内容':'提交'}
