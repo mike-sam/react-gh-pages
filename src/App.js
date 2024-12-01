@@ -1,8 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import Select from 'react-select';
-import DateTimePicker from 'react-datetime-picker';
-import 'react-datetime-picker/dist/DateTimePicker.css';
-import 'react-calendar/dist/Calendar.css';
+import Datetime from 'react-datetime';
+import 'react-datetime/css/react-datetime.css';
 import Header from './Header';
 import TagSelector from './TagSelector';
 import Calculator from './Calculator';
@@ -195,13 +194,16 @@ function App() {
       />
       <div className="form-row">
         <div className="datetime-wrapper">
-            <DateTimePicker
-              value={selectedDateTime}
-              onChange={setSelectedDateTime}
-              format="y-MM-dd HH:mm:ss"
-              className="datetime-picker"
-              disableClock={true}
-            />
+        <Datetime
+          value={selectedDateTime}
+          onChange={(date) => setSelectedDateTime(date._d || new Date())}
+          dateFormat="YYYY-MM-DD"
+          timeFormat="HH:mm:ss"
+          inputProps={{
+            className: 'datetime-picker',
+            placeholder: 'Select Date and Time'
+          }}
+        />
         </div>
         <button className="submit" onClick={handleSubmit} disabled={isSubmitting}>
           提交

@@ -314,33 +314,43 @@ input,textarea {
 }
 
 .datetime-picker {
-  background-color: white;
-}
-
-.datetime-picker .react-datetime-picker__wrapper {
+  text-align: center;
   border: 1px solid #ccc;
   border-radius: 4px;
   padding: 8px;
-  height: 38px;
-  display: flex;
-  align-items: center;
-}
-
-.datetime-picker .react-datetime-picker__inputGroup {
+  width: 200px;
   font-size: 14px;
-  padding: 0 4px;
 }
 
-.datetime-picker .react-datetime-picker__button {
-  padding: 4px;
-}
-
-.datetime-picker .react-datetime-picker__button svg {
-  stroke: #666;
-}
-
-.datetime-picker .react-calendar {
+.rdtPicker {
   border: 1px solid #ccc;
   border-radius: 4px;
   box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+  background: white;
+  z-index: 1000;
+}
+
+.rdtTime {
+  padding: 8px;
+}
+
+.rdtTime input {
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  padding: 4px;
+  width: 40px;
+  text-align: center;
+}
+
+.rdtCounter {
+  height: auto;
+}
+
+.rdtBtn {
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+
+.rdtBtn:hover {
+  background: #f0f0f0;
 }
