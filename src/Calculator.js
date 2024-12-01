@@ -2,6 +2,9 @@ import React from 'react';
 
 function Calculator({amount, setAmount}) {
 
+    const handleAmountClick = () => {
+        setAmount(amount.slice(0, -1));
+    };
   const handleButtonClick = (value) => {
     let tmpAmount = amount.toString();
     let char_1 = '';
@@ -68,7 +71,7 @@ function Calculator({amount, setAmount}) {
     <div id="calculator">
       <div id="keypad">
         <button className="calc-key" onClick={() => handleButtonClick('C')}>C</button>
-        <input type="text" id="content-amount" value={amount} readOnly />
+        <input type="text" id="content-amount" value={amount} onClick={handleAmountClick} className="amount-display" readOnly />
         <button className="calc-key" onClick={() => handleButtonClick('7')}>7</button>
         <button className="calc-key" onClick={() => handleButtonClick('8')}>8</button>
         <button className="calc-key" onClick={() => handleButtonClick('9')}>9</button>
