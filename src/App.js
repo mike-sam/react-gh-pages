@@ -94,27 +94,35 @@ function App() {
 
   useEffect(() => {
     const fetchPaymentOptions = async () => {
+      // First check localStorage
+      const cachedData = localStorage.getItem('paymentOptions');
+      if (cachedData) {
+        setPaymentOptions(JSON.parse(cachedData));
+        return;
+      }
+  
       try {
         const response = await fetch('https://script.google.com/macros/s/AKfycbz2NiyxrNvirBRFYy7j-GT8anX1OUKoiv7fTg38-QKYs77TVyPnDYrDlu4N3pbnOVPK7w/exec');
-        console.log({response})
         const data = await response.json();
-        // Transform the object into array format we need
         const transformedData = Object.entries(data)
-        .filter(([key, value]) => value.card_num)
-        .reduce((acc, [key, value]) => {
-          acc[value.bank] = {
-            key: value.bank,
-            card_num: value.card_num
-          };
-          return acc;
-        }, {...paymentOptions});
+          .filter(([key, value]) => value.card_num)
+          .reduce((acc, [key, value]) => {
+            acc[value.bank] = {
+              key: value.bank,
+              card_num: value.card_num
+            };
+            return acc;
+          }, {...paymentOptions});
+        
+        // Store in localStorage
+        localStorage.setItem('paymentOptions', JSON.stringify(transformedData));
         setPaymentOptions(transformedData);
       } catch (error) {
         console.error('Error fetching payment options:', error);
       }
     };
     fetchPaymentOptions();
-  }, [paymentOptions]);
+  }, []); // Remove paymentOptions dependency
 
   const formatDateTime = (date = new Date(), format = 'YMDHIS') => {
     const pad = num => num.toString().padStart(2, "0");
