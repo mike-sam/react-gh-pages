@@ -359,3 +359,8 @@ input,textarea {
 .rdtBtn:hover {
   background: #f0f0f0;
 }
+#calculator button.selected {
+  background-color: #131313;
+  color: white;
+  font-weight: bold;
+}

@@ -19,6 +19,7 @@ function App() {
   const [carPlate, setCarPlate] = useState('');     // 管理备注的状态
   const [amount, setAmount] = useState('');    // 管理金额的状态
   const [location, setLocation] = useState(''); // 管理地理位置的状态
+  const [currency, setCurrency] = useState('MYR'); // 管理地理位置的状态
   const [log, setLog] = useState([]); 
   const [isSubmitting, setIsSubmitting] = useState(false); // Add new state for tracking submission
   const [output, setOutput] = useState('');
@@ -28,6 +29,46 @@ function App() {
     '[Cash]': { key: '[Cash]', card_num: '[Cash]' },
     'eWallet': { key: 'eWallet', card_num: 'eWallet' }
   }); 
+
+  const handleNumber = (num) => {
+    if(/[/+\-*÷×]/.test(amount)) {
+      setAmount(amount + num);
+      return;
+    }
+    
+    let newAmount = (amount + num).replace(/[^\d]/g, '');
+    if (newAmount === '0') {
+      setAmount('0');
+    } else {
+      const numericValue = Number(newAmount) / 100;
+      setAmount(numericValue.toFixed(2).toString());
+    }
+  };
+  
+  const handleOperator = (op) => {
+    // If last character is an operator, replace it
+    if (['+', '-', '×', '÷', '*'].includes(amount.slice(-1))) {
+      setAmount(amount.slice(0, -1) + op);
+      return;
+    }
+    setAmount(amount + op);
+  };
+  
+  const handleEqual = () => {
+    try {
+      const expression = amount
+        .replace(/×/g, ' * ')
+        .replace(/÷/g, ' / ')
+        .replace(/\+/g, ' + ')
+        .replace(/-/g, ' - ')
+        .trim();
+      
+      const result = Function(`return ${expression}`)();
+      setAmount(Number(result).toFixed(2).toString());
+    } catch (error) {
+      setAmount('');
+    }
+  };
   async function pushToGsheet(contents) {
     const gs_appscript_url = 'https://script.google.com/macros/s/AKfycbyUOZimpAo5_hOCv1cvG6rXgns0htqk-lymPUlte7yoRFh_8V427Egnzpsv8PnpnjWXRw/exec';
     try {
@@ -73,7 +114,7 @@ function App() {
       }
     };
     fetchPaymentOptions();
-  }, []);
+  }, [paymentOptions]);
 
   const formatDateTime = (date = new Date(), format = 'YMDHIS') => {
     const pad = num => num.toString().padStart(2, "0");
@@ -125,6 +166,7 @@ function App() {
         remark: remark,
         geolocation: location,
         tag: selectedTag,
+        currency: currency,
         payment_method: paymentMethod,  // Add this line
     };
 
@@ -159,8 +201,25 @@ function App() {
       <TagSelector input={input} setInput={setInput} setRemark={setRemark} setAmount={setAmount} selectedTag={selectedTag} setSelectedTag={setSelectedTag} tags={tags} />
       <hr/>
       <div className="form-container">
-        <Calculator amount={amount} setAmount={setAmount} />
-        <Remark input={input} setInput={setInput} remark={remark} setCarPlate={setCarPlate} carPlate={carPlate} setRemark={setRemark} amount={amount} selectedTag={selectedTag} />
+        <Calculator 
+          amount={amount} 
+          setAmount={setAmount}
+          currency={currency}
+          setCurrency={setCurrency}
+          handleNumber={handleNumber}
+          handleOperator={handleOperator}
+          handleEqual={handleEqual}
+        />
+        <Remark 
+          input={input} 
+          setInput={setInput} 
+          remark={remark} 
+          setCarPlate={setCarPlate} 
+          carPlate={carPlate} 
+          setRemark={setRemark} 
+          amount={amount} 
+          selectedTag={selectedTag} 
+        />
       </div>
       
       

@@ -18,7 +18,7 @@ function Remark({ remark, setRemark, setCarPlate, carPlate, selectedTag, input, 
             let totalLitter = price/fuelPrice;
             let kmPer100Km = totalLitter/trip*100;
             setLitterPer100Km('');
-            if(typeof(kmPer100Km) == 'number' && kmPer100Km != Infinity){
+            if(typeof(kmPer100Km) === 'number' && kmPer100Km !== Infinity){
                 setLitterPer100Km(kmPer100Km.toFixed(2));
             }
         }
