@@ -1,9 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import Select from 'react-select';
-import Datetime from 'react-datetime';
-import moment from 'moment';
-import 'react-datetime/css/react-datetime.css';
 import Header from './Header';
+import DateTimeInput from './DateTimeInput';
 import TagSelector from './TagSelector';
 import Calculator from './Calculator';
 import Remark from './Remark';
@@ -270,40 +268,10 @@ function App() {
       
       <div className="form-row">
         <div className="datetime-wrapper">
-          <Datetime
-            value={selectedDateTime}
-            onChange={(date) => {
-              // Only update if it's a valid date or a string input
-              if (typeof date === 'string') {
-                // Let the user continue typing
-                return;
-              }
-              // Handle both manual input and picker selection
-              const validDate = moment(date).isValid() ? date : selectedDateTime;
-              setSelectedDateTime(validDate._d || validDate);
-            }}
-            dateFormat="YYYY-MM-DD"
-            timeFormat="HH:mm:ss"
-            inputProps={{
-              className: 'datetime-picker',
-              placeholder: 'Select Date and Time',
-              // Enable direct input
-              readOnly: false,
-              // Add these properties to improve mobile support
-              inputMode: "numeric",
-              pattern: "[0-9]*"
-            }}
-            onBlur={(e) => {
-              // Update the date when input loses focus
-              const inputDate = moment(e.target.value);
-              if (inputDate.isValid()) {
-                setSelectedDateTime(inputDate._d);
-              }
-            }}
-            // Add this to ensure mobile compatibility
-            closeOnSelect={false}
-            strictParsing={false}
-          />
+        <DateTimeInput 
+          value={selectedDateTime}
+          onChange={setSelectedDateTime}
+        />
         </div>
         <button className="submit" onClick={handleSubmit}  disabled={isSubmitting || !amount || !selectedTag || !input}>
           {isSubmitting ? '提交中...' : (!amount || !selectedTag || !input)?'请先输入内容':'提交'}
