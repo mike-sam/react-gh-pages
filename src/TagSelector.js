@@ -1,4 +1,5 @@
 import React from 'react';
+import { SECONDARY_TAGS } from './config';
 
 function TagSelector({ input, setInput, remark, setRemark, setAmount, selectedTag, setSelectedTag, tags, amount }) {
     const handleReset = () => {
@@ -9,21 +10,6 @@ function TagSelector({ input, setInput, remark, setRemark, setAmount, selectedTa
         // 如果有其他状态需要清空，也在这里处理
     };
 
-    const secondTags = {
-        '餐饮美食': ['早餐', '午餐', '晚餐', '零食', '饮料', '外卖', '聚餐'],
-        '日常购物': ['超市', '便利店', '3C电子产品(含配件)', '家居用品'],
-        '医疗保健': ['药品', '医疗检查', '健康保险'],
-        '交通出行': ['公共交通', 'Taxi/Grab', '打油','洗车美容','维修保养', '停车费','车贷','车险'],
-        '自我增值': ['教育培训', '书籍', '订阅服务'],
-        '休闲娱乐': ['电影', '音乐', '游戏', '运动'],
-        '仪容服饰': ['理发', '服装', '化妆品', '美容护理' ],
-        '旅游放松': ['旅行', '酒店', '景点门票'],
-        '水电气网': ['水费', '电费', '燃气费', '网络费'],
-        '投资金融': ['股票', '基金', '债券', '理财产品'],
-        '人情往来': ['礼物', '红包'],
-        '居家生活': ['家具', '家电', '装修','房贷', '房租', '物业管理费'],
-        '宠物': ['宠物食品', '宠物用品', '宠物医疗'],
-    }
     const handleInputChange = (e) => setInput(e.target.value);
     const selectTag = (tag) => {
         setInput('');
@@ -54,9 +40,9 @@ function TagSelector({ input, setInput, remark, setRemark, setAmount, selectedTa
             ))}
         </div>
         <div className="secondary-tags-container">
-            {secondTags[selectedTag] ? (
+            {SECONDARY_TAGS [selectedTag] ? (
                 <ul className="second-tag">
-                    {secondTags[selectedTag].map((tag, index) => (
+                    {SECONDARY_TAGS [selectedTag].map((tag, index) => (
                         <li className={`tag ${tag === input ? 'selected' : ''}`} key={index} onClick={() => handleSecondaryTagClick(tag)}>{tag}</li>
                     ))}
                 </ul>

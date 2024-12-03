@@ -11,10 +11,11 @@ import Geolocation from './Geolocation';
 import Log from './Log';
 import Output from './Output';
 import './App.css';
+import { API_ENDPOINTS, EXPENSE_TAGS } from './config';
 
 function App() {
   const [selectedTag, setSelectedTag] = useState(null);
-  const tags = ['餐饮美食', '日常购物', '医疗保健', '交通出行', '自我增值', '投资金融', '休闲娱乐', '仪容服饰', '旅游放松', '水电气网', '人情往来', '居家生活', '宠物', '其他'];
+  const tags = EXPENSE_TAGS;
   const [input, setInput] = useState('');       // 管理输入内容的状态
   const [remark, setRemark] = useState('');     // 管理备注的状态
   const [carPlate, setCarPlate] = useState('');     // 管理备注的状态
@@ -74,10 +75,9 @@ function App() {
     }
   };
   async function pushToGsheet(contents) {
-    const gs_appscript_url = 'https://script.google.com/macros/s/AKfycbyUOZimpAo5_hOCv1cvG6rXgns0htqk-lymPUlte7yoRFh_8V427Egnzpsv8PnpnjWXRw/exec';
     try {
       setOutput('pushing to gsheet');
-      const response = await fetch(gs_appscript_url, {
+      const response = await fetch(API_ENDPOINTS.GSHEET_SUBMIT, {
         method: "POST",
         mode: "no-cors",
         redirect: "follow",
@@ -86,10 +86,9 @@ function App() {
           "Content-type": "application/json; charset=UTF-8"
         }
       });
-       // Convert response to string for logging
-       const responseText = JSON.stringify(response);
-       console.log("Success:", responseText);
-       return responseText;
+      const responseText = JSON.stringify(response);
+      console.log("Success:", responseText);
+      return responseText;
     } catch (error) {
       console.error("Error:", error.toString());
       throw error;
@@ -110,7 +109,7 @@ function App() {
       }
   
       try {
-        const response = await fetch('https://script.google.com/macros/s/AKfycbz2NiyxrNvirBRFYy7j-GT8anX1OUKoiv7fTg38-QKYs77TVyPnDYrDlu4N3pbnOVPK7w/exec');
+        const response = await fetch(API_ENDPOINTS.PAYMENT_OPTIONS);
         const data = await response.json();
         const transformedData = Object.entries(data)
           .filter(([key, value]) => value.card_num)
@@ -131,7 +130,7 @@ function App() {
       }
     };
     fetchPaymentOptions();
-  }, []); // Remove paymentOptions dependency
+  }, []);
 
   const formatDateTime = (date = new Date(), format = 'YMDHIS') => {
     const pad = num => num.toString().padStart(2, "0");
