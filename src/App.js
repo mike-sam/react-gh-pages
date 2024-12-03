@@ -166,7 +166,7 @@ function App() {
     setRemark('');
     setAmount('');
     setSelectedTag('');
-    setLocation('');
+    // setLocation('');
     setCarPlate('');
     setPaymentMethod('');
     // Start loading feedback
@@ -284,8 +284,14 @@ function App() {
               className: 'datetime-picker',
               placeholder: 'Select Date and Time',
               // Enable direct input
-              readOnly: false
+              readOnly: false,
+              // Add these properties to improve mobile support
+              inputMode: "numeric",
+              pattern: "[0-9]*"
             }}
+            // Add this to ensure mobile compatibility
+            closeOnSelect={false}
+            strictParsing={false}
           />
         </div>
         <button className="submit" onClick={handleSubmit}  disabled={isSubmitting || !amount || !selectedTag || !input}>
