@@ -273,6 +273,11 @@ function App() {
           <Datetime
             value={selectedDateTime}
             onChange={(date) => {
+              // Only update if it's a valid date or a string input
+              if (typeof date === 'string') {
+                // Let the user continue typing
+                return;
+              }
               // Handle both manual input and picker selection
               const validDate = moment(date).isValid() ? date : selectedDateTime;
               setSelectedDateTime(validDate._d || validDate);
@@ -287,6 +292,13 @@ function App() {
               // Add these properties to improve mobile support
               inputMode: "numeric",
               pattern: "[0-9]*"
+            }}
+            onBlur={(e) => {
+              // Update the date when input loses focus
+              const inputDate = moment(e.target.value);
+              if (inputDate.isValid()) {
+                setSelectedDateTime(inputDate._d);
+              }
             }}
             // Add this to ensure mobile compatibility
             closeOnSelect={false}
