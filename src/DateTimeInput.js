@@ -54,6 +54,8 @@ function DateTimeInput({ value, onChange }) {
         min={type === 'hours' ? 0 : 0}
         max={type === 'hours' ? 23 : 59}
         className="rdtCount"
+        readonly
+        inputMode='none'
       />
     );
   };
