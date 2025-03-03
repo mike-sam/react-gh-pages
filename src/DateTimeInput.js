@@ -72,7 +72,8 @@ function DateTimeInput({ value, onChange }) {
         value: inputValue,
         onChange: handleInputChange,
         className: 'datetime-picker',
-        style: inputStyle
+        style: inputStyle,
+        readOnly: true
       }}
       dateFormat="YYYY-MM-DD"
       timeFormat="HH:mm:ss"
