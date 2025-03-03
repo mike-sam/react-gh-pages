@@ -156,15 +156,24 @@ button.calc-key{
 .input-container input {
   margin-right: 5px;
 }
+button.resubmit, 
 button.submit {
   height: 35px;
 }
+button.resubmit {
+  margin-left: 5px;
+}
+button.submit {
+  margin-right: 5px;
+}
+.resubmit:disabled,
 .submit:disabled {
   background-color: #cccccc;
   cursor: not-allowed;
   opacity: 0.9;
 }
-.input-container button, button.submit {
+.input-container button, button.submit,
+.input-container button, button.resubmit {
   cursor: pointer;
   width: 100%;
   background-color: #ff3838;
@@ -172,6 +181,14 @@ button.submit {
   padding: 3px 5px;
   border-radius: 5px;
   color: white;
+}
+
+button.resubmit {
+  background-color: #37eba0;
+}
+
+button.resubmit:hover  {
+  background-color: #277c12;
 }
 button.submit {
   background-color: #373aeb;

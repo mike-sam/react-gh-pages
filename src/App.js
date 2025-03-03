@@ -150,62 +150,64 @@ function App() {
         return '';
     }
   };
-  const handleSubmit = async (e) => {
-    e.preventDefault();
+
+  const submitData = async (resetFields = true) => {
     setIsSubmitting(true);
-    const separator = '|'
-    let submitted_value = input+separator+amount+separator+selectedTag+separator+remark+separator+location+separator+paymentMethod;
-    console.log({submitted_value});
-    const shortcutUrl = 'shortcuts://run-shortcut?name=WebRecordExpenses&input=text&text='+encodeURIComponent(submitted_value);
-    
-    // Reset all form fields
-    setInput('');
-    setRemark('');
-    setAmount('');
-    setSelectedTag('');
-    // setLocation('');
-    setCarPlate('');
-    setPaymentMethod('');
+    const separator = '|';
+    let submitted_value = input + separator + amount + separator + selectedTag + separator + remark + separator + location + separator + paymentMethod;
+    console.log({ submitted_value });
+    const shortcutUrl = 'shortcuts://run-shortcut?name=WebRecordExpenses&input=text&text=' + encodeURIComponent(submitted_value);
+  
     // Start loading feedback
     setOutput('Pushing to gsheet');
     const loadingInterval = setInterval(() => {
-        setOutput(prev => prev + '.');
+      setOutput(prev => prev + '.');
     }, 1000);
-    
+  
     const contents_for_gsheets = {
-        timestamp: formatDateTime(selectedDateTime, 'YMDHIS'),
-        yearmonth: formatDateTime(selectedDateTime, 'YM'),
-        title: input,
-        amount: amount,
-        remark: remark,
-        geolocation: location,
-        tag: selectedTag,
-        currency: currency,
-        payment_method: paymentMethod,  // Add this line
+      timestamp: formatDateTime(selectedDateTime, 'YMDHIS'),
+      yearmonth: formatDateTime(selectedDateTime, 'YM'),
+      title: input,
+      amount: amount,
+      remark: remark,
+      geolocation: location,
+      tag: selectedTag,
+      currency: currency,
+      payment_method: paymentMethod,
     };
-
+  
     submitted_value = formatDateTime() + separator + submitted_value;
-    setLog(prevLog => [submitted_value,...prevLog]);
-    
+    setLog(prevLog => [submitted_value, ...prevLog]);
+  
     try {
-        
-        const responseText = await pushToGsheet(contents_for_gsheets);
-        clearInterval(loadingInterval);
-        setOutput(`Success: ${responseText}<br/><a href="${shortcutUrl}">submit through WebRecordExpenses shortcut</a>`);
+      const responseText = await pushToGsheet(contents_for_gsheets);
+      clearInterval(loadingInterval);
+      setOutput(`Success: ${responseText}<br/><a href="${shortcutUrl}">submit through WebRecordExpenses shortcut</a>`);
     } catch (error) {
-        clearInterval(loadingInterval);
-        setOutput(`Error: ${error.toString()}<br/><a href="${shortcutUrl}">submit through WebRecordExpenses shortcut</a>`);
-        // Revert all form fields if error
-        setInput(input);
-        setRemark(remark);
-        setAmount(amount);
-        setSelectedTag(selectedTag);
-        setLocation(location);
-        setPaymentMethod(paymentMethod);
+      clearInterval(loadingInterval);
+      setOutput(`Error: ${error.toString()}<br/><a href="${shortcutUrl}">submit through WebRecordExpenses shortcut</a>`);
     } finally {
       setIsSubmitting(false);
+      if (resetFields) {
+        // Reset all form fields
+        setInput('');
+        setRemark('');
+        setAmount('');
+        setSelectedTag('');
+        setCarPlate('');
+        setPaymentMethod('');
+      }
     }
-
+  };
+  
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    await submitData(true);
+  };
+  
+  const handleSubmitAndDuplicate = async (e) => {
+    e.preventDefault();
+    await submitData(false);
   };
   // const [input, setInput] = useState('');
   // const [remark, setRemark] = useState('');
@@ -274,7 +276,10 @@ function App() {
         />
         </div>
         <button className="submit" onClick={handleSubmit}  disabled={isSubmitting || !amount || !selectedTag || !input}>
-          {isSubmitting ? '提交中...' : (!amount || !selectedTag || !input)?'请先输入内容':'提交'}
+          {isSubmitting ? '提交中...' : (!amount || !selectedTag || !input)?(!amount?'请填入金额':'请先输入内容'):'提交'}
+        </button>
+        <button className="resubmit" onClick={handleSubmitAndDuplicate}  disabled={isSubmitting || !amount || !selectedTag || !input}>
+          {isSubmitting ? '提交中...' : (!amount || !selectedTag || !input)?(!amount?'请填入金额':'请先输入内容'):'提交并复制'}
         </button>
       </div>
       <Geolocation location={location} setLocation={setLocation} />
