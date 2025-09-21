@@ -119,8 +119,8 @@ const LeafletLocationPicker = ({ location, setLocation }) => {
         </div>
         <div className="action-status">
           {location ? 
-            `{${coordinates[0].toFixed(4)}, ${coordinates[1].toFixed(4)}}` : 
-            '未设置'
+            `${coordinates[0].toFixed(4)}, ${coordinates[1].toFixed(4)}` : 
+            '定位失败'
           }
         </div>
       </div>
