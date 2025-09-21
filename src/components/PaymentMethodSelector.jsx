@@ -120,20 +120,20 @@ const PaymentMethodSelector = ({
   };
 
   const formatOptionLabel = (option) => {
+    console.log({option})
     if (!option) return '';
     
+    // 只有明确标记为 eWallet 的项目才截断国家代码
     if (option.key === 'eWallet') {
       // eWallet可以截断，去掉国家代码
       let name = option.card_num;
       // 移除国家代码如 [MY] [SG]
       name = name.replace(/\[[A-Z]{2}\]/g, '').trim();
       return name;
-    } else if (option.key === 'Cash') {
-      return option.card_num;
-    } else {
-      // Card类别保留完整显示，包括 [MY][SG] 等
-      return option.card_num;
     }
+    
+    // 所有其他类别（包括 Cash 和 Card）都保留原始显示
+    return option.card_num;
   };
 
   if (selectedCategory) {
@@ -168,8 +168,17 @@ const PaymentMethodSelector = ({
               borderRadius: '8px',
               padding: '4px',
               borderColor: '#ddd',
+            }),
+            menu: (base) => ({
+              ...base,
+              zIndex: 1002,
+            }),
+            menuPortal: (base) => ({
+              ...base,
+              zIndex: 1002,
             })
           }}
+          menuPortalTarget={document.body}
         />
       </div>
     );

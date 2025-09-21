@@ -259,6 +259,7 @@ function getPaymentOptions() {
       'ShopeePay_eWallet': { key: 'eWallet', card_num: 'ShopeePay', bank: 'ShopeePay' }
     };
     
+    
     return ContentService.createTextOutput(JSON.stringify(paymentOptions))
       .setMimeType(ContentService.MimeType.JSON);
   } catch (error) {

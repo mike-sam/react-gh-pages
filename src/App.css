@@ -880,8 +880,13 @@
   border-radius: 12px;
   border: 1px solid #e9ecef;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-  overflow-x: hidden;
   position: relative;
+}
+
+/* Allow payment section to have dropdowns extend beyond boundaries */
+.step-section.payment-section {
+  overflow: visible !important;
+  z-index: 1000;
 }
 
 .section-header {
@@ -1649,12 +1654,6 @@
   margin: 15px 0;
 }
 
-/* Ensure leaflet container has proper height */
-.leaflet-container {
-  height: 300px !important;
-  width: 100% !important;
-}
-
 .map-hint {
   text-align: center;
   font-size: 12px;
@@ -1833,6 +1832,8 @@
 /* Payment Method Selector Styles */
 .payment-selector {
   width: 100%;
+  position: relative;
+  z-index: 1001;
 }
 
 .payment-category-buttons {
