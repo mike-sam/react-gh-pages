@@ -1015,7 +1015,7 @@
   }
   
   .remark-container-wrapper {
-    padding: 15px;
+    padding: 10px;
   }
   
   .items-container {
@@ -1178,7 +1178,7 @@
 
 .number-pad {
   width: 100%;
-  padding: 8px;
+  padding: 0px;
   background: #f8f9fa;
   border-radius: 8px;
 }
@@ -1191,7 +1191,7 @@
 
 .scrollable-numbers {
   display: flex;
-  gap: 6px;
+  gap: 5px;
   overflow-x: auto;
   flex: 1;
   padding: 4px 0;
@@ -1201,14 +1201,14 @@
 
 .fixed-actions {
   display: flex;
-  gap: 6px;
+  gap: 3px;
   flex-shrink: 0;
 }
 
 .num-btn {
-  height: 30px;
-  min-width: 30px;
-  border: 1px solid #e9ecef;
+  height: 28px;
+  min-width: 28px;
+  border: 0.5px solid #e9ecef;
   background: #fff;
   border-radius: 6px;
   font-size: 14px;
@@ -2592,7 +2592,7 @@ input,textarea {
 }
 .special-inputs select,
 .special-inputs input {
-  padding: 8px 16px;
+  padding: 3px 6px;
   margin: 5px 0px;
 }
 
