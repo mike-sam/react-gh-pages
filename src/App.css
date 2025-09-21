@@ -262,11 +262,12 @@
 
 .mobile-calculator {
   background: white;
-  border-radius: 20px 20px 0 0;
-  width: 100%;
+  border-radius: 20px 20px;
+  width: 80%;
   max-width: 100vw;
   max-height: 70vh;
-  box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.15);
+  box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.15); 
+  margin-bottom: 10px;
 }
 
 .calculator-header {
@@ -308,7 +309,7 @@
   text-align: right;
   min-height: 40px;
   background: #f8f9fa;
-  margin: 0 20px;
+  margin: 10 20px;
   border-radius: 8px;
   color: #333;
 }
@@ -317,7 +318,7 @@
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: 8px;
-  padding: 20px;
+  padding: 10px 20px;
   background: #f8f9fa;
   border-radius: 0 0 20px 20px;
 }
@@ -404,13 +405,13 @@
   
   /* Mobile responsive for ItemizedDescription - Keep single row layout */
   .items-header {
-    grid-template-columns: 2fr 80px 80px 80px 40px;
+    grid-template-columns: 2fr 60px 35px 70px 40px;
     font-size: 12px;
     gap: 4px;
   }
   
   .item-row {
-    grid-template-columns: 2fr 80px 80px 80px 40px;
+    grid-template-columns: 2fr 60px 35px 70px 40px;
     gap: 4px;
     align-items: center;
   }
@@ -436,10 +437,6 @@
   }
 }
 
-/* Compact Photo Upload Styles */
-.compact-photo-upload {
-  margin: 10px 0;
-}
 
 .photo-upload-controls {
   display: flex;
@@ -655,10 +652,76 @@
   color: #333;
 }
 
-/* Mobile Friendly DateTime Styles */
-.mobile-datetime-picker {
-  margin: 10px 0;
+/* Discrepancy suggestion styles */
+.discrepancy-hint {
+  font-size: 12px;
+  color: #e74c3c;
+  margin-bottom: 10px;
+  line-height: 1.4;
 }
+
+.discrepancy-scenarios {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+@media (max-width: 768px) {
+  .discrepancy-scenarios {
+    grid-template-columns: 1fr;
+  }
+}
+
+.discrepancy-scenario {
+  background: #ffeaa7;
+  border: 1px solid #fdcb6e;
+  border-radius: 4px;
+  padding: 8px;
+}
+
+.confidence-badge {
+  background: #00b894;
+  color: white;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: bold;
+}
+
+.apply-suggestion-btn {
+  background: #e17055;
+  color: white;
+  border: none;
+  padding: 4px 8px;
+  border-radius: 3px;
+  font-size: 11px;
+  cursor: pointer;
+  margin-left: 8px;
+}
+
+.apply-suggestion-btn:hover {
+  background: #d63031;
+}
+
+.breakdown {
+  margin-left: 8px;
+}
+
+.tax-line.small {
+  font-size: 10px;
+  color: #666;
+}
+
+.difference-line {
+  display: flex;
+  justify-content: space-between;
+  padding: 2px 0;
+  font-size: 10px;
+  color: #e74c3c;
+  font-weight: bold;
+}
+
+/* Mobile Friendly DateTime Styles */
 
 .datetime-display {
   display: flex;
@@ -927,7 +990,7 @@
 .items-header,
 .item-row {
   display: grid;
-  grid-template-columns: 2fr 80px 80px 80px 40px;
+  grid-template-columns: 2fr 60px 35px 70px 40px;
   gap: 8px;
   width: 100%;
   min-width: 350px;
@@ -966,8 +1029,12 @@
   .item-price,
   .item-quantity,
   .item-subtotal {
-    font-size: 13px;
-    padding: 4px 6px;
+    font-size: 12px;
+    padding: 3px 3px;
+  }
+  .item-qty-header,
+  .item-quantity {
+    max-width: 30px;
   }
   
   .item-price,
@@ -1455,7 +1522,7 @@
 }
 
 .get-location-btn {
-  background: #28a745;
+  background: #6532f1;
   color: white;
   border: none;
   padding: 8px 16px;
@@ -1662,6 +1729,52 @@
   padding: 8px 12px;
   background: #f8f9fa;
   border-radius: 6px;
+}
+
+/* Unified Action Button Styles */
+.unified-action-button {
+  flex-direction: column;
+  padding: 12px;
+  background: #ffffff;
+  border: 1px solid #e9ecef;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+  max-height: 60px;
+  height: 100%;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.unified-action-button:hover {
+  border-color: #007bff;
+  background: #f8f9fa;
+}
+
+.action-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.action-icon {
+  font-size: 16px;
+}
+
+.action-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: #495057;
+}
+
+.action-status {
+  font-size: 11px;
+  color: #6c757d;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Draggable Map Styles */
@@ -1951,30 +2064,35 @@
   background: #c82333;
 }
 
-/* Location Photo Row */
-.location-photo-row {
+/* Location Photo DateTime Row */
+.location-photo-datetime-row {
   display: flex;
   gap: 15px;
   margin: 15px 0;
 }
 
-.location-section {
+.location-photo-datetime-row .location-section {
   flex: 1;
 }
 
-.photo-section {
+.location-photo-datetime-row .photo-section {
   flex: 1;
 }
 
-/* DateTime Section */
-.datetime-section {
+.location-photo-datetime-row .datetime-section {
+  flex: 1;
+  margin: 0;
+}
+
+/* General DateTime Section styling */
+/* .datetime-section {
   margin: 15px 0;
   padding: 15px;
   background: #ffffff;
   border-radius: 12px;
   border: 1px solid #e9ecef;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-}
+} */
 
 /* Submit Section */
 .submit-section {
@@ -2028,8 +2146,8 @@
 }
 
 @media (max-width: 768px) {
-  .location-photo-row {
-    flex-direction: column;
+  .location-photo-datetime-row {
+    flex-direction: row-reverse;
     gap: 10px;
   }
   
@@ -2293,6 +2411,37 @@ input,textarea {
   font-size: 12px;
   padding: 3px 10px;
   color: #888;
+}
+
+/* Output Container - similar to help-message style */
+.output-container {
+  margin: 15px 0;
+  padding: 10px;
+  background: #f8f9fa;
+  border-radius: 6px;
+  border-left: 4px solid #28a745;
+}
+
+.output-container h4 {
+  margin: 0 0 8px 0;
+  font-size: 14px;
+  color: #28a745;
+}
+
+.output-content {
+  background: #fff;
+  border-radius: 4px;
+  padding: 8px;
+  border: 1px solid #e9ecef;
+}
+
+.output-content pre {
+  margin: 0;
+  font-size: 11px;
+  font-family: 'Courier New', monospace;
+  color: #495057;
+  white-space: pre-wrap;
+  word-break: break-all;
 }
 .remark-select {
   display: flex;

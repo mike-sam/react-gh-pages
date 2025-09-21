@@ -40,7 +40,8 @@ function App() {
   const [skipAutoLocation, setSkipAutoLocation] = useState(false);
   const [currencyConversions, setCurrencyConversions] = useState([]);
   const [taxCalculation, setTaxCalculation] = useState(null);
-  const [isAmountManuallySet, setIsAmountManuallySet] = useState(false); 
+  const [isAmountManuallySet, setIsAmountManuallySet] = useState(false);
+  const [itemizedTotal, setItemizedTotal] = useState(0); 
 
   // 处理照片变化
   const handlePhotoChange = (photosData) => {
@@ -73,10 +74,17 @@ function App() {
 
   // 处理明细总额变化
   const handleItemizedTotalChange = (total) => {
+    setItemizedTotal(total || 0);
     // 只有在用户没有手动设置金额时才自动更新
     if (!isAmountManuallySet && total > 0) {
       setAmount(total.toFixed(2));
     }
+  };
+
+  // 处理税费建议的金额更新
+  const handleAmountSuggestion = (suggestedAmount) => {
+    setAmount(suggestedAmount.toFixed(2));
+    setIsAmountManuallySet(true);
   };
 
   const handleNumber = (num) => {
@@ -381,13 +389,7 @@ function App() {
             onAmountComplete={handleAmountComplete}
           />
         
-        {/* 马来西亚税费计算器 */}
-        {amount && parseFloat(amount) > 0 && currency === 'MYR' && (
-          <MalaysiaTaxCalculator
-            totalAmount={parseFloat(amount)}
-            onTaxCalculation={handleTaxCalculation}
-          />
-        )}
+
       </div>
 
       {/* 步骤3: 选择付款方式 - 使用分类选择 */}
@@ -415,6 +417,16 @@ function App() {
             onItemizedTotalChange={handleItemizedTotalChange}
           />
           
+          {/* 马来西亚税费计算器 - 移到明细部分 */}
+          {amount && parseFloat(amount) > 0 && currency === 'MYR' && (
+            <MalaysiaTaxCalculator
+              totalAmount={parseFloat(amount)}
+              itemizedTotal={itemizedTotal}
+              onTaxCalculation={handleTaxCalculation}
+              onAmountSuggestion={handleAmountSuggestion}
+            />
+          )}
+          
           {/* 显示汇率换算历史 */}
           {currencyConversions.length > 0 && (
             <div className="currency-history">
@@ -429,28 +441,25 @@ function App() {
         </div>
       </div>
       
-      {/* 位置和图片并排 */}
-      <div className="location-photo-row">
+      {/* 位置、图片、时间一行显示 */}
+      <div className="location-photo-datetime-row">
         <div className="location-section">
           <Geolocation location={location} setLocation={setLocation} skipAutoLocation={skipAutoLocation} />
         </div>
         <div className="photo-section">
           <CompactPhotoUpload 
             onPhotoChange={handlePhotoChange}
-            initialPhoto={photos.length > 0 ? photos[0] : null}
+            initialPhotos={photos}
+          />
+        </div>
+        <div className="datetime-section">
+          <MobileFriendlyDateTime 
+            value={selectedDateTime}
+            onChange={setSelectedDateTime}
           />
         </div>
       </div>
       
-      {/* 时间选择 */}
-      <div className="datetime-section">
-        <MobileFriendlyDateTime 
-          value={selectedDateTime}
-          onChange={setSelectedDateTime}
-        />
-      </div>
-      
-      <Output output={output} />
       <Log setLog={setLog} log={log} />
       
       {/* 提交按钮移到最下方 */}
@@ -462,6 +471,9 @@ function App() {
           {isSubmitting ? '提交中...' : (!amount || !selectedTag || !input)?(!amount?'请填入金额':'请先输入内容'):'下一笔'}
         </button>
       </div>
+      
+      {/* Output移到提交按钮下方，使用新样式 */}
+      <Output output={output} />
 
       {/* 调试信息 - 仅在开发环境显示 */}
       {process.env.NODE_ENV === 'development' && photos.length > 0 && (

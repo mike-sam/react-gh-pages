@@ -152,7 +152,7 @@ const ItemizedDescription = ({ onChange, initialValue = '', totalAmount = 0, onI
               value={item.quantity || ''}
               onChange={(e) => updateItem(item.id || index, 'quantity', parseFloat(e.target.value) || 0)}
               placeholder="1"
-              step="0.01"
+              step="1"
             />
             <input
               type="number"

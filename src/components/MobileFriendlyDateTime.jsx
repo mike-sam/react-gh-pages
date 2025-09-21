@@ -116,11 +116,15 @@ const MobileFriendlyDateTime = ({ value = new Date(), onChange }) => {
 
   return (
     <div className="mobile-datetime-picker">
-      {/* 显示当前时间 */}
-      <div className="datetime-display" onClick={() => setIsEditing('date')}>
-        <span className="datetime-label">时间:</span>
-        <span className="datetime-value">{formatDisplayDateTime(value)}</span>
-        <span className="edit-icon">✏️</span>
+      {/* 统一样式的时间显示 */}
+      <div className="unified-action-button" onClick={() => setIsEditing('date')}>
+        <div className="action-header">
+          <span className="action-icon">⏰</span>
+          <span className="action-name">编辑时间</span>
+        </div>
+        <div className="action-status">
+          {formatDisplayDateTime(value)}
+        </div>
       </div>
 
       {/* 编辑弹窗 */}

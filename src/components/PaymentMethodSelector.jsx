@@ -8,6 +8,8 @@ const PaymentMethodSelector = ({
   onPaymentFromUrl 
 }) => {
   const [selectedCategory, setSelectedCategory] = useState('');
+  const [hasProcessedUrlParams, setHasProcessedUrlParams] = useState(false);
+  const [previousPaymentMethod, setPreviousPaymentMethod] = useState('');
 
   // 分类付款方式
   const categorizePaymentOptions = () => {
@@ -47,7 +49,9 @@ const PaymentMethodSelector = ({
       setPaymentMethod(options[0].card_num);
       setSelectedCategory('');
     } else if (options.length > 1) {
-      // 如果有多个选项，显示详细选择
+      // 如果有多个选项，保存当前选择并清空，显示详细选择
+      setPreviousPaymentMethod(paymentMethod);
+      setPaymentMethod('');
       setSelectedCategory(category);
     }
   };
@@ -66,6 +70,7 @@ const PaymentMethodSelector = ({
 
   const handleDetailedSelect = (selected) => {
     setPaymentMethod(selected ? selected.value : '');
+    setPreviousPaymentMethod(''); // 清空之前保存的值
     setSelectedCategory('');
   };
 
@@ -91,9 +96,9 @@ const PaymentMethodSelector = ({
     return partialMatches.length === 1 ? partialMatches[0].card_num : null;
   };
 
-  // 处理URL参数设置
+  // 处理URL参数设置 - 只处理一次
   React.useEffect(() => {
-    if (onPaymentFromUrl && !paymentMethod && Object.keys(paymentOptions).length > 0) {
+    if (onPaymentFromUrl && !hasProcessedUrlParams && Object.keys(paymentOptions).length > 0) {
       const urlParams = new URLSearchParams(window.location.search);
       const paymentParam = urlParams.get('payment');
       
@@ -103,8 +108,9 @@ const PaymentMethodSelector = ({
           setPaymentMethod(matchedPayment);
         }
       }
+      setHasProcessedUrlParams(true);
     }
-  }, [onPaymentFromUrl, paymentMethod, paymentOptions]);
+  }, [onPaymentFromUrl, hasProcessedUrlParams, paymentOptions]);
 
   const getCategoryLabel = (category) => {
     const labels = {
@@ -120,7 +126,6 @@ const PaymentMethodSelector = ({
   };
 
   const formatOptionLabel = (option) => {
-    console.log({option})
     if (!option) return '';
     
     // 只有明确标记为 eWallet 的项目才截断国家代码
@@ -143,7 +148,11 @@ const PaymentMethodSelector = ({
         <div className="payment-category-header">
           <button 
             className="back-btn"
-            onClick={() => setSelectedCategory('')}
+            onClick={() => {
+              setPaymentMethod(previousPaymentMethod);
+              setPreviousPaymentMethod('');
+              setSelectedCategory('');
+            }}
           >
             ← 返回
           </button>
@@ -162,6 +171,8 @@ const PaymentMethodSelector = ({
           }))}
           isClearable
           placeholder={`选择${getCategoryLabel(selectedCategory)}...`}
+          autoFocus={true}
+          menuIsOpen={true}
           styles={{
             control: (base) => ({
               ...base,

@@ -97,37 +97,32 @@ const LeafletLocationPicker = ({ location, setLocation }) => {
   const getTileLayerUrl = () => {
     switch (mapType) {
       case 'satellite':
-        return 'https://{s}.google.com/vt/lyrs=s&x={x}&y={y}&z={z}';
+        // 使用 Esri 的免费卫星图服务
+        return 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
       case 'hybrid':
-        return 'https://{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}';
+        return 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
       default:
         return 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
     }
   };
 
   const getTileLayerSubdomains = () => {
-    return mapType.includes('google') ? ['mt0', 'mt1', 'mt2', 'mt3'] : ['a', 'b', 'c'];
+    return mapType === 'street' ? ['a', 'b', 'c'] : [];
   };
 
   return (
     <div className="leaflet-location-picker">
-      <div className="location-thumbnail" onClick={handleMapOpen}>
-        {location ? (
-          <div className="location-summary">
-            <div className="location-icon">📍</div>
-            <div className="location-details">
-              <div className="coordinates">
-                {coordinates[0].toFixed(4)}, {coordinates[1].toFixed(4)}
-              </div>
-              <div className="location-hint">点击编辑位置</div>
-            </div>
-          </div>
-        ) : (
-          <div className="location-placeholder">
-            <div className="location-icon">📍</div>
-            <div className="location-text">点击选择位置</div>
-          </div>
-        )}
+      <div className="unified-action-button" onClick={handleMapOpen}>
+        <div className="action-header">
+          <span className="action-icon">📍</span>
+          <span className="action-name">修正地点</span>
+        </div>
+        <div className="action-status">
+          {location ? 
+            `{${coordinates[0].toFixed(4)}, ${coordinates[1].toFixed(4)}}` : 
+            '未设置'
+          }
+        </div>
       </div>
 
       {/* 地图编辑弹窗 */}
@@ -143,9 +138,7 @@ const LeafletLocationPicker = ({ location, setLocation }) => {
 
             <div className="map-editor-content">
               <div className="map-controls">
-                <button className="get-location-btn" onClick={getCurrentLocation}>
-                  📍 获取当前位置
-                </button>
+                
                 
                 <div className="map-type-selector">
                   <span>地图类型:</span>
@@ -161,6 +154,9 @@ const LeafletLocationPicker = ({ location, setLocation }) => {
                       onClick={() => setMapType('satellite')}
                     >
                       卫星
+                    </button>
+                    <button className="get-location-btn" onClick={getCurrentLocation}>
+                      📍 定位到当前位置
                     </button>
                   </div>
                 </div>
@@ -178,7 +174,7 @@ const LeafletLocationPicker = ({ location, setLocation }) => {
                     subdomains={getTileLayerSubdomains()}
                     attribution={mapType === 'street' ? 
                       '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' :
-                      '&copy; <a href="https://maps.google.com/">Google</a>'
+                      'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community'
                     }
                   />
                   <DraggableMarker position={coordinates} setPosition={setCoordinates} />

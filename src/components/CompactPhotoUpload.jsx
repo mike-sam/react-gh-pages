@@ -2,8 +2,8 @@ import React, { useState } from 'react';
 import imageCompression from 'browser-image-compression';
 import { API_ENDPOINTS } from '../config';
 
-const CompactPhotoUpload = ({ onPhotoChange, initialPhoto = null }) => {
-  const [photos, setPhotos] = useState(initialPhoto ? [initialPhoto] : []);
+const CompactPhotoUpload = ({ onPhotoChange, initialPhotos = [] }) => {
+  const [photos, setPhotos] = useState(initialPhotos);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -150,16 +150,16 @@ const CompactPhotoUpload = ({ onPhotoChange, initialPhoto = null }) => {
       />
       
       <div className="photo-upload-controls">
-        <label htmlFor="compact-photo-upload" className="photo-upload-btn">
-          {isLoading ? (
-            <span className="photo-loading-text">
-              📷 处理中...
+        <label htmlFor="compact-photo-upload" className="unified-action-button">
+          <div className="action-header">
+            <span className="action-icon">📷</span>
+            <span className="action-name">
+              {isLoading ? '处理中...' : '添加照片'}
             </span>
-          ) : (
-            <span className="photo-btn-text">
-              📷 添加照片 {photos.length > 0 && `(${photos.length})`}
-            </span>
-          )}
+          </div>
+          <div className="action-status">
+            {photos.length > 0 ? `${photos.length} 张照片` : '未添加'}
+          </div>
         </label>
         
         {/* 照片列表 */}

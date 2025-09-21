@@ -150,7 +150,7 @@ const MobileCalculator = ({ amount, setAmount, currency, setCurrency, onAmountFo
         >
           <div className="mobile-calculator">
             <div className="calculator-header">
-              <span className="calculator-title">计算器</span>
+              <span className="calculator-title">输入金额</span>
               <button 
                 className="calculator-close"
                 onClick={() => setIsCalculatorVisible(false)}
