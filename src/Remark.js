@@ -14,16 +14,31 @@ function Remark({ remark, setRemark, setCarPlate, carPlate, selectedTag, input, 
     const carPlates = ['PPQ8777', 'WD6060E'];
 
     useEffect(() => {
-        if (selectedTag === '交通出行' && input === '打油') {
+        if (selectedTag === '交通出行' && input === '打油' && tripInfo && amount) {
             const price = parseFloat(amount) || 0;
-            const trip = parseFloat(tripInfo) || 1;
-            setAveragePrice((price / trip).toFixed(2));
-            let totalLitter = price/fuelPrice;
-            let kmPer100Km = totalLitter/trip*100;
-            setLitterPer100Km('');
-            if(typeof(kmPer100Km) === 'number' && kmPer100Km !== Infinity){
-                setLitterPer100Km(kmPer100Km.toFixed(2));
+            const trip = parseFloat(tripInfo) || 0;
+            const fuel_price = parseFloat(fuelPrice) || 2.05;
+            
+            if (trip > 0 && price > 0) {
+                // 计算每公里花费
+                setAveragePrice((price / trip).toFixed(2));
+                
+                // 计算油耗相关指标
+                let totalLiters = price / fuel_price; // 总升数
+                let litersPer100Km = (totalLiters / trip) * 100; // 每100公里油耗
+                
+                if (typeof(litersPer100Km) === 'number' && litersPer100Km !== Infinity && !isNaN(litersPer100Km)) {
+                    setLitterPer100Km(litersPer100Km.toFixed(2));
+                } else {
+                    setLitterPer100Km('');
+                }
+            } else {
+                setAveragePrice(0);
+                setLitterPer100Km('');
             }
+        } else {
+            setAveragePrice(0);
+            setLitterPer100Km('');
         }
     }, [amount, tripInfo, selectedTag, input, fuelPrice]);
 
@@ -173,7 +188,29 @@ function Remark({ remark, setRemark, setCarPlate, carPlate, selectedTag, input, 
                                 allowDecimal={true}
                             />
                         </div>
-                        {averagePrice > 0 && (<p>RM{averagePrice}/km[{fuelType}] RM{anotherAveragePrice}/km[{anotherFuelType}] <code style={{color:'red'}}>or</code> {averageLitterPer100Km} litter for 100 km</p>)}
+                        {averagePrice > 0 && averageLitterPer100Km && (
+                            <div className="fuel-calculation-results">
+                                <h5 style={{margin: '10px 0 5px 0', color: '#007bff'}}>⛽ 油耗计算结果:</h5>
+                                <div className="fuel-stats">
+                                    <div className="fuel-stat-item">
+                                        <span className="label">每公里成本:</span>
+                                        <span className="value">RM {averagePrice}[{fuelType.toUpperCase()}]</span>
+                                    </div>
+                                    <div className="fuel-stat-item">
+                                        <span className="label">每100公里油耗:</span>
+                                        <span className="value">{averageLitterPer100Km} 升</span>
+                                    </div>
+                                    <div className="fuel-stat-item">
+                                        <span className="label">每升公里数:</span>
+                                        <span className="value">{((parseFloat(tripInfo) || 0) / ((parseFloat(amount) || 0) / (parseFloat(fuelPrice) || 2.05))).toFixed(2)} km/L</span>
+                                    </div>
+                                    <div className="fuel-stat-item">
+                                        <span className="label">对比[{anotherFuelType.toUpperCase()}]:</span>
+                                        <span className="value">RM {anotherAveragePrice}/km</span>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
                         </>
                     )}
                 </div>

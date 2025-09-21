@@ -114,28 +114,7 @@ const CompactPhotoUpload = ({ onPhotoChange, initialPhotos = [] }) => {
     });
   };
 
-  const removePhoto = (index) => {
-    const photoToRemove = photos[index];
-    if (photoToRemove && photoToRemove.preview) {
-      URL.revokeObjectURL(photoToRemove.preview);
-    }
-    
-    const newPhotos = photos.filter((_, i) => i !== index);
-    setPhotos(newPhotos);
-    setError('');
-    
-    if (onPhotoChange) {
-      onPhotoChange(newPhotos);
-    }
-  };
 
-  const formatFileSize = (bytes) => {
-    if (bytes === 0) return '0 Bytes';
-    const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-  };
 
   return (
     <div className="compact-photo-upload">
@@ -161,36 +140,6 @@ const CompactPhotoUpload = ({ onPhotoChange, initialPhotos = [] }) => {
             {photos.length > 0 ? `${photos.length} 张照片` : '未添加'}
           </div>
         </label>
-        
-        {/* 照片列表 */}
-        {photos.length > 0 && (
-          <div className="photos-list">
-            {photos.map((photo, index) => (
-              <div key={index} className="photo-preview-compact">
-                <img 
-                  src={photo.preview} 
-                  alt="预览" 
-                  className="photo-thumbnail"
-                />
-                <div className="photo-info">
-                  <span className="photo-filename">{photo.filename}</span>
-                  <span className="photo-size">
-                    {formatFileSize(photo.compressedSize)}
-                    {photo.uploadedUrl && <span className="upload-status"> ✅</span>}
-                  </span>
-                </div>
-                <button 
-                  type="button"
-                  className="photo-remove-compact"
-                  onClick={() => removePhoto(index)}
-                  title="删除照片"
-                >
-                  ✕
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
       </div>
 
       {error && (

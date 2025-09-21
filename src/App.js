@@ -87,6 +87,15 @@ function App() {
     setIsAmountManuallySet(true);
   };
 
+  // 格式化文件大小
+  const formatFileSize = (bytes) => {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  };
+
   const handleNumber = (num) => {
     setIsAmountManuallySet(true); // 用户手动输入了金额
     
@@ -459,6 +468,42 @@ function App() {
           />
         </div>
       </div>
+      
+      {/* 照片显示行 */}
+      {photos.length > 0 && (
+        <div className="photos-display-row">
+          <div className="photos-grid">
+            {photos.map((photo, index) => (
+              <div key={index} className="photo-display-item">
+                <img 
+                  src={photo.preview} 
+                  alt={`照片 ${index + 1}`} 
+                  className="photo-display-img"
+                />
+                <div className="photo-display-info">
+                  <span className="photo-display-name">{photo.filename}</span>
+                  <span className="photo-display-size">
+                    {formatFileSize(photo.originalSize)}
+                    {photo.uploadedUrl && <span className="upload-success-icon"> ✅</span>}
+                  </span>
+                </div>
+                <button 
+                  type="button"
+                  className="photo-display-remove"
+                  onClick={() => {
+                    const newPhotos = photos.filter((_, i) => i !== index);
+                    setPhotos(newPhotos);
+                    handlePhotoChange(newPhotos);
+                  }}
+                  title="删除照片"
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       
       <Log setLog={setLog} log={log} />
       
