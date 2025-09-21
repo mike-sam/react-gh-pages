@@ -138,7 +138,10 @@ const PaymentMethodSelector = ({
     }
     
     // 所有其他类别（包括 Cash 和 Card）都保留原始显示
-    return option.card_num;
+    if(option.card_num === option.key){
+      return option.card_num;
+    }
+    return `${option.key} - ${option.card_num}`;
   };
 
   if (selectedCategory) {
