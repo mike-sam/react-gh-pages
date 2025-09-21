@@ -7,11 +7,6 @@ function Calculator({ amount, setAmount, currency, setCurrency, handleNumber, ha
     };
 
     const handleButtonClick = (value) => {
-    let tmpAmount = amount.toString();
-    let char_1 = '';
-    if (tmpAmount.length >= 1){
-        char_1 = tmpAmount.charAt(tmpAmount.length - 1);
-    }
     switch(value){
         case 'C':
             setAmount('');
@@ -19,43 +14,48 @@ function Calculator({ amount, setAmount, currency, setCurrency, handleNumber, ha
         case 'SGD':
         case 'CNY':
         case 'MYR':
-            let prevCurr = currency;
-            let rate = 1;
-            switch(prevCurr){
-                case 'SGD':
-                    if (value === 'CNY'){
-                        rate = 5.41;
-                    } else if (value === 'MYR'){
-                        rate = 3.3;
-                    }
-                    break;
-                case 'MYR':
-                    if (value === 'SGD'){
-                        rate = 0.3;
-                    } else if (value === 'CNY'){
-                        rate = 1.60;
-                    }
-                    break;
-                case 'CNY':
-                    if (value === 'SGD'){
-                        rate = 0.18;
-                    } else if (value === 'MYR'){
-                        rate = 0.62;
-                    }
-                    break;
+            // Only convert if we have a valid numeric amount
+            if (amount && !isNaN(parseFloat(amount))) {
+                let prevCurr = currency;
+                let rate = 1;
+                switch(prevCurr){
+                    case 'SGD':
+                        if (value === 'CNY'){
+                            rate = 5.41;
+                        } else if (value === 'MYR'){
+                            rate = 3.3;
+                        }
+                        break;
+                    case 'MYR':
+                        if (value === 'SGD'){
+                            rate = 0.3;
+                        } else if (value === 'CNY'){
+                            rate = 1.60;
+                        }
+                        break;
+                    case 'CNY':
+                        if (value === 'SGD'){
+                            rate = 0.18;
+                        } else if (value === 'MYR'){
+                            rate = 0.62;
+                        }
+                        break;
+                }
+                setCurrency(value);
+                const convertedAmount = parseFloat(amount) * rate;
+                setAmount(convertedAmount.toFixed(2));
+            } else {
+                setCurrency(value);
             }
-            setCurrency(value);
-            setAmount((amount * rate).toFixed(2));
             break;
         case 'NNN':
             break;
         case '←':
-            setAmount(amount.slice(0, -1));
+            if (amount.length > 0) {
+                const newAmount = amount.slice(0, -1);
+                setAmount(newAmount || '');
+            }
             break;
-    }
-    let check = parseFloat(amount).toFixed(2);
-    if (value === '0' && (check === '0.00' || isNaN(check)) ) {
-        setAmount('');
     }
   };
 

@@ -1,7 +1,13 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect } from 'react';
+import LeafletLocationPicker from './components/LeafletLocationPicker';
 
-function Geolocation({location, setLocation}) {
+function Geolocation({location, setLocation, skipAutoLocation}) {
   useEffect(() => {
+    // Skip auto-location if already provided via URL params
+    if (skipAutoLocation && location) {
+      return;
+    }
+    
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition((position) => {
         const latitude = position.coords.latitude;
@@ -12,17 +18,14 @@ function Geolocation({location, setLocation}) {
     } else {
       setLocation('Geolocation is not supported by this browser.');
     }
-  }, []);
+  }, [skipAutoLocation, location, setLocation]);
 
   return (
     <div className="row row-wrap w-100">
-      <span id="geolocation-href" className="w-100">
-        {location && (
-          <button className="w-100 btn">
-            已获取目前位置, 提交表单时将一同记录。{location}
-          </button>
-        )}
-      </span>
+      <LeafletLocationPicker 
+        location={location} 
+        setLocation={setLocation} 
+      />
     </div>
   );
 }

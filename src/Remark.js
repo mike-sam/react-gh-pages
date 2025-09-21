@@ -1,6 +1,9 @@
 import React, { useState, useEffect } from 'react';
+import ItemizedDescription from './components/ItemizedDescription';
+import UnifiedInput from './components/UnifiedInput';
+import NumberPad from './components/NumberPad';
 
-function Remark({ remark, setRemark, setCarPlate, carPlate, selectedTag, input, amount }) {
+function Remark({ remark, setRemark, setCarPlate, carPlate, selectedTag, input, amount, onItemizedTotalChange }) {
     const [fuelPrice, setFuelPrice] = useState('2.05');
     const [fuelType, setFuelType] = useState('ron95');
     const [mileage, setMileage] = useState('');
@@ -81,18 +84,58 @@ function Remark({ remark, setRemark, setCarPlate, carPlate, selectedTag, input, 
                     </div>
                     {!carPlates.includes(carPlate) && (
                         <div className="input-group">
-                            <input 
+                            <UnifiedInput 
                                 type="text" 
                                 value={carPlate === 'other'?'':carPlate}
                                 onChange={validateCarPlate}
-                                placeholder="Enter custom plate number"
-                                className="custom-input car-plate-input"
+                                placeholder="输入车牌号码"
+                                label="自定义车牌"
                             />
                         </div>
                     )}
                     {!['车贷','洗车美容'].includes(input) && (
                         <div className="input-group">
-                            <input type="number" value={mileage} onChange={(e) => setMileage(e.target.value)} placeholder="Mileage" className="custom-input" />
+                            <NumberPad 
+                                value={mileage} 
+                                onChange={(e) => setMileage(e.target.value)}
+                                label="里程数"
+                                placeholder="输入里程数"
+                            />
+                        </div>
+                    )}
+                    {input === '维修保养' && (
+                        <div className="input-group">
+                            <textarea 
+                                value={remark.split('\n').find(line => line.startsWith('零件: '))?.replace('零件: ', '') || ''}
+                                onChange={(e) => {
+                                    const parts = remark.split('\n').filter(line => !line.startsWith('零件: '));
+                                    if (e.target.value.trim()) {
+                                        parts.push(`零件: ${e.target.value}`);
+                                    }
+                                    setRemark(parts.join('\n'));
+                                    setUserEditedRemark(true);
+                                }}
+                                placeholder="更换的零件 (例如: 机油滤芯、刹车片等)"
+                                className="unified-input parts-input"
+                                rows="2"
+                            />
+                        </div>
+                    )}
+                    {input === '车险' && (
+                        <div className="input-group">
+                            <UnifiedInput
+                                type="date"
+                                value={remark.split('\n').find(line => line.startsWith('保险日期: '))?.replace('保险日期: ', '') || ''}
+                                onChange={(e) => {
+                                    const parts = remark.split('\n').filter(line => !line.startsWith('保险日期: '));
+                                    if (e.target.value) {
+                                        parts.push(`保险日期: ${e.target.value}`);
+                                    }
+                                    setRemark(parts.join('\n'));
+                                    setUserEditedRemark(true);
+                                }}
+                                label="保险日期"
+                            />
                         </div>
                     )}
                     {input === '打油' && (
@@ -122,56 +165,84 @@ function Remark({ remark, setRemark, setCarPlate, carPlate, selectedTag, input, 
                             </div>
                         </div>
                         <div className="input-group">
-                            <input type="number" value={tripInfo} onChange={(e) => setTripInfo(e.target.value)} placeholder="Trip (km)" className="custom-input" />
+                            <NumberPad 
+                                value={tripInfo} 
+                                onChange={(e) => setTripInfo(e.target.value)}
+                                label="行程距离"
+                                placeholder="输入行程(km)"
+                                allowDecimal={true}
+                            />
                         </div>
                         {averagePrice > 0 && (<p>RM{averagePrice}/km[{fuelType}] RM{anotherAveragePrice}/km[{anotherFuelType}] <code style={{color:'red'}}>or</code> {averageLitterPer100Km} litter for 100 km</p>)}
                         </>
                     )}
                 </div>
             );
-        } else {
-            return (
-                <textarea 
-                className="content-remark"
-                value={remark} 
-                onChange={(e) => setRemark(e.target.value)} 
-                placeholder="输入内容"
-            />
-            )
         }
+        
+        // For non-vehicle categories, show itemized description
+        return (
+            <ItemizedDescription 
+                initialValue={remark}
+                onChange={setRemark}
+                totalAmount={parseFloat(amount) || 0}
+                onItemizedTotalChange={onItemizedTotalChange}
+            />
+        )
 
     };
 
     // const formatRemark = 
 
+    // Generate auto-formatted remark for car-related expenses
+    const generateAutoRemark = () => {
+        if (selectedTag === '交通出行') {
+            let anotherFuelPrice = fuelType === 'ron95' ? 3.15 : 2.05;
+            let anotherFuelType = fuelType === 'ron95' ? 'ron97' : 'ron95';
+            let anotherAveragePrice = (anotherFuelPrice*averageLitterPer100Km/100).toFixed(2);
+            const sections = {
+                carPlate: carPlate && `CarPlate: ${carPlate}`,
+                fuelInfo: input === '打油' && [
+                    tripInfo && `Trip: ${tripInfo}km`,
+                    `Fuel Type: ${fuelType.toUpperCase()}`,
+                    `RM${averagePrice}/km[${fuelType}]`,
+                    `RM${anotherAveragePrice}/km[${anotherFuelType}]`,
+                    `${averageLitterPer100Km} litter for 100 km`,
+                ],
+                mileage: !['车贷','洗车美容'].includes(input) && 
+                    mileage && `ODO: ${mileage}`
+            };
+    
+            return Object.values(sections)
+                .flat()
+                .filter(Boolean)
+                .join('\n');
+        }
+        return '';
+    };
+
+    // Auto-fill remark when car details change, but only if user hasn't manually edited
+    const [userEditedRemark, setUserEditedRemark] = useState(false);
+    
+    // Reset user edit flag when tag or input changes
     useEffect(() => {
-        setRemark(() => {
-            if (selectedTag === '交通出行') {
-                let anotherFuelPrice = fuelType === 'ron95' ? 3.15 : 2.05;
-                let anotherFuelType = fuelType === 'ron95' ? 'ron97' : 'ron95';
-                let anotherAveragePrice = (anotherFuelPrice*averageLitterPer100Km/100).toFixed(2);
-                const sections = {
-                    carPlate: carPlate && `CarPlate: ${carPlate}`,
-                    fuelInfo: input === '打油' && [
-                        tripInfo && `Trip: ${tripInfo}km`,
-                        `Fuel Type: ${fuelType.toUpperCase()}`,
-                        `RM${averagePrice}/km[${fuelType}]`,
-                        `RM${anotherAveragePrice}/km[${anotherFuelType}]`,
-                        `${averageLitterPer100Km} litter for 100 km`,
-                    ],
-                    mileage: !['车贷','洗车美容'].includes(input) && 
-                        mileage && `ODO: ${mileage}`
-                };
-        
-                return Object.values(sections)
-                    .flat()
-                    .filter(Boolean)
-                    .join('\n');
-            } else {
-                return remark;
+        setUserEditedRemark(false);
+    }, [selectedTag, input]);
+    
+    useEffect(() => {
+        if (selectedTag === '交通出行' && !userEditedRemark) {
+            const autoRemark = generateAutoRemark();
+            if (autoRemark !== remark) {
+                setRemark(autoRemark);
             }
-        });
-    }, [carPlate, fuelType, tripInfo, averagePrice, mileage, input, setRemark, remark, selectedTag, averageLitterPer100Km]);
+        }
+    }, [carPlate, fuelType, tripInfo, averagePrice, mileage, input, selectedTag, averageLitterPer100Km, userEditedRemark]);
+
+    // Handle manual remark changes
+    const handleRemarkChange = (e) => {
+        setRemark(e.target.value);
+        setUserEditedRemark(true);
+    };
     return (
         <div id="remark-container">
             {renderSpecialInputs()}
