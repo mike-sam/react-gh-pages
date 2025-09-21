@@ -19,15 +19,16 @@ const MobileFriendlyDateTime = ({ value = new Date(), onChange }) => {
 
   const formatDisplayDateTime = (date) => {
     const options = { 
-      year: 'numeric', 
+      // year: '2-digit', 
       month: 'short', 
       day: 'numeric',
       hour: '2-digit',
       minute: '2-digit',
-      hour12: true
+      hour12: false
     };
-    const formatted = date.toLocaleString('zh-CN', options);
-    const dayOfWeek = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][date.getDay()];
+    const formatted = date.toLocaleString('en-US', options);
+    // const dayOfWeek = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][date.getDay()];
+    const dayOfWeek = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][date.getDay()];
     return `${formatted} (${dayOfWeek})`;
   };
 
