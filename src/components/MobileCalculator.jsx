@@ -1,7 +1,14 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 
-const MobileCalculator = ({ amount, setAmount, currency, setCurrency, onAmountFocus, onCurrencyConversion, onAmountComplete }) => {
+const MobileCalculator = ({ amount, setAmount, currency, setCurrency, onAmountFocus, onCurrencyConversion, onAmountComplete, selectedTag, input }) => {
   const [isCalculatorVisible, setIsCalculatorVisible] = useState(false);
+
+  // Auto-show calculator when tag and input are selected but no amount
+  useEffect(() => {
+    if (selectedTag && input && (!amount || amount === '0' || amount === '')) {
+      setIsCalculatorVisible(true);
+    }
+  }, [selectedTag, input, amount]);
   
   const handleNumber = (num) => {
     // If there's an operator in the amount, we're building an expression
@@ -19,17 +26,23 @@ const MobileCalculator = ({ amount, setAmount, currency, setCurrency, onAmountFo
       return;
     }
     
-    // Normal number entry - treat as currency input (cents)
-    let currentAmount = amount.replace(/[^\d]/g, '');
-    let newAmount = currentAmount + num;
-    
-    // Prevent numbers that are too large
-    if (newAmount.length > 8) {
-      return;
+    // Normal number entry - like regular calculator
+    // Check if we already have a decimal point
+    if (amount.includes('.')) {
+      const parts = amount.split('.');
+      // Limit to 2 decimal places
+      if (parts[1] && parts[1].length >= 2) {
+        return;
+      }
+      setAmount(amount + num);
+    } else {
+      // No decimal point, normal addition
+      if (amount === '') {
+        setAmount(num);
+      } else {
+        setAmount(amount + num);
+      }
     }
-    
-    const numericValue = Number(newAmount) / 100;
-    setAmount(numericValue.toFixed(2).toString());
   };
   
   const handleOperator = (op) => {
@@ -64,6 +77,26 @@ const MobileCalculator = ({ amount, setAmount, currency, setCurrency, onAmountFo
     if (amount.length > 0) {
       const newAmount = amount.slice(0, -1);
       setAmount(newAmount || '');
+    }
+  };
+
+  const handleDecimal = () => {
+    // If there's an operator in the amount, add decimal to new number
+    if(/[/+\-*÷×]/.test(amount)) {
+      setAmount(amount + '0.');
+      return;
+    }
+    
+    // Don't add decimal if it already exists
+    if (amount.includes('.')) {
+      return;
+    }
+    
+    // If amount is empty or '0', start with '0.'
+    if (amount === '' || amount === '0') {
+      setAmount('0.');
+    } else {
+      setAmount(amount + '.');
     }
   };
 
@@ -185,11 +218,21 @@ const MobileCalculator = ({ amount, setAmount, currency, setCurrency, onAmountFo
               <button className="calc-btn calc-btn-equal" onClick={handleEqual}>=</button>
               
               <button className="calc-btn calc-btn-zero" onClick={() => handleNumber('0')}>0</button>
-              <button className="calc-btn calc-btn-number" onClick={() => handleNumber('.')}>.</button>
+              <button className="calc-btn calc-btn-number" onClick={handleDecimal}>.</button>
               <button className="calc-btn calc-btn-done" onClick={() => {
                 setIsCalculatorVisible(false);
-                if (onAmountComplete && amount && parseFloat(amount) > 0) {
-                  onAmountComplete();
+                if (amount && parseFloat(amount) > 0) {
+                  // Auto-focus to remark field after calculator closes
+                  setTimeout(() => {
+                    const remarkInput = document.querySelector('.remark-input');
+                    if (remarkInput) {
+                      remarkInput.focus();
+                    }
+                  }, 200);
+                  
+                  if (onAmountComplete) {
+                    onAmountComplete();
+                  }
                 }
               }}>完成</button>
               <div></div>

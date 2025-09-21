@@ -32,6 +32,10 @@ const MobileFriendlyDateTime = ({ value = new Date(), onChange }) => {
     return `${formatted} (${dayOfWeek})`;
   };
 
+  const getDayOfWeekShort = (date) => {
+    return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][date.getDay()];
+  };
+
   const quickTimeOptions = [
     { label: '现在', getValue: () => new Date() },
     { label: '1小时前', getValue: () => new Date(Date.now() - 60 * 60 * 1000) },
@@ -135,13 +139,13 @@ const MobileFriendlyDateTime = ({ value = new Date(), onChange }) => {
         }}>
           <div className="datetime-editor">
             <div className="editor-header">
-              <h4>选择时间</h4>
+              <h4>优化时间编辑器</h4>
               <button className="close-btn" onClick={handleCancel}>×</button>
             </div>
 
             {/* 快速选项 */}
             <div className="quick-options">
-              <h5>快速选择:</h5>
+              <h5>速选</h5>
               <div className="quick-buttons">
                 {quickTimeOptions.map((option, index) => (
                   <button
@@ -157,7 +161,7 @@ const MobileFriendlyDateTime = ({ value = new Date(), onChange }) => {
 
             {/* 日期选择 */}
             <div className="date-section">
-              <label>日期:</label>
+              <h5>日期 - {getDayOfWeekShort(tempDate)}</h5>
               <div className="date-input-wrapper">
                 <button 
                   type="button"
@@ -206,11 +210,11 @@ const MobileFriendlyDateTime = ({ value = new Date(), onChange }) => {
 
             {/* 时间选择 */}
             <div className="time-section">
-              <label>时间:</label>
+              <h5>时间</h5>
               
               {/* 12小时制小时选择 */}
               <div className="hour-selector">
-                <span className="hour-label">小时:</span>
+                <span className="hour-label">速选小时</span>
                 <div className="hour-buttons-scroll">
                   {hourOptions.map((hour) => (
                     <button
@@ -262,7 +266,7 @@ const MobileFriendlyDateTime = ({ value = new Date(), onChange }) => {
                 
                 {/* 快速分钟选择 */}
                 <div className="quick-minutes">
-                  <span>快速分钟:</span>
+                  <span>速选分钟</span>
                   {quickMinuteOptions.map((minute) => (
                     <button
                       key={minute}

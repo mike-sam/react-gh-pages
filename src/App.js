@@ -389,13 +389,15 @@ function App() {
           setAmount={setAmount}
           currency={currency}
           setCurrency={setCurrency}
+          selectedTag={selectedTag}
+          input={input}
           onAmountFocus={() => {
             setTimeout(() => {
               window.scrollTo({ top: 0, behavior: 'smooth' });
             }, 100);
           }}
           onCurrencyConversion={handleCurrencyConversion}
-            onAmountComplete={handleAmountComplete}
+          onAmountComplete={handleAmountComplete}
           />
         
 
