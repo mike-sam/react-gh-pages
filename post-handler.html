@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Expense POST Handler</title>
+</head>
+<body>
+    <script>
+        // Handle POST data and redirect to main app
+        if (window.location.search) {
+            // GET request - redirect with parameters
+            window.location.href = '/react-gh-pages/' + window.location.search;
+        } else {
+            // Check for POST data (this would need server-side handling in real scenario)
+            // For now, we'll create a form that can receive POST data
+            const form = document.createElement('form');
+            form.method = 'POST';
+            form.action = window.location.href;
+            form.style.display = 'none';
+            document.body.appendChild(form);
+            
+            // Redirect to main app
+            setTimeout(() => {
+                window.location.href = '/react-gh-pages/';
+            }, 100);
+        }
+    </script>
+    <p>Redirecting...</p>
+</body>
+</html>
