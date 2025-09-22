@@ -11,7 +11,7 @@ const MobileCalculator = ({ amount, setAmount, currency, setCurrency, onAmountFo
       if (document.activeElement && document.activeElement.blur) {
         document.activeElement.blur();
       }
-      
+
       // Small delay to ensure keyboard is hidden before showing calculator
       setTimeout(() => {
         setIsCalculatorVisible(true);
@@ -26,14 +26,14 @@ const MobileCalculator = ({ amount, setAmount, currency, setCurrency, onAmountFo
       delete window.showCalculator;
     };
   }, [selectedTag, input, amount]);
-  
+
   const handleNumber = (num) => {
     // If there's an operator in the amount, we're building an expression
     if(/[/+\-*÷×]/.test(amount)) {
       setAmount(amount + num);
       return;
     }
-    
+
     // Handle special case where amount is '0' - replace it
     if (amount === '0' || amount === '0.00') {
       if (num === '0') {
@@ -42,7 +42,7 @@ const MobileCalculator = ({ amount, setAmount, currency, setCurrency, onAmountFo
       setAmount(num);
       return;
     }
-    
+
     // Normal number entry - like regular calculator
     // Check if we already have a decimal point
     if (amount.includes('.')) {
@@ -61,7 +61,7 @@ const MobileCalculator = ({ amount, setAmount, currency, setCurrency, onAmountFo
       }
     }
   };
-  
+
   const handleOperator = (op) => {
     if (['+', '-', '×', '÷', '*'].includes(amount.slice(-1))) {
       setAmount(amount.slice(0, -1) + op);
@@ -69,7 +69,7 @@ const MobileCalculator = ({ amount, setAmount, currency, setCurrency, onAmountFo
     }
     setAmount(amount + op);
   };
-  
+
   const handleEqual = () => {
     try {
       const expression = amount
@@ -78,7 +78,7 @@ const MobileCalculator = ({ amount, setAmount, currency, setCurrency, onAmountFo
         .replace(/\+/g, ' + ')
         .replace(/-/g, ' - ')
         .trim();
-      
+
       const result = Function(`return ${expression}`)();
       setAmount(Number(result).toFixed(2).toString());
     } catch (error) {
@@ -103,12 +103,12 @@ const MobileCalculator = ({ amount, setAmount, currency, setCurrency, onAmountFo
       setAmount(amount + '0.');
       return;
     }
-    
+
     // Don't add decimal if it already exists
     if (amount.includes('.')) {
       return;
     }
-    
+
     // If amount is empty or '0', start with '0.'
     if (amount === '' || amount === '0') {
       setAmount('0.');
@@ -137,7 +137,7 @@ const MobileCalculator = ({ amount, setAmount, currency, setCurrency, onAmountFo
       }
       const convertedAmount = originalAmount * rate;
       setAmount(convertedAmount.toFixed(2));
-      
+
       // Record currency conversion
       if (onCurrencyConversion && currency !== newCurrency) {
         const conversion = {
@@ -197,12 +197,12 @@ const MobileCalculator = ({ amount, setAmount, currency, setCurrency, onAmountFo
           placeholder="0.00"
         />
       </div>
-      
+
       <div className="currency-selector">
         {currencies.map(curr => (
-          <button 
+          <button
             key={curr}
-            className={`currency-btn ${currency === curr ? 'active' : ''}`} 
+            className={`currency-btn ${currency === curr ? 'active' : ''}`}
             onClick={() => handleCurrencyChange(curr)}
           >
             {curr}
@@ -211,7 +211,7 @@ const MobileCalculator = ({ amount, setAmount, currency, setCurrency, onAmountFo
       </div>
 
       {isCalculatorVisible && (
-        <div 
+        <div
           className="mobile-calculator-overlay"
           onClick={(e) => {
             if (e.target === e.currentTarget) {
@@ -222,14 +222,14 @@ const MobileCalculator = ({ amount, setAmount, currency, setCurrency, onAmountFo
           <div className="mobile-calculator">
             <div className="calculator-header">
               <span className="calculator-title">输入金额</span>
-              <button 
+              <button
                 className="calculator-close"
                 onClick={() => setIsCalculatorVisible(false)}
               >
                 ✕
               </button>
             </div>
-            
+
             <div className="calculator-display">
               {amount || '0'}
             </div>
@@ -239,22 +239,22 @@ const MobileCalculator = ({ amount, setAmount, currency, setCurrency, onAmountFo
               <button className="calc-btn calc-btn-backspace" onClick={handleBackspace}>⌫</button>
               <button className="calc-btn calc-btn-operator" onClick={() => handleOperator('÷')}>÷</button>
               <button className="calc-btn calc-btn-operator" onClick={() => handleOperator('×')}>×</button>
-              
+
               <button className="calc-btn calc-btn-number" onClick={() => handleNumber('7')}>7</button>
               <button className="calc-btn calc-btn-number" onClick={() => handleNumber('8')}>8</button>
               <button className="calc-btn calc-btn-number" onClick={() => handleNumber('9')}>9</button>
               <button className="calc-btn calc-btn-operator" onClick={() => handleOperator('-')}>−</button>
-              
+
               <button className="calc-btn calc-btn-number" onClick={() => handleNumber('4')}>4</button>
               <button className="calc-btn calc-btn-number" onClick={() => handleNumber('5')}>5</button>
               <button className="calc-btn calc-btn-number" onClick={() => handleNumber('6')}>6</button>
               <button className="calc-btn calc-btn-operator" onClick={() => handleOperator('+')}>+</button>
-              
+
               <button className="calc-btn calc-btn-number" onClick={() => handleNumber('1')}>1</button>
               <button className="calc-btn calc-btn-number" onClick={() => handleNumber('2')}>2</button>
               <button className="calc-btn calc-btn-number" onClick={() => handleNumber('3')}>3</button>
               <button className="calc-btn calc-btn-equal" onClick={handleEqual}>=</button>
-              
+
               <button className="calc-btn calc-btn-zero" onClick={() => handleNumber('0')}>0</button>
               <button className="calc-btn calc-btn-number" onClick={handleDecimal}>.</button>
               <button className="calc-btn calc-btn-done" onClick={() => {
@@ -262,23 +262,31 @@ const MobileCalculator = ({ amount, setAmount, currency, setCurrency, onAmountFo
                 if (amount && parseFloat(amount) > 0) {
                   // Check if payment method is already selected
                   const paymentSelected = document.querySelector('.selected-payment, .payment-category-btn.selected');
-                  
+
                   setTimeout(() => {
                     if (paymentSelected) {
                       // Payment method already selected, go to remark
                       const remarkInput = document.querySelector('.content-remark, .manual-tag-input');
                       if (remarkInput) {
                         remarkInput.focus();
+                        remarkInput.scrollIntoView({ behavior: 'smooth', block: 'center' }, 300);
                       }
                     } else {
                       // No payment method, scroll to payment section
                       const paymentSection = document.querySelector('.payment-section');
                       if (paymentSection) {
-                        paymentSection.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        paymentSection.focus();
+                        setTimeout(() => {
+                          window.scrollTo({
+                            top: 1000,
+                            behavior: 'smooth'
+                          });
+                        },200)
+
                       }
                     }
                   }, 200);
-                  
+
                   if (onAmountComplete) {
                     onAmountComplete();
                   }

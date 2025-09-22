@@ -14,6 +14,7 @@ import MobileCalculator from './components/MobileCalculator';
 import MalaysiaTaxCalculator from './components/MalaysiaTaxCalculator';
 import MobileFriendlyDateTime from './components/MobileFriendlyDateTime';
 import PaymentMethodSelector from './components/PaymentMethodSelector';
+import { createDoubleSpaceHandler, focusElement } from './utils/keyboardNavigation';
 
 function App() {
   const [selectedTag, setSelectedTag] = useState(null);
@@ -312,18 +313,21 @@ function App() {
   };
 
   const submitData = async (resetFields = true) => {
-    setIsSubmitting(true);
+    if (!amount || !selectedTag || !paymentMethod) {
+      alert('請填寫完整資料');
+      return;
+    }
+
+    // === 1. 複製要提交的資料，避免被後續清空影響 ===
     const separator = '|';
-    let submitted_value = input + separator + amount + separator + selectedTag + separator + remark + separator + location + separator + paymentMethod;
-    console.log({ submitted_value });
-    const shortcutUrl = 'shortcuts://run-shortcut?name=WebRecordExpenses&input=text&text=' + encodeURIComponent(submitted_value);
-  
-    // Start loading feedback
-    setOutput('Pushing to gsheet');
-    const loadingInterval = setInterval(() => {
-      setOutput(prev => prev + '.');
-    }, 1000);
-  
+    const submitted_value_raw =
+      input + separator +
+      amount + separator +
+      selectedTag + separator +
+      remark + separator +
+      location + separator +
+      paymentMethod;
+
     const contents_for_gsheets = {
       timestamp: formatDateTime(selectedDateTime, 'YMDHIS'),
       yearmonth: formatDateTime(selectedDateTime, 'YM'),
@@ -334,41 +338,69 @@ function App() {
       tag: selectedTag,
       currency: currency,
       payment_method: paymentMethod,
-      // 处理多张照片
       photos: photos.map(photo => photo.uploadedUrl || photo.base64).filter(Boolean),
-      photo_urls: photos.map(photo => photo.uploadedUrl).filter(Boolean)
+      photo_urls: photos.map(photo => photo.uploadedUrl).filter(Boolean),
     };
-  
-    submitted_value = formatDateTime() + separator + submitted_value;
+
+    // === 2. 立即清空 UI（依照 resetFields 或 duplicate） ===
+    if (resetFields) {
+      setInput('');
+      setRemark('');
+      setAmount('');
+      setSelectedTag('');
+      setCarPlate('');
+      setPaymentMethod('');
+      setPhotos([]);
+
+      // 自動 focus 下一筆（tag 或手動輸入）
+      focusElement('.manual-tag-input, .tag-input', 300);
+    } else {
+      // 保留現有欄位，但直接跳到金額
+      // 雙空格後跳到下一個輸入框
+      if (window.showCalculator) {
+          window.showCalculator();
+      }
+      // focusElement('.amount-input', 300);
+    }
+
+    // === 3. 背景送出資料 ===
+    setIsSubmitting(true);
+
+    // log & shortcut url
+    let submitted_value = formatDateTime() + separator + submitted_value_raw;
     setLog(prevLog => [submitted_value, ...prevLog]);
-  
+    const shortcutUrl =
+      'shortcuts://run-shortcut?name=WebRecordExpenses&input=text&text=' +
+      encodeURIComponent(submitted_value);
+
+    // output loading 狀態
+    setOutput('Pushing to gsheet');
+    const loadingInterval = setInterval(() => {
+      setOutput(prev => prev + '.');
+    }, 1000);
+
     try {
       const responseText = await pushToGsheet(contents_for_gsheets);
       clearInterval(loadingInterval);
-      setOutput(`Success: ${responseText}<br/><a href="${shortcutUrl}">submit through WebRecordExpenses shortcut</a>`);
+      setOutput(
+        `Success: ${responseText}<br/><a href="${shortcutUrl}">submit through WebRecordExpenses shortcut</a>`
+      );
     } catch (error) {
       clearInterval(loadingInterval);
-      setOutput(`Error: ${error.toString()}<br/><a href="${shortcutUrl}">submit through WebRecordExpenses shortcut</a>`);
+      setOutput(
+        `Error: ${error.toString()}<br/><a href="${shortcutUrl}">submit through WebRecordExpenses shortcut</a>`
+      );
     } finally {
       setIsSubmitting(false);
-      if (resetFields) {
-        // Reset all form fields
-        setInput('');
-        setRemark('');
-        setAmount('');
-        setSelectedTag('');
-        setCarPlate('');
-        setPaymentMethod('');
-        setPhotos([]); // 重置照片
-      }
     }
   };
   
-  const handleSubmit = async (e) => {
+
+  const handleSubmit = async (e, resetFields = true) => {
     e.preventDefault();
-    await submitData(true);
+    await submitData(resetFields);
   };
-  
+
   const handleSubmitAndDuplicate = async (e) => {
     e.preventDefault();
     await submitData(false);
@@ -507,17 +539,26 @@ function App() {
         </div>
       )}
       
-      <Log setLog={setLog} log={log} />
       
       {/* 提交按钮移到最下方 */}
       <div className="submit-section">
-        <button className="submit" onClick={handleSubmit}  disabled={isSubmitting || !amount || !selectedTag || !input}>
+        <button 
+          className="submit" 
+          onClick={(e) => handleSubmit(e, true)}
+          disabled={isSubmitting || !amount || !selectedTag || !input}
+        >
           {isSubmitting ? '提交中...' : (!amount || !selectedTag || !input)?(!amount?'请填入金额':'请先输入内容'):'提交'}
         </button>
-        <button className="resubmit" onClick={handleSubmitAndDuplicate}  disabled={isSubmitting || !amount || !selectedTag || !input}>
+        <button 
+          className="resubmit" 
+          onClick={(e) => handleSubmit(e, false)}
+          disabled={isSubmitting || !amount || !selectedTag || !input}
+        >
           {isSubmitting ? '提交中...' : (!amount || !selectedTag || !input)?(!amount?'请填入金额':'请先输入内容'):'下一笔'}
         </button>
       </div>
+
+      <Log setLog={setLog} log={log} />
       
       {/* Output移到提交按钮下方，使用新样式 */}
       <Output output={output} />

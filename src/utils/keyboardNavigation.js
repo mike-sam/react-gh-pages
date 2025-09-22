@@ -3,31 +3,23 @@ export const createDoubleSpaceHandler = (onNavigate, options = {}) => {
   const { shouldTrim = true, preventDefault = true } = options;
   
   return (e) => {
-    if (e.key === ' ') {
-      const spaceCount = parseInt(e.target.dataset.spaceCount || '0') + 1;
-      e.target.dataset.spaceCount = spaceCount;
-      
-      if (spaceCount >= 2) {
-        if (preventDefault) {
-          e.preventDefault();
-        }
-        e.target.dataset.spaceCount = 0;
-        
-        // Get the current value
-        let currentValue = e.target.value;
-        
-        // Trim the value if requested
-        if (shouldTrim) {
-          currentValue = currentValue.replace(/\s+$/, '').trim();
-        }
-        
-        // Execute navigation callback with the processed value
-        if (onNavigate) {
-          onNavigate(currentValue);
-        }
+    const val = e.target.value;
+
+    // 1. Android：雙空格會變成 ". "，所以要一起判斷
+    const isDoubleSpace = /\s\s$/.test(val) || val.endsWith('. ');
+
+    if (isDoubleSpace) {
+      let currentValue = val;
+      if (shouldTrim) {
+        currentValue = currentValue.replace(/\s+$/, '').trim();
       }
-    } else {
-      e.target.dataset.spaceCount = 0;
+
+      // 清掉尾端空格，避免殘留
+      e.target.value = currentValue;
+
+      // 觸發導航回調
+      // alert("DEBUG double space detected, navigate:" + JSON.stringify(val));
+      onNavigate?.(currentValue);
     }
   };
 };
@@ -36,6 +28,8 @@ export const createDoubleSpaceHandler = (onNavigate, options = {}) => {
 export const focusElement = (selector, delay = 100) => {
   setTimeout(() => {
     const element = document.querySelector(selector);
+    if (!element) return;
+
     if (element) {
       if (element.click && (element.tagName === 'BUTTON' || element.onclick)) {
         element.click();
@@ -43,12 +37,28 @@ export const focusElement = (selector, delay = 100) => {
         element.focus();
         // For mobile devices, especially iOS, trigger a click to ensure keyboard shows
         if (element.tagName === 'INPUT' || element.tagName === 'TEXTAREA') {
-          if (/iPad|iPhone|iPod|Android/i.test(navigator.userAgent)) {
+          let mobileDevices = RegExp(/iPhone|iPad|iPod|Android/i);
+          mobileDevices = RegExp(/iPhone|iPad|iPod/i);
+          if (mobileDevices.test(navigator.userAgent)) {
+            element.setAttribute('readonly', 'readonly');
             setTimeout(() => {
-              element.click();
+              element.removeAttribute('readonly');
+              element.focus();
+              // element.click();
             }, 50);
           }
+          // ✅ Android 不做 click，只保留 focus
         }
+
+        
+        // 避免鍵盤遮擋
+        setTimeout(() => {
+          if (element.scrollIntoViewIfNeeded) {
+            element.scrollIntoViewIfNeeded(true);
+          } else {
+            element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          }
+        }, 300);
       }
     }
   }, delay);

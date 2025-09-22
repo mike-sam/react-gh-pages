@@ -1,12 +1,14 @@
 import React, { useState } from 'react';
 import Select from 'react-select';
 
+
 const PaymentMethodSelector = ({ 
   paymentOptions, 
   paymentMethod, 
   setPaymentMethod,
   onPaymentFromUrl 
 }) => {
+  const [menuOpen, setMenuOpen] = useState(true); // 預設關閉
   const [selectedCategory, setSelectedCategory] = useState('');
   const [hasProcessedUrlParams, setHasProcessedUrlParams] = useState(false);
   const [previousPaymentMethod, setPreviousPaymentMethod] = useState('');
@@ -82,7 +84,33 @@ const PaymentMethodSelector = ({
     return 'Card';
   };
 
-
+  const handleDetailedSelect = (selected) => {
+    setPaymentMethod(selected ? selected.value : '');
+    setPreviousPaymentMethod(''); // 清空之前保存的值
+    setSelectedCategory('');
+    
+    // Auto-focus to remark immediately in the same user interaction context
+    if (selected) {
+      // Use requestAnimationFrame to ensure state update is processed
+      requestAnimationFrame(() => {
+        const remarkInput = document.querySelector('.content-remark');
+        if (remarkInput) {
+          remarkInput.focus();
+          
+          // For mobile devices, force keyboard in the same interaction context
+          if (/iPad|iPhone|iPod|Android/i.test(navigator.userAgent)) {
+            // Directly click to maintain user interaction context
+            remarkInput.click();
+            
+            // Backup method
+            remarkInput.setAttribute('inputmode', 'text');
+            remarkInput.style.transform = 'translateZ(0)';
+            remarkInput.focus();
+          }
+        }
+      });
+    }
+  };
 
   // 模糊匹配逻辑
   const fuzzyMatchPayment = (searchTerm) => {
@@ -183,10 +211,14 @@ const PaymentMethodSelector = ({
             setSelectedCategory('');
             
             // Store selection for onMenuClose handler
+            setMenuOpen(true); 
             if (selected) {
               window.selectedPaymentForFocus = true;
             }
+            // setMenuOpen(false); // ✅ 選完自動收起
           }}
+          onFocus={()=>setMenuOpen(true)}
+          onMenuOpen={()=> setMenuOpen(true)}
           onMenuClose={() => {
             // Handle focus in the menu close event to maintain user interaction context
             if (window.selectedPaymentForFocus) {
@@ -202,6 +234,7 @@ const PaymentMethodSelector = ({
                 }
               }
             }
+            setMenuOpen(false); // ✅ 選完自動收起
           }}
           options={categorizedOptions[selectedCategory].map(option => ({
             value: option.card_num,
@@ -210,7 +243,7 @@ const PaymentMethodSelector = ({
           isClearable
           placeholder={`选择${getCategoryLabel(selectedCategory)}...`}
           autoFocus={true}
-          menuIsOpen={true}
+          menuIsOpen={menuOpen}
           styles={{
             control: (base) => ({
               ...base,

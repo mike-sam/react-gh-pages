@@ -1,13 +1,16 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useLayoutEffect } from 'react';
 import { SECONDARY_TAGS } from './config';
 import { createDoubleSpaceHandler, focusElement } from './utils/keyboardNavigation';
+import SelectInput from '@mui/material/Select/SelectInput';
 
 function TagSelector({ input, setInput, remark, setRemark, setAmount, selectedTag, setSelectedTag, tags, amount }) {
     const [showManualInput, setShowManualInput] = useState(false);
+    const manualInputRef = useRef(null);
     const handleReset = () => {
         setInput('');
         setRemark('');
         setAmount('');
+        setShowManualInput(false);
         setSelectedTag('');
         // 如果有其他状态需要清空，也在这里处理
     };
@@ -15,33 +18,12 @@ function TagSelector({ input, setInput, remark, setRemark, setAmount, selectedTa
     const handleInputChange = (e) => setInput(e.target.value);
     
     // Auto-focus when manual input is shown
-    useEffect(() => {
-        if (showManualInput) {
-            // Use a longer delay to ensure DOM is ready
-            setTimeout(() => {
-                const input = document.querySelector('.manual-tag-input');
-                if (input) {
-                    input.focus();
-                    // Force keyboard on mobile by simulating a user click
-                    const clickEvent = new MouseEvent('click', {
-                        bubbles: true,
-                        cancelable: true,
-                        view: window
-                    });
-                    input.dispatchEvent(clickEvent);
-                    
-                    // Alternative method for stubborn keyboards
-                    if (/iPhone|iPad|iPod|Android/i.test(navigator.userAgent)) {
-                        input.setAttribute('readonly', 'readonly');
-                        setTimeout(() => {
-                            input.removeAttribute('readonly');
-                            input.focus();
-                        }, 10);
-                    }
-                }
-            }, 100);
+    useLayoutEffect(() => {
+        if (showManualInput && manualInputRef.current) {
+            focusElement('.manual-tag-input',200);
+            manualInputRef.current.focus();
         }
-    }, [showManualInput]);
+    }, [showManualInput, selectedTag]);
     
     // Double space navigation handler
     const handleKeyDown = createDoubleSpaceHandler((trimmedValue) => {
@@ -55,12 +37,14 @@ function TagSelector({ input, setInput, remark, setRemark, setAmount, selectedTa
     });
     const selectTag = (tag) => {
         setInput('');
-        console.log({tag,selectedTag});
         // setRemark('');
         if (selectedTag === tag) {
             setSelectedTag('');
             return;
         }
+        if(selectedTag == '其他'){
+            setShowManualInput(true);
+        } 
         setSelectedTag(tag);
     };
 
@@ -71,6 +55,11 @@ function TagSelector({ input, setInput, remark, setRemark, setAmount, selectedTa
         } else {
             setInput(tag);
             setShowManualInput(false);
+            setTimeout(() => {
+                if (window.showCalculator) {
+                    window.showCalculator();
+                }
+            }, 80); // Slightly longer delay to ensure blur is processed
         }
     };
 
@@ -111,7 +100,7 @@ function TagSelector({ input, setInput, remark, setRemark, setAmount, selectedTa
             ))}
         </div>
         <div className="secondary-tags-container">
-            {SECONDARY_TAGS [selectedTag] ? (
+            {SECONDARY_TAGS [selectedTag] && SECONDARY_TAGS[selectedTag].length > 0 ? (
                 <ul className="second-tag">
                     {SECONDARY_TAGS [selectedTag].map((tag, index) => (
                         <li className={`tag ${tag === input ? 'selected' : ''}`} key={index} onClick={() => handleSecondaryTagClick(tag)}>{tag}</li>
@@ -124,7 +113,7 @@ function TagSelector({ input, setInput, remark, setRemark, setAmount, selectedTa
                 </ul>
             ) : selectedTag ? (
                 <ul className="second-tag">
-                    <li className={`tag manual-input-tag ${showManualInput ? 'selected' : ''}`} onClick={(e) => {
+                    <li className={`tag manual-input-tag ${showManualInput ? 'selected' : 'selected'}`} onClick={(e) => {
                         e.stopPropagation();
                         setShowManualInput(true);
                         setInput('');
@@ -140,29 +129,21 @@ function TagSelector({ input, setInput, remark, setRemark, setAmount, selectedTa
             <div className="input-container grid grid-2">
                 <input 
                     type="text" 
+                    ref={manualInputRef}
                     className="manual-tag-input"
                     value={input} 
-                    onChange={handleInputChange}
-                    onKeyDown={(e) => {
-                        if (e.key === ' ') {
-                            const spaceCount = parseInt(e.target.dataset.spaceCount || '0') + 1;
-                            e.target.dataset.spaceCount = spaceCount;
-                            
-                            if (spaceCount >= 2) {
-                                e.preventDefault();
-                                e.target.dataset.spaceCount = 0;
-                                
-                                const trimmedValue = e.target.value.replace(/\s+$/, '').trim();
-                                setInput(trimmedValue);
-                                
-                                if (window.showCalculator) {
-                                    window.showCalculator();
-                                }
+                    onChange={(e)=>{
+                        setInput(e.target.value);
+                        createDoubleSpaceHandler((trimmedValue) => {
+                            setInput(trimmedValue);
+
+                            // 雙空格後跳到下一個輸入框
+                            if (window.showCalculator) {
+                                window.showCalculator();
                             }
-                        } else {
-                            e.target.dataset.spaceCount = 0;
-                        }
+                        })(e);
                     }}
+
                     onBlur={handleInputBlur}
                     onClick={handleManualInputClick}
                     autoFocus

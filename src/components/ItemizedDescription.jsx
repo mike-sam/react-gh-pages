@@ -41,7 +41,7 @@ const ItemizedDescription = ({ onChange, initialValue = '', totalAmount = 0, onI
       id: Date.now(),
       name: '',
       unitPrice: 0,
-      quantity: 1,
+      quantity: 0,
       subtotal: 0
     };
     const newItems = [...items, newItem];
@@ -83,28 +83,28 @@ const ItemizedDescription = ({ onChange, initialValue = '', totalAmount = 0, onI
     const updatedItems = items.map(item => {
       if (item.id === id) {
         // Trim spaces from value if it's a string
-        const trimmedValue = typeof value === 'string' ? value.trim() : value;
         let updatedItem = { ...item };
         
-        // Convert to numbers for calculation fields
-        if (field === 'unitPrice' || field === 'quantity' || field === 'subtotal') {
-          const numericValue = parseFloat(trimmedValue) || 0;
-          updatedItem[field] = numericValue;
-        } else {
-          updatedItem[field] = trimmedValue;
+        updatedItem[field] = value;
+        // // Convert to numbers for c
+        
+        const unit = parseFloat(updatedItem.unitPrice);
+        const qty = parseFloat(updatedItem.quantity);
+        if (!isNaN(unit) && !isNaN(qty) && unit > 0 && qty > 0) {
+          updatedItem.subtotal = parseFloat((unit * qty).toFixed(2));
         }
         
-        // Auto-calculate based on which field was changed and whether fields have values
-        if (field === 'unitPrice' || field === 'quantity') {
-          // If both unitPrice and quantity have values, auto-calculate subtotal
-          if (updatedItem.unitPrice > 0 && updatedItem.quantity > 0) {
-            updatedItem.subtotal = parseFloat((updatedItem.unitPrice * updatedItem.quantity).toFixed(2));
-          }
-        } else if (field === 'subtotal' && updatedItem.quantity > 0) {
-          updatedItem.unitPrice = parseFloat((updatedItem.subtotal / updatedItem.quantity).toFixed(2));
-        } else if (field === 'subtotal' && updatedItem.unitPrice > 0) {
-          updatedItem.quantity = parseFloat((updatedItem.subtotal / updatedItem.unitPrice).toFixed(2));
-        }
+        // // Auto-calculate based on which field was changed and whether fields have values
+        // if (field === 'unitPrice' || field === 'quantity') {
+        //   // If both unitPrice and quantity have values, auto-calculate subtotal
+        //   if (updatedItem.unitPrice > 0 && updatedItem.quantity > 0) {
+        //     updatedItem.subtotal = parseFloat((updatedItem.unitPrice * updatedItem.quantity).toFixed(2));
+        //   }
+        // } else if (field === 'subtotal' && updatedItem.quantity > 0) {
+        //   updatedItem.unitPrice = parseFloat((updatedItem.subtotal / updatedItem.quantity).toFixed(2));
+        // } else if (field === 'subtotal' && updatedItem.unitPrice > 0) {
+        //   updatedItem.quantity = parseFloat((updatedItem.subtotal / updatedItem.unitPrice).toFixed(2));
+        // }
         
         return updatedItem;
       }
@@ -122,13 +122,22 @@ const ItemizedDescription = ({ onChange, initialValue = '', totalAmount = 0, onI
     }
   };
 
-  // Create specific handlers for each field
-  const createItemKeyHandler = (id, field) => {
-    return createDoubleSpaceHandler((trimmedValue) => {
-      updateItem(id, field, trimmedValue);
-      focusNextInput(id, field);
-    });
+  // utils/keyboardNavigation.js (假設 createDoubleSpaceHandler 已經寫好)
+  const createItemChangeHandler = (id, field, updateItem, focusNextInput) => {
+    return (e) => {
+      const value = e.target.value;
+      updateItem(id, field, value);
+
+      // 檢查雙空格 → 觸發導航
+      createDoubleSpaceHandler((trimmedValue) => {
+        updateItem(id, field, trimmedValue);
+
+        // 跳到下一個輸入框
+        focusNextInput(id, field);
+      })(e);
+    };
   };
+
 
   const focusNextInput = (currentId, currentField) => {
     const currentItem = items.find(item => item.id === currentId);
@@ -216,24 +225,29 @@ const ItemizedDescription = ({ onChange, initialValue = '', totalAmount = 0, onI
         <textarea 
           className="content-remark"
           value={simpleDescription} 
-          onChange={(e) => {
-            setSimpleDescription(e.target.value);
-            updateParent(items, e.target.value);
+          onChange={(e)=>{
+              setSimpleDescription(e.target.value);
+              updateParent(items, e.target.value);
+              createDoubleSpaceHandler((trimmedValue) => {
+                  setSimpleDescription(trimmedValue);
+                  if (items.length === 0) {
+                    // Add new item and focus to its name
+                    addNewItem();
+                    focusElement('.item-name[data-item-index="0"]', 100);
+                  } else {
+                    const el = document.querySelector('.item-name[data-item-index="0"]');
+                    if(items.length === 1 && el.value.trim() === ''){
+                      focusElement('.item-name[data-item-index="0"]', 100);
+                    } else {
+
+                      // Focus to location section
+                      focusElement('.unified-action-button');
+                    }
+                  }
+                  
+              })(e);
           }}
           autoFocus={true}
-          onKeyDown={createDoubleSpaceHandler((trimmedValue) => {
-            setSimpleDescription(trimmedValue);
-            updateParent(items, trimmedValue);
-            
-            if (items.length === 0) {
-              // Add new item and focus to its name
-              addNewItem();
-              focusElement('.item-name[data-item-index="0"]', 100);
-            } else {
-              // Focus to location section
-              focusElement('.unified-action-button');
-            }
-          })}
           placeholder="添加备注信息"
           rows="3"
         />
@@ -256,8 +270,10 @@ const ItemizedDescription = ({ onChange, initialValue = '', totalAmount = 0, onI
               className="item-name"
               data-item-index={index}
               value={item.name || ''}
-              onChange={(e) => updateItem(item.id || index, 'name', e.target.value)}
-              onKeyDown={createItemKeyHandler(item.id || index, 'name')}
+              onChange={(e)=>{
+                updateItem(item.id || index, 'name', e.target.value);
+                createItemChangeHandler(item.id || index, 'name', updateItem, focusNextInput)(e);
+              }}
               placeholder="项目名称"
             />
             <input
@@ -265,8 +281,10 @@ const ItemizedDescription = ({ onChange, initialValue = '', totalAmount = 0, onI
               className="item-unitPrice"
               data-item-index={index}
               value={item.unitPrice || ''}
-              onChange={(e) => updateItem(item.id || index, 'unitPrice', e.target.value)}
-              onKeyDown={createItemKeyHandler(item.id || index, 'unitPrice')}
+              onChange={(e)=>{
+                updateItem(item.id || index, 'unitPrice', e.target.value);
+                createItemChangeHandler(item.id || index, 'unitPrice', updateItem, focusNextInput)(e);
+              }}
               placeholder="0.00"
             />
             <input
@@ -274,17 +292,21 @@ const ItemizedDescription = ({ onChange, initialValue = '', totalAmount = 0, onI
               className="item-quantity"
               data-item-index={index}
               value={item.quantity || ''}
-              onChange={(e) => updateItem(item.id || index, 'quantity', e.target.value)}
-              onKeyDown={createItemKeyHandler(item.id || index, 'quantity')}
-              placeholder="1"
+              onChange={(e)=>{
+                updateItem(item.id || index, 'quantity', e.target.value);
+                createItemChangeHandler(item.id || index, 'quantity', updateItem, focusNextInput)(e);
+              }}
+              placeholder="0"
             />
             <input
               type="text"
               className={`item-subtotal ${(item.unitPrice > 0 && item.quantity > 0) ? 'auto-calculated' : ''}`}
               data-item-index={index}
               value={item.subtotal || ''}
-              onChange={(e) => updateItem(item.id || index, 'subtotal', e.target.value)}
-              onKeyDown={createItemKeyHandler(item.id || index, 'subtotal')}
+              onChange={(e)=>{
+                updateItem(item.id || index, 'subtotal', e.target.value);
+                createItemChangeHandler(item.id || index, 'subtotal', updateItem, focusNextInput)(e);
+              }}
               placeholder="0.00"
               readOnly={item.unitPrice > 0 && item.quantity > 0}
             />
