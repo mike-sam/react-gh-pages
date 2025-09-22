@@ -176,9 +176,9 @@
 }
 
 .simple-description-section {
-  margin-top: 15px;
-  padding-top: 10px;
-  border-top: 1px solid #eee;
+  /* margin-top: 15px; */
+  /* padding-top: 10px; */
+  border-bottom: 1px solid #eee;
 }
 
 .section-label {
@@ -1010,8 +1010,8 @@
 /* Mobile responsive improvements */
 @media (max-width: 768px) {
   .step-section {
-    margin-bottom: 15px;
-    padding: 12px;
+    margin-bottom: 13px;
+    padding: 10px;
   }
   
   .remark-container-wrapper {
@@ -1029,17 +1029,19 @@
   .item-row {
     min-width: 350px;
   }
+  .item-quantity {
+    padding: 3px;
+  }
   
   .item-name,
   .item-price,
-  .item-quantity,
   .item-subtotal {
     font-size: 12px;
-    padding: 3px 3px;
+    padding: 4px 6px;
   }
   .item-qty-header,
   .item-quantity {
-    max-width: 30px;
+    max-width: 40px;
   }
   
   .item-price,
@@ -1923,6 +1925,18 @@
   }
 }
 
+/* Itemized Description Improvements */
+.item-subtotal.auto-calculated {
+  background-color: #f8f9fa;
+  color: #6c757d;
+  cursor: not-allowed;
+}
+
+.item-subtotal.auto-calculated:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(40, 167, 69, 0.25);
+}
+
 /* Draggable Map Styles */
 .draggable-map-picker {
   width: 100%;
@@ -2098,7 +2112,7 @@
 .payment-category-buttons {
   display: flex;
   gap: 8px;
-  margin-bottom: 15px;
+  /* margin-bottom: 15px; */
   overflow-x: auto;
   padding: 4px 0;
   -webkit-overflow-scrolling: touch;

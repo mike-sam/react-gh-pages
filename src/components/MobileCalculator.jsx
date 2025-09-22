@@ -1,13 +1,30 @@
 import React, { useState, useEffect } from 'react';
+import { createDoubleSpaceHandler, focusElement } from '../utils/keyboardNavigation';
 
 const MobileCalculator = ({ amount, setAmount, currency, setCurrency, onAmountFocus, onCurrencyConversion, onAmountComplete, selectedTag, input }) => {
   const [isCalculatorVisible, setIsCalculatorVisible] = useState(false);
 
-  // Auto-show calculator when tag and input are selected but no amount
-  useEffect(() => {
+  // Function to show calculator (can be called from parent components)
+  const showCalculator = () => {
     if (selectedTag && input && (!amount || amount === '0' || amount === '')) {
-      setIsCalculatorVisible(true);
+      // Hide any visible keyboard by blurring the active element
+      if (document.activeElement && document.activeElement.blur) {
+        document.activeElement.blur();
+      }
+      
+      // Small delay to ensure keyboard is hidden before showing calculator
+      setTimeout(() => {
+        setIsCalculatorVisible(true);
+      }, 100);
     }
+  };
+
+  // Expose showCalculator function globally so TagSelector can call it
+  useEffect(() => {
+    window.showCalculator = showCalculator;
+    return () => {
+      delete window.showCalculator;
+    };
   }, [selectedTag, input, amount]);
   
   const handleNumber = (num) => {
@@ -138,11 +155,30 @@ const MobileCalculator = ({ amount, setAmount, currency, setCurrency, onAmountFo
   };
 
   const handleAmountInputFocus = () => {
-    // Blur the input immediately and show calculator
-    document.activeElement.blur();
-    setIsCalculatorVisible(true);
+    // Check if it's a mobile device
+    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+    
+    if (isMobile) {
+      // On mobile, blur and show calculator
+      document.activeElement.blur();
+      setIsCalculatorVisible(true);
+    }
+    // On desktop, allow direct input
     if (onAmountFocus) onAmountFocus();
   };
+
+  const handleAmountInputChange = (e) => {
+    // Allow direct input on desktop
+    let value = e.target.value;
+    // Only allow numbers, decimal point, and basic operators
+    value = value.replace(/[^0-9+\-*/×÷.]/g, '');
+    setAmount(value);
+  };
+
+  const handleAmountKeyDown = createDoubleSpaceHandler((trimmedValue) => {
+    setAmount(trimmedValue);
+    focusElement('.payment-section');
+  });
 
   const currencies = ['SGD', 'CNY', 'MYR'];
 
@@ -151,12 +187,12 @@ const MobileCalculator = ({ amount, setAmount, currency, setCurrency, onAmountFo
       <div className="amount-input-container">
         <input
           type="text"
-          className="mobile-amount-display"
+          className="mobile-amount-display calculator-btn"
           value={amount}
           onFocus={handleAmountInputFocus}
-          onChange={(e) => setAmount(e.target.value)}
+          onChange={handleAmountInputChange}
+          onKeyDown={handleAmountKeyDown}
           placeholder="0.00"
-          readOnly
         />
       </div>
       
@@ -222,11 +258,22 @@ const MobileCalculator = ({ amount, setAmount, currency, setCurrency, onAmountFo
               <button className="calc-btn calc-btn-done" onClick={() => {
                 setIsCalculatorVisible(false);
                 if (amount && parseFloat(amount) > 0) {
-                  // Auto-focus to remark field after calculator closes
+                  // Check if payment method is already selected
+                  const paymentSelected = document.querySelector('.selected-payment, .payment-category-btn.selected');
+                  
                   setTimeout(() => {
-                    const remarkInput = document.querySelector('.remark-input');
-                    if (remarkInput) {
-                      remarkInput.focus();
+                    if (paymentSelected) {
+                      // Payment method already selected, go to remark
+                      const remarkInput = document.querySelector('.content-remark, .manual-tag-input');
+                      if (remarkInput) {
+                        remarkInput.focus();
+                      }
+                    } else {
+                      // No payment method, scroll to payment section
+                      const paymentSection = document.querySelector('.payment-section');
+                      if (paymentSection) {
+                        paymentSection.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                      }
                     }
                   }, 200);
                   
