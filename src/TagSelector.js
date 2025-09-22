@@ -143,7 +143,26 @@ function TagSelector({ input, setInput, remark, setRemark, setAmount, selectedTa
                     className="manual-tag-input"
                     value={input} 
                     onChange={handleInputChange}
-                    onKeyDown={handleKeyDown}
+                    onKeyDown={(e) => {
+                        if (e.key === ' ') {
+                            const spaceCount = parseInt(e.target.dataset.spaceCount || '0') + 1;
+                            e.target.dataset.spaceCount = spaceCount;
+                            
+                            if (spaceCount >= 2) {
+                                e.preventDefault();
+                                e.target.dataset.spaceCount = 0;
+                                
+                                const trimmedValue = e.target.value.replace(/\s+$/, '').trim();
+                                setInput(trimmedValue);
+                                
+                                if (window.showCalculator) {
+                                    window.showCalculator();
+                                }
+                            }
+                        } else {
+                            e.target.dataset.spaceCount = 0;
+                        }
+                    }}
                     onBlur={handleInputBlur}
                     onClick={handleManualInputClick}
                     autoFocus

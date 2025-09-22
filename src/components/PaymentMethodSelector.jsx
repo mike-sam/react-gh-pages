@@ -49,25 +49,19 @@ const PaymentMethodSelector = ({
       setPaymentMethod(options[0].card_num);
       setSelectedCategory('');
       // Auto-focus to remark after selection with forced keyboard
-      setTimeout(() => {
+      requestAnimationFrame(() => {
         const remarkInput = document.querySelector('.content-remark');
-        if (remarkInput && /iPad|iPhone|iPod|Android/i.test(navigator.userAgent)) {
-          const tempInput = document.createElement('input');
-          tempInput.style.position = 'absolute';
-          tempInput.style.left = '-9999px';
-          tempInput.style.opacity = '0';
-          document.body.appendChild(tempInput);
-          
-          tempInput.focus();
-          setTimeout(() => {
-            document.body.removeChild(tempInput);
-            remarkInput.focus();
-            remarkInput.click();
-          }, 50);
-        } else if (remarkInput) {
+        if (remarkInput) {
           remarkInput.focus();
+          
+          if (/iPad|iPhone|iPod|Android/i.test(navigator.userAgent)) {
+            remarkInput.click();
+            remarkInput.setAttribute('inputmode', 'text');
+            remarkInput.style.transform = 'translateZ(0)';
+            remarkInput.focus();
+          }
         }
-      }, 200);
+      });
     } else if (options.length > 1) {
       // 如果有多个选项，保存当前选择并清空，显示详细选择
       setPreviousPaymentMethod(paymentMethod);
@@ -88,38 +82,7 @@ const PaymentMethodSelector = ({
     return 'Card';
   };
 
-  const handleDetailedSelect = (selected) => {
-    setPaymentMethod(selected ? selected.value : '');
-    setPreviousPaymentMethod(''); // 清空之前保存的值
-    setSelectedCategory('');
-    
-    // Auto-focus to remark after selection
-    if (selected) {
-      setTimeout(() => {
-        const remarkInput = document.querySelector('.content-remark');
-        if (remarkInput) {
-          // For mobile devices, create a temporary input to trigger keyboard context
-          if (/iPad|iPhone|iPod|Android/i.test(navigator.userAgent)) {
-            // Create a temporary invisible input that's "clicked" by user action context
-            const tempInput = document.createElement('input');
-            tempInput.style.position = 'absolute';
-            tempInput.style.left = '-9999px';
-            tempInput.style.opacity = '0';
-            document.body.appendChild(tempInput);
-            
-            tempInput.focus();
-            setTimeout(() => {
-              document.body.removeChild(tempInput);
-              remarkInput.focus();
-              remarkInput.click();
-            }, 50);
-          } else {
-            remarkInput.focus();
-          }
-        }
-      }, 200);
-    }
-  };
+
 
   // 模糊匹配逻辑
   const fuzzyMatchPayment = (searchTerm) => {
@@ -214,7 +177,32 @@ const PaymentMethodSelector = ({
             value: paymentMethod,
             label: formatOptionLabel(Object.values(paymentOptions).find(opt => opt.card_num === paymentMethod))
           } : null}
-          onChange={handleDetailedSelect}
+          onChange={(selected) => {
+            setPaymentMethod(selected ? selected.value : '');
+            setPreviousPaymentMethod('');
+            setSelectedCategory('');
+            
+            // Store selection for onMenuClose handler
+            if (selected) {
+              window.selectedPaymentForFocus = true;
+            }
+          }}
+          onMenuClose={() => {
+            // Handle focus in the menu close event to maintain user interaction context
+            if (window.selectedPaymentForFocus) {
+              window.selectedPaymentForFocus = false;
+              
+              const remarkInput = document.querySelector('.content-remark');
+              if (remarkInput) {
+                remarkInput.focus();
+                
+                // For mobile, the menu close event maintains user interaction context
+                if (/iPad|iPhone|iPod|Android/i.test(navigator.userAgent)) {
+                  remarkInput.click();
+                }
+              }
+            }
+          }}
           options={categorizedOptions[selectedCategory].map(option => ({
             value: option.card_num,
             label: formatOptionLabel(option)

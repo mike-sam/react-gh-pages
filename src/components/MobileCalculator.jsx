@@ -155,16 +155,17 @@ const MobileCalculator = ({ amount, setAmount, currency, setCurrency, onAmountFo
   };
 
   const handleAmountInputFocus = () => {
-    // Check if it's a mobile device
-    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-    
-    if (isMobile) {
-      // On mobile, blur and show calculator
-      document.activeElement.blur();
-      setIsCalculatorVisible(true);
-    }
-    // On desktop, allow direct input
     if (onAmountFocus) onAmountFocus();
+  };
+
+  const handleAmountInputClick = () => {
+    // Hide keyboard and show calculator
+    if (document.activeElement && document.activeElement.blur) {
+      document.activeElement.blur();
+    }
+    setTimeout(() => {
+      setIsCalculatorVisible(true);
+    }, 100);
   };
 
   const handleAmountInputChange = (e) => {
@@ -190,6 +191,7 @@ const MobileCalculator = ({ amount, setAmount, currency, setCurrency, onAmountFo
           className="mobile-amount-display calculator-btn"
           value={amount}
           onFocus={handleAmountInputFocus}
+          onClick={handleAmountInputClick}
           onChange={handleAmountInputChange}
           onKeyDown={handleAmountKeyDown}
           placeholder="0.00"
