@@ -6,13 +6,20 @@ export const createDoubleSpaceHandler = (onNavigate, options = {}) => {
     const val = e.target.value;
 
     // 1. Android：雙空格會變成 ". "，所以要一起判斷
-    const isDoubleSpace = /\s\s$/.test(val) || val.endsWith('. ') || val.endsWith('。 ');
+    const reEither = /(?:[\u3400-\u9FFF\uF900-\uFAFF]\u3002[ \u3000]?|\. )$/;
+    const isEndPeriod = reEither.test(val);
+    const isDoubleSpace = /\s\s$/.test(val) || val.endsWith('. ') || isEndPeriod
 
+    // const trimEnDot = val.endsWith('. ');
+    // const trimCnDot = val.endsWith('。 ');
     if (isDoubleSpace) {
       let currentValue = val;
       if (shouldTrim) {
         currentValue = currentValue.replace(/\s+$/, '').trim();
       }
+      if(isEndPeriod) currentValue = currentValue.replace(/(\u3002[ \u3000]?|\. )$/, '').trim();
+      // if(trimEnDot) currentValue = currentValue.replace(/\.$/, '').trim();
+      // if(trimCnDot) currentValue = currentValue.replace(/\。$/, '').trim();
 
       // 清掉尾端空格，避免殘留
       e.target.value = currentValue;
