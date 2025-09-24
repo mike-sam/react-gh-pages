@@ -1,9 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { createDoubleSpaceHandler, focusElement } from '../utils/keyboardNavigation';
 
-const ItemizedDescription = ({ onChange, initialValue = '', totalAmount = 0, onItemizedTotalChange }) => {
+const ItemizedDescription = ({ onChange, initialValue = '', totalAmount = 0, onItemizedTotalChange, simpleDescription, setSimpleDescription }) => {
   const [items, setItems] = useState([]);
-  const [simpleDescription, setSimpleDescription] = useState('');
 
   // Initialize with existing value if provided
   useEffect(() => {
@@ -174,11 +173,17 @@ const ItemizedDescription = ({ onChange, initialValue = '', totalAmount = 0, onI
       nextField = 'name';
       // Add new item if we're at the end
       if (nextIndex >= items.length) {
-        addNewItem();
-        nextIndex = items.length; // Will be the new item index
+        if(currentItem.unitPrice > 0 && currentItem.quantity > 0 && currentItem.name.length > 0){
+          addNewItem();
+          nextIndex = items.length; // Will be the new item index
+        } else {
+          removeItem(currentId || currentIndex)
+          nextIndex--;
+        }
       }
     }
 
+    
     // Focus the next input
     setTimeout(() => {
       const nextInput = document.querySelector(
@@ -199,7 +204,8 @@ const ItemizedDescription = ({ onChange, initialValue = '', totalAmount = 0, onI
         .map(item => `${item.name}: ${item.unitPrice} × ${item.quantity} = ${item.subtotal}`)
         .join('\n');
       
-      const total = itemList.reduce((sum, item) => sum + (item.subtotal || 0), 0);
+      let total = itemList.reduce((sum, item) => sum + (item.subtotal || 0), 0);
+      total = 0;
       const itemizedText = formattedText + (formattedText ? `\n总计: ${total.toFixed(2)}` : '');
       
       // 只有当明细总额与上级金额有差异时才通知父组件（用于税费建议）
@@ -215,6 +221,22 @@ const ItemizedDescription = ({ onChange, initialValue = '', totalAmount = 0, onI
     
     onChange(finalText);
   };
+
+  // 小工具
+  const toNum = v => {
+    const n = Number(v);              // 字符串也会转
+    return Number.isFinite(n) ? n : 0;
+  };
+  const fmt = n => (Number.isFinite(n) ? n.toFixed(2) : '0.00');
+
+  // 计算
+  const itemsTotal = (Array.isArray(items) ? items : []).reduce(
+    (sum, item) => sum + toNum(item?.subtotal),
+    0 // ← 一定要有初始值
+  );
+
+  const totalNum = toNum(totalAmount);
+  const diff = totalNum - itemsTotal;
 
   return (
     <div className="description-input">{/* 直接显示明细清单和备注，不需要切换 */}
@@ -324,14 +346,15 @@ const ItemizedDescription = ({ onChange, initialValue = '', totalAmount = 0, onI
           + 添加项目
         </button>
         
-        {items.length > 0 && (
+        
+        {(items?.length ?? 0) > 0 && (
           <div className="items-summary">
             <div className="items-total">
-              明细总计: {items.reduce((sum, item) => sum + (item.subtotal || 0), 0).toFixed(2)}
+              明细总计: {fmt(itemsTotal)}
             </div>
             {totalAmount > 0 && (
               <div className="amount-difference">
-                差额: {(totalAmount - items.reduce((sum, item) => sum + (item.subtotal || 0), 0)).toFixed(2)}
+                差额: {fmt(diff)}
               </div>
             )}
           </div>

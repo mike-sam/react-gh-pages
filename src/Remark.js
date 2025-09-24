@@ -3,11 +3,9 @@ import ItemizedDescription from './components/ItemizedDescription';
 import UnifiedInput from './components/UnifiedInput';
 import NumberPad from './components/NumberPad';
 
-function Remark({ remark, setRemark, setCarPlate, carPlate, selectedTag, input, amount, onItemizedTotalChange }) {
+function Remark({ remark, setRemark, setCarPlate, carPlate, selectedTag, input, amount, onItemizedTotalChange, mileage, setMileage, tripInfo, setTripInfo, simpleDescription, setSimpleDescription}) {
     const [fuelPrice, setFuelPrice] = useState('2.05');
     const [fuelType, setFuelType] = useState('ron95');
-    const [mileage, setMileage] = useState('');
-    const [tripInfo, setTripInfo] = useState('');
     const [averagePrice, setAveragePrice] = useState(0);
     const [averageLitterPer100Km, setLitterPer100Km] = useState(0);
 
@@ -224,6 +222,8 @@ function Remark({ remark, setRemark, setCarPlate, carPlate, selectedTag, input, 
                 onChange={setRemark}
                 totalAmount={parseFloat(amount) || 0}
                 onItemizedTotalChange={onItemizedTotalChange}
+                simpleDescription={simpleDescription}
+                setSimpleDescription={setSimpleDescription}
             />
         )
 

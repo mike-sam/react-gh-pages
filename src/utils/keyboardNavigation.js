@@ -6,7 +6,7 @@ export const createDoubleSpaceHandler = (onNavigate, options = {}) => {
     const val = e.target.value;
 
     // 1. Android：雙空格會變成 ". "，所以要一起判斷
-    const isDoubleSpace = /\s\s$/.test(val) || val.endsWith('. ');
+    const isDoubleSpace = /\s\s$/.test(val) || val.endsWith('. ') || val.endsWith('。 ');
 
     if (isDoubleSpace) {
       let currentValue = val;

@@ -21,7 +21,9 @@ function App() {
   const tags = EXPENSE_TAGS;
   const [input, setInput] = useState('');       // 管理输入内容的状态
   const [remark, setRemark] = useState('');     // 管理备注的状态
-  const [carPlate, setCarPlate] = useState('');     // 管理备注的状态
+  const [carPlate, setCarPlate] = useState('');     // 管理车牌的状态
+  const [tripInfo, setTripInfo] = useState(''); // 管理行车距离
+  const [mileage, setMileage] = useState('');     // 管理里程的状态
   const [amount, setAmount] = useState('');    // 管理金额的状态
   const [location, setLocation] = useState(''); // 管理地理位置的状态
   const [currency, setCurrency] = useState('MYR'); // 管理地理位置的状态
@@ -30,6 +32,7 @@ function App() {
   const [output, setOutput] = useState('');
   const [selectedDateTime, setSelectedDateTime] = useState(new Date());
   const [paymentMethod, setPaymentMethod] = useState('');
+  const [simpleDescription, setSimpleDescription] = useState('');
   const [photos, setPhotos] = useState([]); // 支持多张照片
   const [paymentOptions, setPaymentOptions] = useState({
     'Cash': { key: 'Cash', card_num: 'Cash' },
@@ -312,6 +315,17 @@ function App() {
     }
   };
 
+  const resetData = () => {
+      setInput('');
+      setRemark('');
+      setAmount('');
+      setSelectedTag('');
+      setCarPlate('');
+      setPaymentMethod('');
+      setPhotos([]);
+      setMileage('');
+      setTripInfo('');
+  }
   const submitData = async (resetFields = true) => {
     if (!amount || !selectedTag || !paymentMethod) {
       alert('請填寫完整資料');
@@ -344,13 +358,7 @@ function App() {
 
     // === 2. 立即清空 UI（依照 resetFields 或 duplicate） ===
     if (resetFields) {
-      setInput('');
-      setRemark('');
-      setAmount('');
-      setSelectedTag('');
-      setCarPlate('');
-      setPaymentMethod('');
-      setPhotos([]);
+      resetData()
 
       // 自動 focus 下一筆（tag 或手動輸入）
       focusElement('.manual-tag-input, .tag-input', 300);
@@ -458,6 +466,12 @@ function App() {
             amount={amount} 
             selectedTag={selectedTag}
             onItemizedTotalChange={handleItemizedTotalChange}
+            mileage={mileage}
+            setMileage={setMileage}
+            tripInfo={tripInfo}
+            setTripInfo={setTripInfo}
+            simpleDescription={simpleDescription}
+            setSimpleDescription={setSimpleDescription}
           />
           
           {/* 马来西亚税费计算器 - 移到明细部分 */}
@@ -542,6 +556,13 @@ function App() {
       
       {/* 提交按钮移到最下方 */}
       <div className="submit-section">
+        <button 
+          className="submit" 
+          onClick={(e) => resetData()}
+          
+        >
+          清空
+        </button>
         <button 
           className="submit" 
           onClick={(e) => handleSubmit(e, true)}
