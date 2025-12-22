@@ -1,7 +1,14 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 
 const NumberPad = ({ value, onChange, placeholder = "输入数字", label, allowDecimal = false }) => {
   const [displayValue, setDisplayValue] = useState(value || '');
+
+  // 同步外部 value 到内部 displayValue
+  useEffect(() => {
+    if (value !== undefined) {
+      setDisplayValue(value || '');
+    }
+  }, [value]);
 
   const handleNumberClick = (number) => {
     if (number === '.' && (!allowDecimal || displayValue.includes('.'))) {

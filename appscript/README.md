@@ -4,10 +4,13 @@
 
 ## 文件说明
 
-- `main.gs` - 主要的处理逻辑
-- `photo-handler.gs` - 照片上传处理
-- `payment-options.gs` - 支付方式管理
-- `location-merchant.gs` - 位置和商家管理
+- `code.gs` - 所有功能的集成文件，包含：
+  - `doGet` / `doPost` - HTTP 请求处理
+  - 照片上传处理 (`handlePhotoUpload`, `uploadFileToDrive`)
+  - 支付方式管理 (`getPaymentOptions`)
+  - 位置和商家管理 (`getMerchants`, `updateMerchant`, `findNearestMerchant`)
+  - 里程数据管理 (`getMileageData`, `updateMileage`, `calculateFuelEfficiency`)
+  - 费用记录提交 (`insertRowToSheet`)
 
 ## 部署说明
 

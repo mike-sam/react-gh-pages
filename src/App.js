@@ -15,6 +15,8 @@ import MalaysiaTaxCalculator from './components/MalaysiaTaxCalculator';
 import MobileFriendlyDateTime from './components/MobileFriendlyDateTime';
 import PaymentMethodSelector from './components/PaymentMethodSelector';
 import { createDoubleSpaceHandler, focusElement } from './utils/keyboardNavigation';
+import { clearKeyValueCache, getKeyValue } from './utils/keyValueCache';
+import QuickLinksButton from './components/QuickLinksButton';
 
 function App() {
   const [selectedTag, setSelectedTag] = useState(null);
@@ -45,7 +47,9 @@ function App() {
   const [currencyConversions, setCurrencyConversions] = useState([]);
   const [taxCalculation, setTaxCalculation] = useState(null);
   const [isAmountManuallySet, setIsAmountManuallySet] = useState(false);
-  const [itemizedTotal, setItemizedTotal] = useState(0); 
+  const [itemizedTotal, setItemizedTotal] = useState(0);
+  const [fuelPrice, setFuelPrice] = useState('');
+  const [fuelType, setFuelType] = useState(''); 
 
   // 处理照片变化
   const handlePhotoChange = (photosData) => {
@@ -60,6 +64,17 @@ function App() {
   // 处理税费计算
   const handleTaxCalculation = (taxData) => {
     setTaxCalculation(taxData);
+  };
+
+  // 清除缓存并重新加载
+  const handleClearCache = async () => {
+    clearKeyValueCache();
+    // 重新加载RON97价格
+    const ron97Result = await getKeyValue('ron97_price');
+    if (ron97Result.success && ron97Result.value) {
+      console.log('RON97价格已重新加载:', ron97Result.value);
+    }
+    alert('缓存已清除，数据已重新加载');
   };
 
   // 处理金额完成后的操作
@@ -342,9 +357,16 @@ function App() {
       location + separator +
       paymentMethod;
 
+    // 格式化日期用于照片文件名
+    // day 是星期几的简写（mon, tue, wed, thu, fri, sat, sun）
+    const weekdayNames = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+    const weekday = selectedDateTime.getDay(); // 0=Sunday, 1=Monday, ..., 6=Saturday
+    const day = weekdayNames[weekday];
+    
     const contents_for_gsheets = {
       timestamp: formatDateTime(selectedDateTime, 'YMDHIS'),
       yearmonth: formatDateTime(selectedDateTime, 'YM'),
+      day: day, // 星期几简写：mon, tue, wed, thu, fri, sat, sun
       title: input,
       amount: amount,
       remark: remark,
@@ -352,8 +374,13 @@ function App() {
       tag: selectedTag,
       currency: currency,
       payment_method: paymentMethod,
+      carPlate: carPlate, // 车牌号
+      mileage: mileage, // 里程数
+      tripInfo: tripInfo, // 行程距离
+      fuelPrice: fuelPrice, // 油品价格（从Remark组件获取）
+      fuelType: fuelType, // 油品类型（从Remark组件获取）
       photos: photos.map(photo => photo.uploadedUrl || photo.base64).filter(Boolean),
-      photo_urls: photos.map(photo => photo.uploadedUrl).filter(Boolean),
+      photo_urls: photos.map(photo => photo.uploadedUrl || photo.previewUrl).filter(Boolean),
     };
 
     // === 2. 立即清空 UI（依照 resetFields 或 duplicate） ===
@@ -416,7 +443,7 @@ function App() {
 
   return (
     <div className="app-container">
-      <Header />
+      <Header onClearCache={handleClearCache} />
       {/* 步骤1: 选择分类和标签 */}
       <div className="step-section">
         <TagSelector input={input} setInput={setInput} setRemark={setRemark} setAmount={setAmount} selectedTag={selectedTag} setSelectedTag={setSelectedTag} tags={tags} />
@@ -472,6 +499,15 @@ function App() {
             setTripInfo={setTripInfo}
             simpleDescription={simpleDescription}
             setSimpleDescription={setSimpleDescription}
+            onFuelDataChange={({ fuelPrice, fuelType }) => {
+              setFuelPrice(fuelPrice);
+              setFuelType(fuelType);
+            }}
+            onPhotoAdd={(photoData) => {
+              // OCR识别后，如果勾选了上传为附件，添加到照片列表
+              setPhotos(prev => [...prev, photoData]);
+              handlePhotoChange([...photos, photoData]);
+            }}
           />
           
           {/* 马来西亚税费计算器 - 移到明细部分 */}
@@ -603,6 +639,9 @@ function App() {
           </pre>
         </div>
       )}
+
+      {/* 快速链接按钮 */}
+      <QuickLinksButton />
     </div>
   );
 }

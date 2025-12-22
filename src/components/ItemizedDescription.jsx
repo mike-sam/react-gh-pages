@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { createDoubleSpaceHandler, focusElement } from '../utils/keyboardNavigation';
+import OCRButton from './OCRButton';
 
-const ItemizedDescription = ({ onChange, initialValue = '', totalAmount = 0, onItemizedTotalChange, simpleDescription, setSimpleDescription }) => {
+const ItemizedDescription = ({ onChange, initialValue = '', totalAmount = 0, onItemizedTotalChange, simpleDescription, setSimpleDescription, onPhotoAdd }) => {
   const [items, setItems] = useState([]);
+  const [ocrItemIds, setOcrItemIds] = useState(new Set()); // 跟踪OCR添加的项目ID
 
   // Initialize with existing value if provided
   useEffect(() => {
@@ -243,7 +245,67 @@ const ItemizedDescription = ({ onChange, initialValue = '', totalAmount = 0, onI
       
       {/* 备注说明在上方 */}
       <div className="simple-description-section">
-        <label className="section-label">备注说明:</label>
+        <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px'}}>
+          <label className="section-label">备注说明:</label>
+          <div style={{display: 'flex', alignItems: 'center', gap: '8px'}}>
+            <button
+              onClick={() => {
+                setSimpleDescription('');
+                // 同时清除OCR添加的项目
+                const filteredItems = items.filter(item => !ocrItemIds.has(item.id));
+                setItems(filteredItems);
+                setOcrItemIds(new Set());
+                updateParent(filteredItems, '');
+              }}
+              style={{
+                padding: '4px 8px',
+                fontSize: '11px',
+                background: '#f44336',
+                color: 'white',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer'
+              }}
+              title="清除备注和OCR添加的项目"
+            >
+              🗑️ 清除
+            </button>
+            <OCRButton 
+              onTextRecognized={(text) => {
+                const newDescription = simpleDescription ? simpleDescription + '\n' + text : text;
+                setSimpleDescription(newDescription);
+                updateParent(items, newDescription);
+              }}
+              onPhotoAdd={onPhotoAdd}
+              onItemsExtracted={(extractedItems) => {
+                // 将提取的项目添加到项目明细，标记为OCR添加
+                const newItemIds = new Set();
+                const newItems = extractedItems.map(item => {
+                  const id = Date.now() + Math.random();
+                  newItemIds.add(id);
+                  return {
+                    id: id,
+                    name: item.name,
+                    unitPrice: item.unitPrice,
+                    quantity: item.quantity || 1,
+                    subtotal: item.subtotal || item.unitPrice
+                  };
+                });
+                const updatedItems = [...items, ...newItems];
+                setItems(updatedItems);
+                setOcrItemIds(new Set([...ocrItemIds, ...newItemIds]));
+                updateParent(updatedItems, simpleDescription);
+              }}
+              onRemoveOCRItems={() => {
+                // 移除所有OCR添加的项目
+                const filteredItems = items.filter(item => !ocrItemIds.has(item.id));
+                setItems(filteredItems);
+                setOcrItemIds(new Set());
+                updateParent(filteredItems, simpleDescription);
+              }}
+            />
+          </div>
+        </div>
         <textarea 
           className="content-remark"
           value={simpleDescription} 

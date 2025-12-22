@@ -23,12 +23,14 @@
     "react-leaflet": "^4.2.1",
     "react-scripts": "5.0.1",
     "react-select": "^5.8.3",
+    "tesseract.js": "^5.1.1",
     "web-vitals": "^2.1.4"
   },
   "scripts": {
     "predeploy": "npm run build",
     "deploy": "gh-pages -d build",
     "start": "react-scripts start",
+    "prebuild": "node scripts/set-build-time.js",
     "build": "react-scripts build",
     "test": "react-scripts test",
     "eject": "react-scripts eject"
@@ -52,6 +54,7 @@
     ]
   },
   "devDependencies": {
+    "cross-env": "^7.0.3",
     "gh-pages": "^6.1.1"
   }
 }
