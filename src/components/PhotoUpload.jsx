@@ -44,7 +44,6 @@ const PhotoUpload = ({ onPhotoChange, initialPhoto = null }) => {
       
       const response = await fetch(API_ENDPOINTS.PHOTO_UPLOAD, {
         method: 'POST',
-        mode: 'no-cors',
         headers: {
           'Content-Type': 'application/json',
         },
@@ -53,14 +52,19 @@ const PhotoUpload = ({ onPhotoChange, initialPhoto = null }) => {
 
       setUploadProgress(90);
       
-      // 由于 no-cors 模式，我们无法获取实际响应
-      // 但我们可以假设上传成功并生成一个 URL
-      const photoId = `photo_${uploadData.timestamp}_${Math.random().toString(36).substr(2, 9)}`;
-      const generatedUrl = `https://drive.google.com/uc?id=${photoId}`;
+      if (!response.ok) {
+        throw new Error(`Upload failed with status: ${response.status}`);
+      }
       
-      setUploadProgress(100);
+      const result = await response.json();
       
-      return generatedUrl;
+      if (result.success) {
+        setUploadProgress(100);
+        // Return the actual Google Drive URL from the response
+        return result.fileUrl || result.thumbnailUrl || null;
+      } else {
+        throw new Error(result.error || 'Upload failed');
+      }
     } catch (error) {
       console.error('Photo upload failed:', error);
       throw error;
@@ -99,8 +103,12 @@ const PhotoUpload = ({ onPhotoChange, initialPhoto = null }) => {
       let uploadedUrl = '';
       try {
         uploadedUrl = await uploadToGoogleApps(file, base64String);
+        if (uploadedUrl) {
+          console.log('Photo uploaded successfully:', uploadedUrl);
+        }
       } catch (uploadError) {
         console.warn('Photo upload to Google Apps failed, continuing with local storage:', uploadError);
+        setError('照片上传失败，将使用本地预览。错误: ' + (uploadError.message || '未知错误'));
       }
       
       // 创建预览URL

@@ -34,19 +34,26 @@ const CompactPhotoUpload = ({ onPhotoChange, initialPhotos = [] }) => {
         timestamp: new Date().getTime()
       };
 
-      await fetch(API_ENDPOINTS.PHOTO_UPLOAD, {
+      const response = await fetch(API_ENDPOINTS.PHOTO_UPLOAD, {
         method: 'POST',
-        mode: 'no-cors',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(uploadData)
       });
 
-      const photoId = `photo_${uploadData.timestamp}_${Math.random().toString(36).substr(2, 9)}`;
-      const generatedUrl = `https://drive.google.com/uc?id=${photoId}`;
+      if (!response.ok) {
+        throw new Error(`Upload failed with status: ${response.status}`);
+      }
       
-      return generatedUrl;
+      const result = await response.json();
+      
+      if (result.success) {
+        // Return the actual Google Drive URL from the response
+        return result.fileUrl || result.thumbnailUrl || null;
+      } else {
+        throw new Error(result.error || 'Upload failed');
+      }
     } catch (error) {
       console.error('Photo upload failed:', error);
       throw error;
@@ -76,8 +83,12 @@ const CompactPhotoUpload = ({ onPhotoChange, initialPhotos = [] }) => {
       let uploadedUrl = '';
       try {
         uploadedUrl = await uploadToGoogleApps(file, base64String);
+        if (uploadedUrl) {
+          console.log('Photo uploaded successfully:', uploadedUrl);
+        }
       } catch (uploadError) {
         console.warn('Photo upload to Google Apps failed, continuing with local storage:', uploadError);
+        setError('照片上传失败，将使用本地预览。错误: ' + (uploadError.message || '未知错误'));
       }
       
       const previewUrl = URL.createObjectURL(compressedFile);
