@@ -8,10 +8,12 @@
     <script>
       (function () {
         try {
-          var pref = localStorage.getItem('uiTheme') || 'system';
-          var resolved = pref;
-          if (pref === 'system') {
-            resolved = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+          var pref = localStorage.getItem('uiTheme');
+          var resolved = pref === 'light' || pref === 'dark' ? pref
+            : (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+          // Persist concrete theme so UI only toggles sun/moon afterwards
+          if (pref !== 'light' && pref !== 'dark') {
+            localStorage.setItem('uiTheme', resolved);
           }
           document.documentElement.setAttribute('data-theme', resolved);
         } catch (e) {}

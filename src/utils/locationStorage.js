@@ -115,6 +115,29 @@ export function formatRelativeTime(updatedAt) {
   return `${day} 天前取得`;
 }
 
+/** Compact relative label for header: 剛剛 / 1m / 1h / 2d */
+export function formatRelativeTimeShort(updatedAt) {
+  if (!updatedAt) return '—';
+  const diffMs = Math.max(0, Date.now() - updatedAt);
+  const sec = Math.floor(diffMs / 1000);
+  if (sec < 45) return '剛剛';
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m`;
+  const hr = Math.floor(min / 60);
+  if (hr < 48) return `${hr}h`;
+  const day = Math.floor(hr / 24);
+  return `${day}d`;
+}
+
+export function formatFullTimestamp(updatedAt) {
+  if (!updatedAt) return '';
+  try {
+    return new Date(updatedAt).toLocaleString();
+  } catch {
+    return String(updatedAt);
+  }
+}
+
 export function formatLocationLabel(loc) {
   if (!loc) return '尚無定位快取';
   if (loc.label) return `${loc.label}附近`;

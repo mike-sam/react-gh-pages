@@ -3916,6 +3916,12 @@ input,textarea {
   margin-top: 4px;
 }
 
+.location-status-hint {
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
 .location-refresh-btn {
   background: var(--accent-soft, rgba(61, 156, 240, 0.16));
   border: 1px solid var(--accent, #3d9cf0);
@@ -4084,39 +4090,222 @@ input,textarea {
   margin-bottom: 8px;
 }
 
-.theme-toggle {
+.header-actions {
+  position: relative;
   display: inline-flex;
-  gap: 4px;
-  padding: 3px;
-  border-radius: 10px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
+  align-items: center;
+  gap: 6px;
 }
 
-.theme-toggle-btn {
+.page-chrome-top .header-actions {
+  justify-self: end;
+}
+
+.location-age-label {
   appearance: none;
   border: none;
   background: transparent;
   color: var(--text-muted);
-  font-size: 12px;
-  padding: 5px 10px;
-  border-radius: 7px;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  line-height: 1.2;
+  padding: 2px 4px;
+  max-width: 120px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   cursor: pointer;
 }
 
-.theme-toggle-btn.active {
-  background: var(--accent-soft);
+.location-age-label.is-expanded {
+  max-width: 180px;
+  font-size: 9px;
   color: var(--text);
-  font-weight: 600;
 }
 
-.theme-toggle-compact .theme-toggle-btn {
+.map-editor-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.location-gps-btn {
+  appearance: none;
+  border: 1px solid var(--border, #ddd);
+  background: var(--accent-soft, rgba(61, 156, 240, 0.16));
+  color: var(--accent, #1565c0);
+  border-radius: 6px;
   padding: 4px 8px;
-  font-size: 11px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
 }
 
-.page-chrome-top .theme-toggle {
-  justify-self: end;
+.location-gps-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.location-gps-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+
+.location-pin-btn,
+.theme-toggle-icon {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, transform 0.15s, color 0.15s;
+}
+
+.location-pin-btn:hover,
+.theme-toggle-icon:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-card-hover);
+}
+
+.location-pin-btn:active,
+.theme-toggle-icon:active {
+  transform: scale(0.96);
+}
+
+.location-pin-btn.is-empty {
+  color: #8b93a0;
+}
+
+.location-pin-btn.is-located {
+  color: #e53935;
+}
+
+.location-pin-btn.is-refreshing {
+  opacity: 0.65;
+  animation: location-pin-pulse 0.9s ease-in-out infinite;
+}
+
+@keyframes location-pin-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(0.92); }
+}
+
+.location-pin-btn-compact,
+.theme-toggle-icon-compact {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+}
+
+.theme-toggle-icon {
+  color: var(--text);
+}
+
+.theme-toggle-glyph {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.theme-toggle-icon-compact .theme-toggle-glyph {
+  font-size: 16px;
+}
+
+.location-pin-toast {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 40;
+  max-width: 240px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 11px;
+  line-height: 1.35;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  box-shadow: var(--shadow);
+}
+
+.location-search-form {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.location-search-input {
+  flex: 1;
+  margin-top: 0;
+}
+
+.location-search-btn {
+  border: 1px solid var(--border);
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-radius: 8px;
+  padding: 0 12px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.location-search-error {
+  font-size: 12px;
+  color: var(--danger);
+  margin-bottom: 6px;
+}
+
+.location-search-results {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+  max-height: 120px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-elevated);
+}
+
+.location-search-results li button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  padding: 8px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+}
+
+.location-search-results li:last-child button {
+  border-bottom: none;
+}
+
+.location-search-results li button:hover {
+  background: var(--accent-soft);
+}
+
+.location-pin-editor .entry-text-input {
+  margin-top: 8px;
+}
+
+[data-theme="dark"] .location-pin-editor.map-editor,
+[data-theme="dark"] .location-pin-editor .map-editor-header,
+[data-theme="dark"] .location-pin-editor .map-editor-content,
+[data-theme="dark"] .location-pin-editor .map-editor-actions {
+  background: var(--bg-card) !important;
+  color: var(--text) !important;
+  border-color: var(--border) !important;
 }
 
 /* ===== Parking map ===== */

@@ -49,20 +49,22 @@ function CalendarTracker() {
     try {
       let coords = location;
       if (!useCachedCoords) {
-        coords = await refreshLocation();
-      }
-      if (!coords) {
-        throw new Error('尚無座標，請先更新位置或開啟「使用快取座標」');
+        try {
+          coords = await refreshLocation();
+        } catch {
+          // GPS 失敗仍可送出（無座標或沿用舊快取）
+          coords = location;
+        }
       }
 
       const payload = {
         action: 'trackCalendar',
         title: resolvedTitle,
         prefix: prefix || '',
-        latitude: coords.lat,
-        longitude: coords.lng,
-        accuracy: coords.accuracy ?? null,
-        useLocation: true,
+        latitude: coords?.lat ?? null,
+        longitude: coords?.lng ?? null,
+        accuracy: coords?.accuracy ?? null,
+        useLocation: Boolean(coords),
       };
 
       if (useShortcut) {

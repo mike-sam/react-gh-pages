@@ -5,7 +5,7 @@ import '../App.css';
 
 function CalendarPage() {
   return (
-    <PageChrome title="行事曆軌跡" showLocationBar>
+    <PageChrome title="行事曆軌跡">
       <div className="app-container feature-page">
         <CalendarTracker />
       </div>

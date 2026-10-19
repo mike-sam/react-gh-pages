@@ -11,7 +11,7 @@ function LocationStatusBar() {
     try {
       await refreshLocation();
     } catch {
-      // error already stored in context
+      // GPS 失敗不阻擋流程；可改點右上角地標手動選點
     }
   };
 
@@ -20,7 +20,10 @@ function LocationStatusBar() {
       <div className="location-status-text" title={error || statusText}>
         {statusText}
         {error && (
-          <div className="location-status-error">{error}</div>
+          <div className="location-status-error">
+            {error}
+            <div className="location-status-hint">可點右上角地標圖示，在地圖上手動選點</div>
+          </div>
         )}
       </div>
       <button
@@ -28,7 +31,7 @@ function LocationStatusBar() {
         className="location-refresh-btn"
         onClick={handleRefresh}
         disabled={isRefreshing}
-        title="以高精度 GPS 刷新座標"
+        title="以高精度 GPS 刷新座標（失敗仍可手動選點）"
       >
         {isRefreshing ? '定位中…' : hasLocation ? '🔄 更新當前位置' : '📍 取得位置'}
       </button>

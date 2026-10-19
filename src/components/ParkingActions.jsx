@@ -9,6 +9,7 @@ import {
   saveParkedForCar,
   saveSelectedCarPlate,
 } from '../utils/locationStorage';
+import { DEFAULT_MAP_CENTER } from '../utils/mapDefaults';
 import ParkingMapPreview from './ParkingMapPreview';
 
 /**
@@ -46,7 +47,7 @@ function ParkingActions() {
     if (activePlate) saveSelectedCarPlate(activePlate);
   }, [activePlate]);
 
-  // When switching car: seed from that car's parked spot, else smart cache
+  // When switching car: parked → smart cache → default map center (still usable)
   useEffect(() => {
     if (parked) {
       setDraft({
@@ -62,14 +63,23 @@ function ParkingActions() {
         lng: smartLoc.lng,
         label: smartLoc.label || '',
       });
-    } else {
-      setDraft(null);
+      return;
     }
+    setDraft({
+      lat: DEFAULT_MAP_CENTER.lat,
+      lng: DEFAULT_MAP_CENTER.lng,
+      label: '',
+    });
   }, [activePlate, parked?.lat, parked?.lng, parked?.label, smartLoc]);
 
   const seedFromCache = () => {
     if (!smartLoc) {
-      setMessage('尚無定位快取');
+      setDraft({
+        lat: DEFAULT_MAP_CENTER.lat,
+        lng: DEFAULT_MAP_CENTER.lng,
+        label: '',
+      });
+      setMessage('尚無快取，已放到預設地圖中心 — 請直接點地圖選點');
       return;
     }
     setDraft({
@@ -92,7 +102,15 @@ function ParkingActions() {
       });
       setMessage('已刷新 GPS，可直接拖曳');
     } catch (err) {
-      setMessage(`定位失敗：${err.message || err}`);
+      // GPS 失敗仍可繼續：保留／放到預設中心，讓使用者點地圖
+      setDraft((prev) =>
+        prev || {
+          lat: DEFAULT_MAP_CENTER.lat,
+          lng: DEFAULT_MAP_CENTER.lng,
+          label: '',
+        }
+      );
+      setMessage('GPS 不可用，請直接在地圖上點選座標');
     } finally {
       setIsSeeding(false);
     }

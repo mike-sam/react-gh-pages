@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { MapContainer, TileLayer, Marker, useMap, useMapEvents } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
+import { DEFAULT_MAP_CENTER, withMapFallback } from '../utils/mapDefaults';
 
 delete L.Icon.Default.prototype._getIconUrl;
 L.Icon.Default.mergeOptions({
@@ -49,25 +50,17 @@ function MapClickHandler({ onChange }) {
 }
 
 /**
- * Inline park map — drag pin or tap map. No popup.
+ * Inline park map — always shown.
+ * No GPS? Still open at default center; click / drag to pick coords.
  */
 function ParkingMapPreview({ lat, lng, onChange, height = 220, editable = true }) {
-  const hasCoords = typeof lat === 'number' && typeof lng === 'number';
-  const [position, setPosition] = useState(() =>
-    hasCoords ? [lat, lng] : null
-  );
+  const seed = withMapFallback(lat, lng);
+  const [position, setPosition] = useState([seed.lat, seed.lng]);
 
   useEffect(() => {
-    if (hasCoords) setPosition([lat, lng]);
-  }, [lat, lng, hasCoords]);
-
-  if (!position) {
-    return (
-      <div className="parking-map-empty">
-        尚未有座標 — 先套用快取或刷新 GPS
-      </div>
-    );
-  }
+    const next = withMapFallback(lat, lng);
+    setPosition([next.lat, next.lng]);
+  }, [lat, lng]);
 
   const handleChange = (nextLat, nextLng) => {
     setPosition([nextLat, nextLng]);
@@ -78,7 +71,7 @@ function ParkingMapPreview({ lat, lng, onChange, height = 220, editable = true }
     <div className="parking-map-preview parking-map-editable" style={{ height }}>
       <MapContainer
         center={position}
-        zoom={17}
+        zoom={15}
         style={{ height: '100%', width: '100%', borderRadius: 10 }}
         zoomControl
         scrollWheelZoom
@@ -101,7 +94,11 @@ function ParkingMapPreview({ lat, lng, onChange, height = 220, editable = true }
         <Recenter lat={position[0]} lng={position[1]} />
       </MapContainer>
       {editable && (
-        <div className="parking-map-hint">拖曳標記 · 點地圖 · 可縮放</div>
+        <div className="parking-map-hint">
+          {typeof lat === 'number'
+            ? '拖曳標記 · 點地圖 · 可縮放'
+            : `無 GPS 也可點地圖選點（預設 ${DEFAULT_MAP_CENTER.lat}, ${DEFAULT_MAP_CENTER.lng} 附近）`}
+        </div>
       )}
     </div>
   );

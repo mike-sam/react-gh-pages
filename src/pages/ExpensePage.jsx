@@ -441,7 +441,7 @@ function ExpensePage() {
   };
 
   return (
-    <PageChrome title="記帳" showLocationBar>
+    <PageChrome title="記帳">
       <div className="app-container expense-page">
       <Header onClearCache={handleClearCache} />
 

@@ -1,5 +1,5 @@
 import React from 'react';
-import ThemeToggle from '../components/ThemeToggle';
+import HeaderActions from '../components/HeaderActions';
 import { forceReload } from '../utils/forceReload';
 import { hrefFor, ROUTES } from '../utils/routing';
 import '../App.css';
@@ -39,7 +39,7 @@ function EntryPage() {
   return (
     <div className="app-container entry-page">
       <div className="entry-top-bar">
-        <ThemeToggle />
+        <HeaderActions />
       </div>
 
       <div className="entry-hero">

@@ -1,12 +1,11 @@
 import React from 'react';
-import LocationStatusBar from './LocationStatusBar';
-import ThemeToggle from './ThemeToggle';
+import HeaderActions from './HeaderActions';
 import { hrefFor, ROUTES } from '../utils/routing';
 
 /**
- * Shared shell: back-to-home + theme + optional location bar.
+ * Shared shell: back-to-home + location pin + theme.
  */
-function PageChrome({ title, showLocationBar = false, children, showHomeLink = true }) {
+function PageChrome({ title, children, showHomeLink = true }) {
   return (
     <div className="page-chrome">
       <div className="page-chrome-top">
@@ -18,9 +17,8 @@ function PageChrome({ title, showLocationBar = false, children, showHomeLink = t
           <span />
         )}
         {title ? <h1 className="page-chrome-title">{title}</h1> : <span />}
-        <ThemeToggle compact />
+        <HeaderActions compact />
       </div>
-      {showLocationBar && <LocationStatusBar />}
       {children}
     </div>
   );

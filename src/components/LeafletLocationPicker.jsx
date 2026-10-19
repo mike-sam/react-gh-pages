@@ -111,13 +111,13 @@ const LeafletLocationPicker = ({ location, setLocation }) => {
           await fetchNearbyLocations(newCoords[0], newCoords[1]);
         },
         (error) => {
-          console.error('获取位置失败:', error);
-          alert('无法获取当前位置，请检查位置权限设置');
+          console.warn('获取位置失败，可继续在地图上点选:', error);
+          // 不阻断：地图已开，用户可拖曳 / 点击选点
         },
         { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
       );
     } else {
-      alert('浏览器不支持地理定位');
+      console.warn('浏览器不支持地理定位，可继续在地图上点选');
     }
   };
 
