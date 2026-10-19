@@ -67,6 +67,10 @@ const doPost = (request = {}) => {
         return setKeyValue(data);
       case 'saveLocation':
         return saveLocation(data);
+      case 'trackCalendar':
+        return handleCalendarTrack(data);
+      case 'parkLocation':
+        return handleParkLocation(data);
       default:
       // 默认处理费用提交
       // 过滤掉不需要保存到Records sheet的字段（这些字段只用于KeyValueConfig）
@@ -1550,5 +1554,246 @@ function calculateFuelEfficiency(mileageData, fuelAmount, fuelPrice) {
   } catch (error) {
     appendLog(['Error in calculateFuelEfficiency:', error.toString()]);
     return null;
+  }
+}
+
+/**
+ * ========== Calendar 智慧狀態追蹤 + 車位 ==========
+ * 請依實際座標調整 GEOFENCES（radiusM 為公尺）
+ */
+var GEOFENCES = [
+  // 範例：請改成你的實際座標
+  // { name: '家', lat: 3.1390, lng: 101.6869, radiusM: 200 },
+  // { name: '公司', lat: 3.1500, lng: 101.7000, radiusM: 150 },
+  // { name: '某停車場', lat: 3.1450, lng: 101.6900, radiusM: 120 },
+];
+
+var CALENDAR_START_MARKER = '**start**';
+var CALENDAR_DEFAULT_DURATION_MS = 60 * 60 * 1000; // 新建事件預設 1 小時
+var CALENDAR_EXTEND_MS = 20 * 60 * 1000; // 追加時至少延長到 now+20 分鐘
+
+/**
+ * 地理圍欄反查：落在預設範圍內則回傳地名，否則空字串
+ */
+function resolvePlaceName(lat, lng) {
+  if (lat === undefined || lng === undefined || isNaN(lat) || isNaN(lng)) {
+    return '';
+  }
+  for (var i = 0; i < GEOFENCES.length; i++) {
+    var g = GEOFENCES[i];
+    if (!g || g.lat === undefined || g.lng === undefined) continue;
+    var distanceKm = calculateDistance(lat, lng, g.lat, g.lng);
+    var radiusKm = (g.radiusM || 100) / 1000;
+    if (distanceKm <= radiusKm) {
+      return g.name || '';
+    }
+  }
+  return '';
+}
+
+/**
+ * 格式：[HH:mm:ss] [prefix] 地點名稱 @ mapsUrl
+ */
+function buildCalendarLogLine(prefix, placeName, lat, lng) {
+  var now = new Date();
+  var tz = Session.getScriptTimeZone();
+  var timeStr = Utilities.formatDate(now, tz, 'HH:mm:ss');
+  var mapsUrl = '';
+  if (lat !== undefined && lng !== undefined && !isNaN(lat) && !isNaN(lng)) {
+    mapsUrl = 'https://maps.google.com/maps?q=' + lat + ',' + lng;
+  }
+  var placePart = placeName || '';
+  var prefixPart = prefix || '';
+  return '[' + timeStr + '] [' + prefixPart + '] ' + placePart + (mapsUrl ? ' @ ' + mapsUrl : '');
+}
+
+/**
+ * 尋找「當前進行中且 Description 含 **start**」的事件
+ */
+function findOngoingStartedEvent(calendar, now) {
+  // getEvents(start, end) 回傳與時間區間重疊的事件
+  var events = calendar.getEvents(now, new Date(now.getTime() + 1000));
+  for (var i = 0; i < events.length; i++) {
+    var desc = events[i].getDescription() || '';
+    if (desc.indexOf(CALENDAR_START_MARKER) !== -1) {
+      return events[i];
+    }
+  }
+  return null;
+}
+
+/**
+ * Calendar 狀態機：
+ * A) 無進行中含 **start** → 新建 1 小時事件，Description 首行 **start** + 第一筆軌跡
+ * B) 已有 → 延長結束時間，Description 尾端 Append 日誌
+ *
+ * POST body:
+ * { action: 'trackCalendar', title, prefix, latitude, longitude }
+ */
+function handleCalendarTrack(data) {
+  try {
+    appendLog(['handleCalendarTrack called', JSON.stringify(data)]);
+
+    var title = (data.title || '行程').toString().trim() || '行程';
+    var prefix = (data.prefix || '').toString().trim();
+    var lat = data.latitude !== undefined ? parseFloat(data.latitude) : NaN;
+    var lng = data.longitude !== undefined ? parseFloat(data.longitude) : NaN;
+    var hasCoords = !isNaN(lat) && !isNaN(lng);
+
+    var placeName = hasCoords ? resolvePlaceName(lat, lng) : '';
+    var logLine = buildCalendarLogLine(prefix, placeName, hasCoords ? lat : undefined, hasCoords ? lng : undefined);
+
+    var calendar = CalendarApp.getDefaultCalendar();
+    var now = new Date();
+    var ongoing = findOngoingStartedEvent(calendar, now);
+
+    var result;
+
+    if (!ongoing) {
+      // 分支 A：建立新事件
+      var endTime = new Date(now.getTime() + CALENDAR_DEFAULT_DURATION_MS);
+      var description = CALENDAR_START_MARKER + '\n' + logLine;
+      var event = calendar.createEvent(title, now, endTime, {
+        description: description
+      });
+      if (hasCoords) {
+        try {
+          event.setLocation(placeName || (lat + ',' + lng));
+        } catch (locErr) {
+          appendLog(['setLocation failed:', locErr.toString()]);
+        }
+      }
+      result = {
+        success: true,
+        mode: 'created',
+        eventId: event.getId(),
+        title: event.getTitle(),
+        start: event.getStartTime().toISOString(),
+        end: event.getEndTime().toISOString(),
+        placeName: placeName,
+        logLine: logLine
+      };
+      appendLog(['Calendar event created:', JSON.stringify(result)]);
+    } else {
+      // 分支 B：追加軌跡 + 延長結束時間
+      var currentEnd = ongoing.getEndTime();
+      var minEnd = new Date(now.getTime() + CALENDAR_EXTEND_MS);
+      var newEnd = currentEnd.getTime() > minEnd.getTime() ? currentEnd : minEnd;
+      // 若當前時間已超過原結束時間，至少延長到 now+EXTEND
+      if (now.getTime() > currentEnd.getTime()) {
+        newEnd = minEnd;
+      }
+      ongoing.setTime(ongoing.getStartTime(), newEnd);
+
+      var prevDesc = ongoing.getDescription() || '';
+      var nextDesc = prevDesc.replace(/\s+$/, '') + '\n' + logLine;
+      ongoing.setDescription(nextDesc);
+
+      if (hasCoords) {
+        try {
+          ongoing.setLocation(placeName || (lat + ',' + lng));
+        } catch (locErr2) {
+          appendLog(['setLocation failed:', locErr2.toString()]);
+        }
+      }
+
+      result = {
+        success: true,
+        mode: 'appended',
+        eventId: ongoing.getId(),
+        title: ongoing.getTitle(),
+        start: ongoing.getStartTime().toISOString(),
+        end: ongoing.getEndTime().toISOString(),
+        placeName: placeName,
+        logLine: logLine
+      };
+      appendLog(['Calendar event appended:', JSON.stringify(result)]);
+    }
+
+    return ContentService.createTextOutput(JSON.stringify(result))
+      .setMimeType(ContentService.MimeType.JSON);
+  } catch (error) {
+    appendLog(['Error in handleCalendarTrack:', error.toString(), error.stack]);
+    return ContentService.createTextOutput(JSON.stringify({
+      success: false,
+      error: error.toString()
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+/**
+ * 記車位：寫入 ParkedLocation sheet
+ * POST body: { action: 'parkLocation', latitude, longitude, label, accuracy }
+ */
+function handleParkLocation(data) {
+  try {
+    appendLog(['handleParkLocation called', JSON.stringify(data)]);
+
+    var lat = parseFloat(data.latitude);
+    var lng = parseFloat(data.longitude);
+    if (isNaN(lat) || isNaN(lng)) {
+      return ContentService.createTextOutput(JSON.stringify({
+        success: false,
+        error: 'Invalid latitude or longitude'
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    var placeName = resolvePlaceName(lat, lng) || (data.label || '');
+    var carPlate = (data.carPlate || '').toString().trim().toUpperCase();
+    var mapsUrl = 'https://maps.google.com/maps?q=' + lat + ',' + lng;
+    var timestamp = datetimetoYMDHIS();
+
+    var doc = SpreadsheetApp.openById(sheetId);
+    var sheet = doc.getSheetByName('ParkedLocation');
+    if (!sheet) {
+      sheet = doc.insertSheet('ParkedLocation');
+      sheet.getRange('1:1').setValues([[
+        'TIMESTAMP', 'CAR_PLATE', 'LATITUDE', 'LONGITUDE', 'NAME', 'ACCURACY', 'MAPS_URL'
+      ]]);
+      sheet.getRange(1, 1, 1, 7).setFontWeight('bold');
+      sheet.setFrozenRows(1);
+    } else {
+      // 舊表若缺少 CAR_PLATE 欄，嘗試補上（第 2 欄）
+      var header = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+      if (header.indexOf('CAR_PLATE') === -1) {
+        sheet.insertColumnAfter(1);
+        sheet.getRange(1, 2).setValue('CAR_PLATE').setFontWeight('bold');
+      }
+    }
+
+    sheet.appendRow([
+      timestamp,
+      carPlate,
+      lat,
+      lng,
+      placeName,
+      data.accuracy !== undefined && data.accuracy !== null ? data.accuracy : '',
+      mapsUrl
+    ]);
+
+    // 同步寫入 Location sheet（可選，方便附近地點）
+    try {
+      saveLocation({ latitude: lat, longitude: lng, name: placeName });
+    } catch (e) {
+      appendLog(['parkLocation: saveLocation side-effect failed', e.toString()]);
+    }
+
+    var result = {
+      success: true,
+      latitude: lat,
+      longitude: lng,
+      name: placeName,
+      mapsUrl: mapsUrl,
+      timestamp: timestamp
+    };
+
+    return ContentService.createTextOutput(JSON.stringify(result))
+      .setMimeType(ContentService.MimeType.JSON);
+  } catch (error) {
+    appendLog(['Error in handleParkLocation:', error.toString(), error.stack]);
+    return ContentService.createTextOutput(JSON.stringify({
+      success: false,
+      error: error.toString()
+    })).setMimeType(ContentService.MimeType.JSON);
   }
 }

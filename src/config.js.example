@@ -1,6 +1,25 @@
 export const API_ENDPOINTS = {
   GSHEET_SUBMIT: 'https://script.google.com/macros/s/...../exec',
-  PAYMENT_OPTIONS: 'https://script.google.com/macros/s/...../exec'
+  PAYMENT_OPTIONS: 'https://script.google.com/macros/s/...../exec',
+  PHOTO_UPLOAD: 'https://script.google.com/macros/s/...../exec',
+  MILEAGE_DATA: 'https://script.google.com/macros/s/...../exec',
+  KEY_VALUE: 'https://script.google.com/macros/s/...../exec',
+  LAST_EXPENSE: 'https://script.google.com/macros/s/...../exec',
+  LOCATION: 'https://script.google.com/macros/s/...../exec',
+  // Calendar 軌跡追加 & 記車位（可與 GSHEET_SUBMIT 同一部署）
+  CALENDAR_TRACK: 'https://script.google.com/macros/s/...../exec',
+  PARK_LOCATION: 'https://script.google.com/macros/s/...../exec'
+};
+
+// Google Sheets / Drive 链接
+export const GOOGLE_LINKS = {
+  SHEETS_URL: 'https://docs.google.com/spreadsheets/d/...../edit',
+  PHOTOS_FOLDER_NAME: 'ExpensePhotos'
+};
+
+// iOS Shortcuts（僅在 iPhone / iPad 上走捷徑；其餘裝置走 Apps Script）
+export const SHORTCUTS = {
+  CALENDAR_TRACK: 'CalendarTrack' // Shortcuts App 內的捷徑名稱，請改成你實際的名稱
 };
 
 export const EXPENSE_TAGS = [
