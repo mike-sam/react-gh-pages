@@ -1,5 +1,9 @@
-/* Expense App — lightweight Cache-First Service Worker */
-const CACHE_NAME = 'expense-app-static-v1';
+/* Expense App Service Worker
+ * - HTML / navigations: Network-First (avoid Safari white screen on stale index)
+ * - Hashed static assets: Cache-First
+ * Private Safari often has no SW — that is why Private can look "fine" while normal Safari blanks.
+ */
+const CACHE_NAME = 'expense-app-static-v3';
 const PRECACHE_URLS = [
   './',
   './index.html',
@@ -8,6 +12,12 @@ const PRECACHE_URLS = [
   './logo192.png',
   './logo512.png',
 ];
+
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SKIP_WAITING') {
+    self.skipWaiting();
+  }
+});
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -29,6 +39,20 @@ self.addEventListener('activate', (event) => {
   );
 });
 
+function isNavigationRequest(request, url) {
+  if (request.mode === 'navigate') return true;
+  const path = url.pathname || '';
+  if (path.endsWith('.html')) return true;
+  // GitHub Pages app shell: /react-gh-pages/ or /react-gh-pages
+  if (path.endsWith('/') || /\/react-gh-pages\/?$/.test(path)) return true;
+  return false;
+}
+
+function isHashedStatic(url) {
+  // CRA build: /static/js/main.abc123.js , /static/css/main.abc123.css
+  return /\/static\/(js|css|media)\//.test(url.pathname);
+}
+
 self.addEventListener('fetch', (event) => {
   const { request } = event;
   if (request.method !== 'GET') return;
@@ -44,25 +68,52 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  event.respondWith(
-    caches.match(request).then((cached) => {
-      if (cached) return cached;
-
-      return fetch(request)
+  // HTML shell: always try network first so deploys are not stuck on old index → missing chunks → blank
+  if (isNavigationRequest(request, url)) {
+    event.respondWith(
+      fetch(request)
         .then((response) => {
+          if (response && response.status === 200) {
+            const clone = response.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
+          }
+          return response;
+        })
+        .catch(() =>
+          caches.match(request).then((cached) => cached || caches.match('./index.html'))
+        )
+    );
+    return;
+  }
+
+  // Hashed bundles: cache-first (filename changes every build)
+  if (isHashedStatic(url)) {
+    event.respondWith(
+      caches.match(request).then((cached) => {
+        if (cached) return cached;
+        return fetch(request).then((response) => {
           if (!response || response.status !== 200 || response.type === 'opaque') {
             return response;
           }
           const clone = response.clone();
           caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
           return response;
-        })
-        .catch(() => {
-          if (request.mode === 'navigate') {
-            return caches.match('./index.html');
-          }
-          return undefined;
         });
-    })
+      })
+    );
+    return;
+  }
+
+  // Other same-origin: stale-while-revalidate style (network preferred)
+  event.respondWith(
+    fetch(request)
+      .then((response) => {
+        if (response && response.status === 200 && response.type !== 'opaque') {
+          const clone = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
+        }
+        return response;
+      })
+      .catch(() => caches.match(request))
   );
 });
