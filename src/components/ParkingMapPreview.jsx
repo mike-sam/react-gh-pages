@@ -142,14 +142,26 @@ function OffMarkerWatcher({ lat, lng, onOffChange }) {
   const map = useMap();
 
   const check = () => {
-    if (typeof lat !== 'number' || typeof lng !== 'number') {
+    try {
+      if (typeof lat !== 'number' || typeof lng !== 'number') {
+        onOffChange(false);
+        return;
+      }
+      const size = map.getSize?.();
+      if (!size || size.x < 2 || size.y < 2) {
+        onOffChange(false);
+        return;
+      }
+      const bounds = map.getBounds();
+      if (!bounds || typeof bounds.isValid === 'function' && !bounds.isValid()) {
+        onOffChange(false);
+        return;
+      }
+      // Avoid negative pad() — can invalidate bounds on some iOS / zero-size layouts
+      onOffChange(!bounds.contains([lat, lng]));
+    } catch {
       onOffChange(false);
-      return;
     }
-    const marker = L.latLng(lat, lng);
-    // Slightly shrink bounds so near-edge still counts as "away"
-    const visible = map.getBounds().pad(-0.08);
-    onOffChange(!visible.contains(marker));
   };
 
   useMapEvents({

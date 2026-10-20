@@ -1538,7 +1538,8 @@
   right: 0;
   bottom: 0;
   background: rgba(0, 0, 0, 0.5);
-  z-index: 1002;
+  /* Above sticky chrome (200) and parking-map fullscreen; portal to body preferred */
+  z-index: 12000;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1812,6 +1813,19 @@
   font-size: 12px;
   color: #666;
   margin-top: 2px;
+}
+
+.location-picker-map {
+  position: relative;
+  overflow: hidden;
+  border-radius: 10px;
+}
+.location-picker-map .parking-map-basemap,
+.location-picker-map .parking-map-actions {
+  z-index: 600;
+}
+.location-picker-map .parking-map-return-pin {
+  z-index: 700;
 }
 
 .leaflet-map-container {
@@ -5155,6 +5169,9 @@ input,textarea {
 
 /* ===== Parking map ===== */
 .parking-map-preview {
+  position: relative;
+  z-index: 1; /* contain Leaflet panes (z-index 400–1000) so they don't cover header modals */
+  isolation: isolate;
   margin: 12px 0 8px;
   border-radius: 10px;
   overflow: hidden;
@@ -5517,7 +5534,8 @@ input,textarea {
 .parking-map-preview.is-fullscreen {
   position: fixed;
   inset: 0;
-  z-index: 4000;
+  /* Below location picker / map-editor overlays (12000) */
+  z-index: 2400;
   height: 100vh !important;
   height: 100dvh !important;
   width: 100vw;

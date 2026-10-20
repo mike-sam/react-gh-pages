@@ -1,8 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { MapContainer, TileLayer, Marker, useMap, useMapEvents } from 'react-leaflet';
+import { createPortal } from 'react-dom';
+import { MapContainer, TileLayer, Marker, ZoomControl, useMap, useMapEvents } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { DEFAULT_MAP_CENTER } from '../utils/mapDefaults';
+
+const MAX_ZOOM = 19;
+const DEFAULT_ZOOM = 16;
 
 delete L.Icon.Default.prototype._getIconUrl;
 L.Icon.Default.mergeOptions({
@@ -11,13 +15,42 @@ L.Icon.Default.mergeOptions({
   shadowUrl: require('leaflet/dist/images/marker-shadow.png'),
 });
 
-function Recenter({ lat, lng }) {
+const TILES = {
+  street: {
+    url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+    attribution: '&copy; OpenStreetMap',
+    subdomains: ['a', 'b', 'c'],
+  },
+  satellite: {
+    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    attribution:
+      'Tiles &copy; Esri — Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community',
+    subdomains: [],
+  },
+};
+
+function Recenter({ lat, lng, focusNonce }) {
   const map = useMap();
+  const prevNonce = useRef(focusNonce);
+  const didInit = useRef(false);
+
   useEffect(() => {
-    if (typeof lat === 'number' && typeof lng === 'number') {
-      map.setView([lat, lng], Math.max(map.getZoom() || 16, 16));
+    if (typeof lat !== 'number' || typeof lng !== 'number') return;
+    const bumped = focusNonce != null && focusNonce !== prevNonce.current;
+    prevNonce.current = focusNonce;
+    if (bumped) {
+      map.flyTo([lat, lng], Math.max(map.getZoom() || DEFAULT_ZOOM, DEFAULT_ZOOM), {
+        duration: 0.45,
+      });
+      didInit.current = true;
+      return;
     }
-  }, [lat, lng, map]);
+    if (!didInit.current) {
+      map.setView([lat, lng], DEFAULT_ZOOM);
+      didInit.current = true;
+    }
+  }, [lat, lng, focusNonce, map]);
+
   return null;
 }
 
@@ -49,6 +82,51 @@ function MapClickHandler({ onChange }) {
   return null;
 }
 
+function OffMarkerWatcher({ lat, lng, onOffChange }) {
+  const map = useMap();
+  const check = () => {
+    try {
+      if (typeof lat !== 'number' || typeof lng !== 'number') {
+        onOffChange(false);
+        return;
+      }
+      const size = map.getSize?.();
+      if (!size || size.x < 2 || size.y < 2) {
+        onOffChange(false);
+        return;
+      }
+      const bounds = map.getBounds();
+      if (!bounds || (typeof bounds.isValid === 'function' && !bounds.isValid())) {
+        onOffChange(false);
+        return;
+      }
+      onOffChange(!bounds.contains([lat, lng]));
+    } catch {
+      onOffChange(false);
+    }
+  };
+
+  useMapEvents({
+    moveend: check,
+    zoomend: check,
+  });
+
+  useEffect(() => {
+    check();
+  }, [lat, lng, map]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  return null;
+}
+
+function openInGoogleMaps(lat, lng) {
+  if (typeof lat !== 'number' || typeof lng !== 'number') return;
+  window.open(
+    `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`,
+    '_blank',
+    'noopener,noreferrer'
+  );
+}
+
 /**
  * Modal map picker: drag / tap / search (Nominatim), then confirm save.
  */
@@ -74,6 +152,10 @@ function LocationMapPickerModal({
   const [searchError, setSearchError] = useState('');
   const [gpsLoading, setGpsLoading] = useState(false);
   const [gpsHint, setGpsHint] = useState('');
+  const [basemap, setBasemap] = useState('street');
+  const [focusNonce, setFocusNonce] = useState(0);
+  const [offMarker, setOffMarker] = useState(false);
+  const returnBtnRef = useRef(null);
 
   useEffect(() => {
     if (!open) return;
@@ -88,7 +170,17 @@ function LocationMapPickerModal({
     setResults([]);
     setSearchError('');
     setGpsHint('');
+    setOffMarker(false);
+    setFocusNonce((n) => n + 1);
   }, [open, initialLat, initialLng, initialLabel]);
+
+  useEffect(() => {
+    const el = returnBtnRef.current;
+    if (!el) return undefined;
+    L.DomEvent.disableClickPropagation(el);
+    L.DomEvent.disableScrollPropagation(el);
+    return undefined;
+  }, [offMarker, open]);
 
   if (!open) return null;
 
@@ -105,6 +197,7 @@ function LocationMapPickerModal({
       if (coords && typeof coords.lat === 'number' && typeof coords.lng === 'number') {
         setPosition([coords.lat, coords.lng]);
         if (coords.label) setLabel(coords.label);
+        setFocusNonce((n) => n + 1);
         setGpsHint('已更新為 GPS 座標，可再拖曳微調');
       }
     } catch (err) {
@@ -112,6 +205,10 @@ function LocationMapPickerModal({
     } finally {
       setGpsLoading(false);
     }
+  };
+
+  const returnToPin = () => {
+    setFocusNonce((n) => n + 1);
   };
 
   const handleSearch = async (e) => {
@@ -159,6 +256,7 @@ function LocationMapPickerModal({
     setPosition([item.lat, item.lng]);
     setLabel(item.name.split(',')[0] || item.name);
     setResults([]);
+    setFocusNonce((n) => n + 1);
   };
 
   const handleConfirm = () => {
@@ -172,7 +270,9 @@ function LocationMapPickerModal({
     onClose?.();
   };
 
-  return (
+  const tile = TILES[basemap] || TILES.street;
+
+  const modal = (
     <div
       className="map-editor-overlay location-pin-overlay"
       onClick={(e) => {
@@ -189,7 +289,7 @@ function LocationMapPickerModal({
                 className="location-gps-btn"
                 onClick={handleGps}
                 disabled={gpsLoading}
-                title="重新以 GPS 定位"
+                title="重新以 GPS 定位並移到標記"
               >
                 {gpsLoading ? '定位中…' : '📍 GPS'}
               </button>
@@ -226,21 +326,102 @@ function LocationMapPickerModal({
             </ul>
           )}
 
-          <div className="leaflet-map-container">
+          <div className="leaflet-map-container location-picker-map">
+            <div className="parking-map-basemap" role="group" aria-label="地圖類型">
+              <button
+                type="button"
+                className={`parking-map-basemap-btn${basemap === 'street' ? ' is-active' : ''}`}
+                onClick={() => setBasemap('street')}
+                aria-pressed={basemap === 'street'}
+              >
+                簡約
+              </button>
+              <button
+                type="button"
+                className={`parking-map-basemap-btn${basemap === 'satellite' ? ' is-active' : ''}`}
+                onClick={() => setBasemap('satellite')}
+                aria-pressed={basemap === 'satellite'}
+              >
+                衛星
+              </button>
+            </div>
+
+            <div className="parking-map-actions" role="group" aria-label="地圖檢視">
+              <button
+                type="button"
+                className="parking-map-action-btn"
+                onClick={returnToPin}
+                title="視角返回目前標記"
+              >
+                返回定位
+              </button>
+              <button
+                type="button"
+                className="parking-map-action-btn"
+                onClick={() => openInGoogleMaps(position[0], position[1])}
+                title="用 Google Maps 開啟標記位置"
+              >
+                Google Maps
+              </button>
+            </div>
+
             <MapContainer
               center={position}
-              zoom={16}
+              zoom={DEFAULT_ZOOM}
+              maxZoom={MAX_ZOOM}
               style={{ height: 280, width: '100%' }}
               key={`pin-map-${open}`}
+              zoomControl={false}
+              scrollWheelZoom
+              doubleClickZoom
+              touchZoom
+              dragging
             >
               <TileLayer
-                attribution='&copy; OpenStreetMap'
-                url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                key={basemap}
+                attribution={tile.attribution}
+                url={tile.url}
+                subdomains={tile.subdomains}
+                maxZoom={MAX_ZOOM}
               />
+              <ZoomControl position="bottomright" />
               <DraggableMarker position={position} onChange={handleChange} />
               <MapClickHandler onChange={handleChange} />
-              <Recenter lat={position[0]} lng={position[1]} />
+              <OffMarkerWatcher
+                lat={position[0]}
+                lng={position[1]}
+                onOffChange={setOffMarker}
+              />
+              <Recenter
+                lat={position[0]}
+                lng={position[1]}
+                focusNonce={focusNonce}
+              />
             </MapContainer>
+
+            {offMarker && (
+              <button
+                ref={returnBtnRef}
+                type="button"
+                className="parking-map-return-pin"
+                title="視角返回標記（不改座標）"
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                }}
+                onPointerDown={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                }}
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  returnToPin();
+                }}
+              >
+                返回定位
+              </button>
+            )}
           </div>
 
           <div className="coordinates-display">
@@ -257,7 +438,7 @@ function LocationMapPickerModal({
 
           <div className="map-hint">
             {hasInitial
-              ? '拖曳標記或點擊地圖微調位置'
+              ? '拖曳標記或點擊地圖微調 · 可切換簡約／衛星'
               : '無 GPS 也可繼續：直接點地圖或搜尋後選點，再按儲存'}
           </div>
         </div>
@@ -273,6 +454,10 @@ function LocationMapPickerModal({
       </div>
     </div>
   );
+
+  // Portal to body so sticky header stacking (z-index 200) cannot trap the overlay
+  // under Leaflet panes from the parking map.
+  return createPortal(modal, document.body);
 }
 
 export default LocationMapPickerModal;

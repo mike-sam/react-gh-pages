@@ -41,6 +41,16 @@ function TagSelector({
     }, COLLAPSE_MS);
   };
 
+  /** URL prefill / history restore: collapse when selection becomes complete (not when user taps「展開」) */
+  const prevCompleteRef = useRef(false);
+  useEffect(() => {
+    const wasComplete = prevCompleteRef.current;
+    prevCompleteRef.current = selectionComplete;
+    if (selectionComplete && !wasComplete) {
+      requestCollapse();
+    }
+  }, [selectionComplete, selectedTag, input]); // eslint-disable-line react-hooks/exhaustive-deps -- phase read via requestCollapse
+
   const requestExpand = () => {
     if (collapseTimer.current) {
       clearTimeout(collapseTimer.current);

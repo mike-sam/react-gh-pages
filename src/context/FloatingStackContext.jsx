@@ -7,47 +7,64 @@ import React, {
   useState,
 } from 'react';
 
-const FloatingStackContext = createContext(null);
+const FloatingStackDispatchContext = createContext(null);
+const FloatingStackStateContext = createContext([]);
 
 /**
  * Bottom-right floating action stack.
- * Items register via useFloatingStackItem / <FloatingStackItem />;
- * provider lays them out in a column (low order = closer to bottom).
+ *
+ * Important: dispatch and state are split so upsert/remove only re-render the
+ * overlay — NOT the whole app tree. Putting items state above {children} caused
+ * an iOS/production white-screen loop:
+ *   upsert → Provider setState → App re-render → new `children` element →
+ *   FloatingStackItem effect → upsert → …
  */
 export function FloatingStackProvider({ children }) {
   const [items, setItems] = useState([]);
 
   const upsert = useCallback((entry) => {
     setItems((prev) => {
-      const next = prev.filter((x) => x.id !== entry.id);
-      next.push(entry);
+      const without = prev.filter((x) => x.id !== entry.id);
+      const next = [...without, entry];
       next.sort((a, b) => a.order - b.order || String(a.id).localeCompare(String(b.id)));
       return next;
     });
   }, []);
 
   const remove = useCallback((id) => {
-    setItems((prev) => prev.filter((x) => x.id !== id));
+    setItems((prev) => {
+      if (!prev.some((x) => x.id === id)) return prev;
+      return prev.filter((x) => x.id !== id);
+    });
   }, []);
 
-  const value = useMemo(() => ({ upsert, remove }), [upsert, remove]);
+  const dispatch = useMemo(() => ({ upsert, remove }), [upsert, remove]);
 
   return (
-    <FloatingStackContext.Provider value={value}>
+    <FloatingStackDispatchContext.Provider value={dispatch}>
       {children}
-      <div className="floating-stack" aria-live="polite">
-        {items.map((item) => (
-          <div key={item.id} className="floating-stack-slot">
-            {item.node}
-          </div>
-        ))}
-      </div>
-    </FloatingStackContext.Provider>
+      <FloatingStackStateContext.Provider value={items}>
+        <FloatingStackOverlay />
+      </FloatingStackStateContext.Provider>
+    </FloatingStackDispatchContext.Provider>
+  );
+}
+
+function FloatingStackOverlay() {
+  const items = useContext(FloatingStackStateContext);
+  return (
+    <div className="floating-stack" aria-live="polite">
+      {items.map((item) => (
+        <div key={item.id} className="floating-stack-slot">
+          {item.node}
+        </div>
+      ))}
+    </div>
   );
 }
 
 export function useFloatingStack() {
-  const ctx = useContext(FloatingStackContext);
+  const ctx = useContext(FloatingStackDispatchContext);
   if (!ctx) {
     throw new Error('useFloatingStack must be used within FloatingStackProvider');
   }
@@ -56,10 +73,10 @@ export function useFloatingStack() {
 
 /**
  * Push a floating control into the shared bottom-right stack.
- * Renders nothing in-place; content appears in the stack.
+ * Renders nothing in-place; content appears in the overlay.
  */
 export function FloatingStackItem({ id, order = 0, visible = true, children }) {
-  const ctx = useContext(FloatingStackContext);
+  const ctx = useContext(FloatingStackDispatchContext);
 
   useLayoutEffect(() => {
     if (!ctx) return undefined;
@@ -74,4 +91,4 @@ export function FloatingStackItem({ id, order = 0, visible = true, children }) {
   return null;
 }
 
-export default FloatingStackContext;
+export default FloatingStackDispatchContext;
