@@ -2,6 +2,10 @@ export const SMART_LOCATION_KEY = 'smartLocation';
 export const LAST_PARKED_KEY = 'lastParkedLocation';
 export const PARKED_BY_CAR_KEY = 'parkedLocationsByCar';
 export const SELECTED_CAR_KEY = 'selectedCarPlate';
+/** Last successful cloud fetch time per plate (epoch ms) */
+export const PARKED_FETCH_AT_KEY = 'parkedFetchAtByCar';
+/** Skip auto cloud re-fetch within this window unless user forces */
+export const PARKED_FETCH_TTL_MS = 60 * 60 * 1000;
 
 /** Default plates — keep in sync with expense Remark form */
 export const DEFAULT_CAR_PLATES = ['PPQ8777', 'WD6060E'];
@@ -88,6 +92,57 @@ export function saveSelectedCarPlate(plate) {
   localStorage.setItem(SELECTED_CAR_KEY, plate || '');
 }
 
+/** @returns {Record<string, number>} */
+export function loadParkedFetchAtMap() {
+  try {
+    const raw = localStorage.getItem(PARKED_FETCH_AT_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+/** @param {string} plate @returns {number} epoch ms or 0 */
+export function loadParkedFetchAt(plate) {
+  if (!plate) return 0;
+  const key = plate.trim().toUpperCase();
+  const at = loadParkedFetchAtMap()[key];
+  return typeof at === 'number' && isFinite(at) ? at : 0;
+}
+
+/** @param {string} plate @param {number} [at] */
+export function markParkedFetched(plate, at = Date.now()) {
+  if (!plate) return;
+  const key = plate.trim().toUpperCase();
+  const all = loadParkedFetchAtMap();
+  all[key] = at;
+  localStorage.setItem(PARKED_FETCH_AT_KEY, JSON.stringify(all));
+}
+
+/** Mark several plates as freshly fetched (e.g. after bulk getParkedLocations). */
+export function markParkedFetchedMany(plates, at = Date.now()) {
+  if (!Array.isArray(plates) || plates.length === 0) return;
+  const all = loadParkedFetchAtMap();
+  plates.forEach((p) => {
+    const key = String(p || '').trim().toUpperCase();
+    if (key) all[key] = at;
+  });
+  localStorage.setItem(PARKED_FETCH_AT_KEY, JSON.stringify(all));
+}
+
+/**
+ * @param {string} plate
+ * @param {number} [ttlMs]
+ * @returns {boolean}
+ */
+export function isParkedFetchFresh(plate, ttlMs = PARKED_FETCH_TTL_MS) {
+  const at = loadParkedFetchAt(plate);
+  if (!at) return false;
+  return Date.now() - at < ttlMs;
+}
+
 export function toMapsUrl(lat, lng, name = '') {
   const base = `https://maps.google.com/maps?q=${lat},${lng}`;
   if (!name) return base;
@@ -132,7 +187,17 @@ export function formatRelativeTimeShort(updatedAt) {
 export function formatFullTimestamp(updatedAt) {
   if (!updatedAt) return '';
   try {
-    return new Date(updatedAt).toLocaleString();
+    const date = new Date(updatedAt);
+    if (isNaN(date.getTime())) return String(updatedAt);
+    // e.g. 2026-Oct-20 22:58:03
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const y = date.getFullYear();
+    const mon = months[date.getMonth()];
+    const d = String(date.getDate()).padStart(2, '0');
+    const h = String(date.getHours()).padStart(2, '0');
+    const mi = String(date.getMinutes()).padStart(2, '0');
+    const s = String(date.getSeconds()).padStart(2, '0');
+    return `${y}-${mon}-${d} ${h}:${mi}:${s}`;
   } catch {
     return String(updatedAt);
   }

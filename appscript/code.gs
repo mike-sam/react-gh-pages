@@ -21,6 +21,10 @@ const doGet = (event = {}) => {
       return processCommitments();
     case 'getNearbyLocations':
       return getNearbyLocations(parseFloat(parameter.latitude), parseFloat(parameter.longitude), parseFloat(parameter.radius || 1));
+    case 'getParkedLocation':
+      return getParkedLocation(parameter.carPlate);
+    case 'getParkedLocations':
+      return getParkedLocations();
     case 'saveLocation':
       return saveLocation(data);
     default:
@@ -1795,6 +1799,145 @@ function handleCalendarTrack(data) {
 }
 
 /**
+ * Parse ParkedLocation sheet header → column index map (uppercase keys).
+ * @returns {{ sheet: GoogleAppsScript.Spreadsheet.Sheet|null, col: Object, lastRow: number, lastCol: number }}
+ */
+function openParkedLocationSheet() {
+  var doc = SpreadsheetApp.openById(sheetId);
+  var sheet = doc.getSheetByName('ParkedLocation');
+  if (!sheet) {
+    return { sheet: null, col: {}, lastRow: 0, lastCol: 0 };
+  }
+  var lastRow = sheet.getLastRow();
+  var lastCol = sheet.getLastColumn();
+  if (lastCol < 1) {
+    return { sheet: sheet, col: {}, lastRow: lastRow, lastCol: 0 };
+  }
+  var headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+  var col = {};
+  for (var i = 0; i < headers.length; i++) {
+    var key = (headers[i] || '').toString().trim().toUpperCase();
+    if (key) col[key] = i;
+  }
+  return { sheet: sheet, col: col, lastRow: lastRow, lastCol: lastCol };
+}
+
+/** @returns {number} epoch ms or 0 */
+function parkedTimestampToMs(value) {
+  if (value instanceof Date && !isNaN(value.getTime())) return value.getTime();
+  if (typeof value === 'number' && isFinite(value)) {
+    return value < 1e12 ? value * 1000 : value;
+  }
+  var s = (value || '').toString().trim();
+  if (!s) return 0;
+  var parsed = Date.parse(s.replace(' ', 'T'));
+  if (!isNaN(parsed)) return parsed;
+  return 0;
+}
+
+/**
+ * Build parked DTO from a sheet row.
+ */
+function rowToParkedDto(row, col) {
+  var latIdx = col.LATITUDE;
+  var lngIdx = col.LONGITUDE;
+  if (latIdx == null || lngIdx == null) return null;
+  var lat = parseFloat(row[latIdx]);
+  var lng = parseFloat(row[lngIdx]);
+  if (isNaN(lat) || isNaN(lng)) return null;
+  var plate = col.CAR_PLATE != null ? String(row[col.CAR_PLATE] || '').trim().toUpperCase() : '';
+  var name = col.NAME != null ? String(row[col.NAME] || '').trim() : '';
+  var accuracy = col.ACCURACY != null ? row[col.ACCURACY] : '';
+  var mapsUrl = col.MAPS_URL != null ? String(row[col.MAPS_URL] || '') : '';
+  var tsRaw = col.TIMESTAMP != null ? row[col.TIMESTAMP] : '';
+  var timestampMs = parkedTimestampToMs(tsRaw);
+  return {
+    lat: lat,
+    lng: lng,
+    carPlate: plate,
+    name: name,
+    label: name,
+    accuracy: accuracy === '' || accuracy == null ? null : accuracy,
+    mapsUrl: mapsUrl || ('https://maps.google.com/maps?q=' + lat + ',' + lng),
+    timestamp: tsRaw instanceof Date ? datetimetoYMDHIS(tsRaw) : String(tsRaw || ''),
+    timestampMs: timestampMs || null
+  };
+}
+
+/**
+ * GET ?action=getParkedLocation&carPlate=PPQ8777
+ * Returns the latest parked row for that plate (or overall latest if carPlate empty).
+ */
+function getParkedLocation(carPlate) {
+  try {
+    var meta = openParkedLocationSheet();
+    if (!meta.sheet || meta.lastRow < 2 || meta.lastCol < 1) {
+      return ContentService.createTextOutput(JSON.stringify({
+        success: true,
+        parked: null
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+    var values = meta.sheet.getRange(2, 1, meta.lastRow, meta.lastCol).getValues();
+    var want = (carPlate || '').toString().trim().toUpperCase();
+    for (var r = values.length - 1; r >= 0; r--) {
+      var dto = rowToParkedDto(values[r], meta.col);
+      if (!dto) continue;
+      if (want && dto.carPlate !== want) continue;
+      return ContentService.createTextOutput(JSON.stringify({
+        success: true,
+        parked: dto
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+    return ContentService.createTextOutput(JSON.stringify({
+      success: true,
+      parked: null
+    })).setMimeType(ContentService.MimeType.JSON);
+  } catch (error) {
+    appendLog(['Error in getParkedLocation:', error.toString(), error.stack]);
+    return ContentService.createTextOutput(JSON.stringify({
+      success: false,
+      error: error.toString(),
+      parked: null
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+/**
+ * GET ?action=getParkedLocations
+ * Latest parked location per car plate.
+ */
+function getParkedLocations() {
+  try {
+    var meta = openParkedLocationSheet();
+    if (!meta.sheet || meta.lastRow < 2 || meta.lastCol < 1) {
+      return ContentService.createTextOutput(JSON.stringify({
+        success: true,
+        byCar: {}
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+    var values = meta.sheet.getRange(2, 1, meta.lastRow, meta.lastCol).getValues();
+    var byCar = {};
+    // Scan top→bottom so later rows overwrite → latest wins
+    for (var r = 0; r < values.length; r++) {
+      var dto = rowToParkedDto(values[r], meta.col);
+      if (!dto || !dto.carPlate) continue;
+      byCar[dto.carPlate] = dto;
+    }
+    return ContentService.createTextOutput(JSON.stringify({
+      success: true,
+      byCar: byCar
+    })).setMimeType(ContentService.MimeType.JSON);
+  } catch (error) {
+    appendLog(['Error in getParkedLocations:', error.toString(), error.stack]);
+    return ContentService.createTextOutput(JSON.stringify({
+      success: false,
+      error: error.toString(),
+      byCar: {}
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+/**
  * 記車位：寫入 ParkedLocation sheet
  * POST body: { action: 'parkLocation', latitude, longitude, label, accuracy }
  */
@@ -1816,21 +1959,31 @@ function handleParkLocation(data) {
     var mapsUrl = 'https://maps.google.com/maps?q=' + lat + ',' + lng;
     var timestamp = datetimetoYMDHIS();
 
+    var parkHeaders = [
+      'TIMESTAMP', 'CAR_PLATE', 'LATITUDE', 'LONGITUDE', 'NAME', 'ACCURACY', 'MAPS_URL'
+    ];
     var doc = SpreadsheetApp.openById(sheetId);
     var sheet = doc.getSheetByName('ParkedLocation');
     if (!sheet) {
       sheet = doc.insertSheet('ParkedLocation');
-      sheet.getRange('1:1').setValues([[
-        'TIMESTAMP', 'CAR_PLATE', 'LATITUDE', 'LONGITUDE', 'NAME', 'ACCURACY', 'MAPS_URL'
-      ]]);
-      sheet.getRange(1, 1, 1, 7).setFontWeight('bold');
+      sheet.getRange(1, 1, 1, parkHeaders.length).setValues([parkHeaders]);
+      sheet.getRange(1, 1, 1, parkHeaders.length).setFontWeight('bold');
       sheet.setFrozenRows(1);
     } else {
-      // 舊表若缺少 CAR_PLATE 欄，嘗試補上（第 2 欄）
-      var header = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
-      if (header.indexOf('CAR_PLATE') === -1) {
-        sheet.insertColumnAfter(1);
-        sheet.getRange(1, 2).setValue('CAR_PLATE').setFontWeight('bold');
+      var lastCol = sheet.getLastColumn();
+      // Empty sheet (no cells used) → getLastColumn() === 0; getRange(..., 0) throws
+      if (lastCol < 1) {
+        sheet.getRange(1, 1, 1, parkHeaders.length).setValues([parkHeaders]);
+        sheet.getRange(1, 1, 1, parkHeaders.length).setFontWeight('bold');
+        sheet.setFrozenRows(1);
+      } else {
+        // 舊表若缺少 CAR_PLATE 欄，嘗試補上（第 2 欄）
+        var header = sheet.getRange(1, 1, 1, lastCol).getValues()[0]
+          .map(function (h) { return (h || '').toString().trim().toUpperCase(); });
+        if (header.indexOf('CAR_PLATE') === -1) {
+          sheet.insertColumnAfter(1);
+          sheet.getRange(1, 2).setValue('CAR_PLATE').setFontWeight('bold');
+        }
       }
     }
 
