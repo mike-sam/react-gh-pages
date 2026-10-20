@@ -92,6 +92,18 @@ function ExpensePage() {
   useUnsavedGuard(hasUnsavedInput, { whenPath: ROUTES.EXPENSE });
 
   const handlePhotoChange = (photosData) => setPhotos(photosData);
+  /** Leaving 交通出行: wipe auto fuel/ODO remark before ItemizedDescription remounts */
+  const handleSetSelectedTag = useCallback(
+    (next) => {
+      const nextVal = typeof next === 'function' ? next(selectedTag) : next;
+      if (selectedTag === '交通出行' && nextVal !== '交通出行') {
+        setRemark('');
+        setSimpleDescription('');
+      }
+      setSelectedTag(nextVal);
+    },
+    [selectedTag]
+  );
   const handleCurrencyConversion = (conversion) => {
     setCurrencyConversions((prev) => [...prev, conversion]);
   };
@@ -574,7 +586,7 @@ function ExpensePage() {
             setRemark={setRemark}
             setAmount={setAmount}
             selectedTag={selectedTag}
-            setSelectedTag={setSelectedTag}
+            setSelectedTag={handleSetSelectedTag}
             tags={tags}
           />
         </div>

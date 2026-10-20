@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import ItemizedDescription from './components/ItemizedDescription';
 import UnifiedInput from './components/UnifiedInput';
 import NumberPad from './components/NumberPad';
@@ -592,6 +592,7 @@ function Remark({ remark, setRemark, setCarPlate, carPlate, selectedTag, input, 
 
     // Auto-fill remark when car details change, but only if user hasn't manually edited
     const [userEditedRemark, setUserEditedRemark] = useState(false);
+    const prevSelectedTagRef = useRef(selectedTag);
     
     // Reset user edit flag when tag or input changes
     useEffect(() => {
@@ -731,13 +732,39 @@ function Remark({ remark, setRemark, setCarPlate, carPlate, selectedTag, input, 
     }, [lastMileage]);
     
     useEffect(() => {
-        if (selectedTag === '交通出行' && !userEditedRemark) {
-            const autoRemark = generateAutoRemark();
-            if (autoRemark !== remark) {
-                setRemark(autoRemark);
-            }
+        const prevTag = prevSelectedTagRef.current;
+        prevSelectedTagRef.current = selectedTag;
+
+        // Leaving 交通出行: vehicle UI hides the textarea, so auto text must be wiped
+        // or it reappears via ItemizedDescription when another category is selected.
+        if (prevTag === '交通出行' && selectedTag !== '交通出行') {
+            setRemark('');
+            if (typeof setSimpleDescription === 'function') setSimpleDescription('');
+            return;
         }
-    }, [carPlate, fuelType, tripInfo, averagePrice, mileage, input, selectedTag, averageLitterPer100Km, userEditedRemark]);
+
+        if (selectedTag !== '交通出行' || userEditedRemark) return;
+
+        const autoRemark = generateAutoRemark();
+        if (autoRemark !== remark) setRemark(autoRemark);
+        if (typeof setSimpleDescription === 'function' && autoRemark !== simpleDescription) {
+            setSimpleDescription(autoRemark);
+        }
+    }, [
+        carPlate,
+        fuelType,
+        tripInfo,
+        averagePrice,
+        mileage,
+        input,
+        selectedTag,
+        averageLitterPer100Km,
+        userEditedRemark,
+        remark,
+        simpleDescription,
+        setRemark,
+        setSimpleDescription,
+    ]);
 
     // Handle manual remark changes
     const handleRemarkChange = (e) => {
