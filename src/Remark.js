@@ -5,7 +5,7 @@ import NumberPad from './components/NumberPad';
 import { API_ENDPOINTS } from './config';
 import { getKeyValue } from './utils/keyValueCache';
 
-function Remark({ remark, setRemark, setCarPlate, carPlate, selectedTag, input, amount, onItemizedTotalChange, mileage, setMileage, tripInfo, setTripInfo, simpleDescription, setSimpleDescription, onFuelDataChange, onPhotoAdd}) {
+function Remark({ remark, setRemark, setCarPlate, carPlate, selectedTag, input, amount, onItemizedTotalChange, mileage, setMileage, tripInfo, setTripInfo, simpleDescription, setSimpleDescription, onFuelDataChange, onPhotoAdd, hideDescriptionHeader}) {
     const [fuelPrice, setFuelPrice] = useState('2.05');
     const [fuelType, setFuelType] = useState('ron95');
     const [averagePrice, setAveragePrice] = useState(0);
@@ -170,22 +170,25 @@ function Remark({ remark, setRemark, setCarPlate, carPlate, selectedTag, input, 
                                 onChange={(e) => {
                                     const newMileage = e.target.value;
                                     setMileage(newMileage);
-                                    setUserEditedMileage(true); // 标记里程数为用户手动编辑
-                                    
-                                    // 如果输入的里程数 > 上次里程数，自动计算行程距离
-                                    if (lastMileage !== null && lastMileage > 0 && newMileage && newMileage.trim() !== '') {
+                                    setUserEditedMileage(true);
+                                    // 僅在 TRIP 尚未手動改過時，才用 ODO 反推行程
+                                    if (
+                                      !userEditedTripInfo &&
+                                      lastMileage !== null &&
+                                      lastMileage > 0 &&
+                                      newMileage &&
+                                      newMileage.trim() !== ''
+                                    ) {
                                         const currentMileage = parseFloat(newMileage);
-                                        if (!isNaN(currentMileage) && currentMileage > 0 && currentMileage > lastMileage) {
-                                            const calculatedTrip = currentMileage - lastMileage;
-                                            setTripInfo(calculatedTrip.toFixed(1));
-                                            setUserEditedTripInfo(false); // 自动填充不算用户编辑
-                                            console.log(`自动计算行程距离: ${calculatedTrip.toFixed(1)}km (${currentMileage} - ${lastMileage})`);
+                                        if (!isNaN(currentMileage) && currentMileage > lastMileage) {
+                                            setTripInfo((currentMileage - lastMileage).toFixed(1));
                                         }
                                     }
                                 }}
-                                label="里程数"
-                                placeholder={isLoadingMileage ? "正在获取..." : lastMileage !== null ? `上次: ${lastMileage}` : "输入里程数"}
+                                label="里程数 (ODO)"
+                                placeholder={isLoadingMileage ? "正在获取..." : lastMileage !== null ? `點此輸入 · 上次 ${lastMileage}` : "點此輸入里程数"}
                                 disabled={isLoadingMileage}
+                                resetKey={`${selectedTag}|${input}`}
                             />
                             {isLoadingMileage && (
                                 <div style={{fontSize: '12px', color: '#666', marginLeft: '10px', marginTop: '5px'}}>
@@ -290,28 +293,27 @@ function Remark({ remark, setRemark, setCarPlate, carPlate, selectedTag, input, 
                                 onChange={(e) => {
                                     const newTripInfo = e.target.value;
                                     setTripInfo(newTripInfo);
-                                    setUserEditedTripInfo(true); // 标记行程距离为用户手动编辑
-                                    
-                                    // 如果输入了行程距离，自动计算当前里程数（上次里程 + 行程距离）
-                                    if (lastMileage !== null && lastMileage > 0 && newTripInfo && newTripInfo.trim() !== '') {
+                                    setUserEditedTripInfo(true);
+                                    // 僅在 ODO 尚未手動改過時，才用 TRIP 推算里程
+                                    if (
+                                      !userEditedMileage &&
+                                      lastMileage !== null &&
+                                      lastMileage > 0 &&
+                                      newTripInfo &&
+                                      newTripInfo.trim() !== ''
+                                    ) {
                                         const trip = parseFloat(newTripInfo);
                                         if (!isNaN(trip) && trip > 0) {
-                                            const calculatedMileage = lastMileage + trip;
-                                            const mileageStr = calculatedMileage.toFixed(0);
-                                            setMileage(mileageStr);
-                                            setUserEditedMileage(false); // 自动填充不算用户编辑
-                                            console.log(`自动计算当前里程数: ${mileageStr} (${lastMileage} + ${trip})`);
+                                            setMileage((lastMileage + trip).toFixed(0));
                                         }
-                                    } else if (!newTripInfo || newTripInfo.trim() === '') {
-                                        // 如果清空了行程距离，也清空里程数（如果里程数是由行程距离自动计算的）
-                                        if (!userEditedMileage) {
-                                            setMileage('');
-                                        }
+                                    } else if ((!newTripInfo || newTripInfo.trim() === '') && !userEditedMileage) {
+                                        setMileage('');
                                     }
                                 }}
                                 label="行程距离"
-                                placeholder={lastMileage !== null ? `输入行程(km)，将自动计算里程数` : "输入行程(km)"}
+                                placeholder="點此輸入行程(km)"
                                 allowDecimal={true}
+                                resetKey={`${selectedTag}|${input}`}
                             />
                         </div>
                         {averagePrice > 0 && averageLitterPer100Km && (
@@ -537,6 +539,7 @@ function Remark({ remark, setRemark, setCarPlate, carPlate, selectedTag, input, 
                         simpleDescription={simpleDescription}
                         setSimpleDescription={setSimpleDescription}
                         onPhotoAdd={onPhotoAdd}
+                        hideHeader={hideDescriptionHeader}
                     />
                 </div>
             );
@@ -552,6 +555,7 @@ function Remark({ remark, setRemark, setCarPlate, carPlate, selectedTag, input, 
                 simpleDescription={simpleDescription}
                 setSimpleDescription={setSimpleDescription}
                 onPhotoAdd={onPhotoAdd}
+                hideHeader={hideDescriptionHeader}
             />
         )
 

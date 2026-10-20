@@ -1,649 +1,562 @@
-import React, { useState, useEffect } from 'react';
-import Header from '../Header';
+import React, { useState, useEffect, useMemo } from 'react';
 import TagSelector from '../TagSelector';
 import Remark from '../Remark';
-import Geolocation from '../Geolocation';
 import Log from '../Log';
 import Output from '../Output';
 import '../App.css';
 import { API_ENDPOINTS, EXPENSE_TAGS } from '../config';
-import CompactPhotoUpload from '../components/CompactPhotoUpload';
-import MobileCalculator from '../components/MobileCalculator';
-import MalaysiaTaxCalculator from '../components/MalaysiaTaxCalculator';
 import MobileFriendlyDateTime from '../components/MobileFriendlyDateTime';
-import PaymentMethodSelector from '../components/PaymentMethodSelector';
 import { focusElement } from '../utils/keyboardNavigation';
-import { clearKeyValueCache, getKeyValue } from '../utils/keyValueCache';
 import QuickLinksButton from '../components/QuickLinksButton';
 import PageChrome from '../components/PageChrome';
+import AmountTripleRow from '../components/AmountTripleRow';
+import TaxAddonStrip, { computeFinalAmount, formatTaxAddonTags } from '../components/TaxAddonStrip';
+import CameraAICapture from '../components/CameraAICapture';
+import { useOfflineQueue } from '../context/QueueContext';
+import { useSmartLocation } from '../hooks/useSmartLocation';
+import { toMapsUrl } from '../utils/locationStorage';
+import { getBuildVersion } from '../utils/buildInfo';
+import { forceReload } from '../utils/forceReload';
+import {
+  loadExpenseHistory,
+  pushExpenseHistory,
+  clearExpenseHistory,
+} from '../utils/expenseHistory';
+import SectionHead from '../components/SectionHead';
+import { detectPaymentCategory, detectPaymentRegion } from '../utils/paymentCategory';
+import { useUnsavedGuard } from '../hooks/useUnsavedGuard';
+import { ROUTES } from '../utils/routing';
 
 function ExpensePage() {
+  const { enqueueAndSend } = useOfflineQueue();
+  const { location: smartLoc, mapsUrl } = useSmartLocation();
+
   const [selectedTag, setSelectedTag] = useState(null);
   const tags = EXPENSE_TAGS;
-  const [input, setInput] = useState('');       // 管理输入内容的状态
-  const [remark, setRemark] = useState('');     // 管理备注的状态
-  const [carPlate, setCarPlate] = useState('');     // 管理车牌的状态
-  const [tripInfo, setTripInfo] = useState(''); // 管理行车距离
-  const [mileage, setMileage] = useState('');     // 管理里程的状态
-  const [amount, setAmount] = useState('');    // 管理金额的状态
-  const [location, setLocation] = useState(''); // 管理地理位置的状态
-  const [currency, setCurrency] = useState('MYR'); // 管理地理位置的状态
-  const [log, setLog] = useState([]); 
-  const [isSubmitting, setIsSubmitting] = useState(false); // Add new state for tracking submission
+  const [input, setInput] = useState('');
+  const [remark, setRemark] = useState('');
+  const [carPlate, setCarPlate] = useState('');
+  const [tripInfo, setTripInfo] = useState('');
+  const [mileage, setMileage] = useState('');
+  const [amount, setAmount] = useState('');
+  const [currency, setCurrency] = useState('MYR');
+  const [log, setLog] = useState(() => loadExpenseHistory());
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [output, setOutput] = useState('');
   const [selectedDateTime, setSelectedDateTime] = useState(new Date());
   const [paymentMethod, setPaymentMethod] = useState('');
   const [simpleDescription, setSimpleDescription] = useState('');
-  const [photos, setPhotos] = useState([]); // 支持多张照片
+  const [photos, setPhotos] = useState([]);
+  /** When set, submit keeps this id → GAS Replace Into（編輯既有筆） */
+  const [editingId, setEditingId] = useState(null);
+  /** Tax/service addons — do not mutate main amount input */
+  const [taxAddons, setTaxAddons] = useState([]);
   const [paymentOptions, setPaymentOptions] = useState({
-    'Cash': { key: 'Cash', card_num: 'Cash' },
-    'eWallet1': { key: 'eWallet', card_num: 'TnG' },
-    'eWallet2': { key: 'eWallet', card_num: 'GrabPay' },
-    'eWallet3': { key: 'eWallet', card_num: 'Setel' },
-    'eWallet4': { key: 'eWallet', card_num: 'ShopeePay' }
+    Cash: { key: 'Cash', card_num: 'Cash' },
+    eWallet1: { key: 'eWallet', card_num: 'TnG' },
+    eWallet2: { key: 'eWallet', card_num: 'GrabPay' },
+    eWallet3: { key: 'eWallet', card_num: 'Setel' },
+    eWallet4: { key: 'eWallet', card_num: 'ShopeePay' },
   });
-  const [skipAutoLocation, setSkipAutoLocation] = useState(false);
   const [currencyConversions, setCurrencyConversions] = useState([]);
-  const [taxCalculation, setTaxCalculation] = useState(null);
   const [isAmountManuallySet, setIsAmountManuallySet] = useState(false);
   const [itemizedTotal, setItemizedTotal] = useState(0);
   const [fuelPrice, setFuelPrice] = useState('');
-  const [fuelType, setFuelType] = useState(''); 
+  const [fuelType, setFuelType] = useState('');
 
-  // 处理照片变化
-  const handlePhotoChange = (photosData) => {
-    setPhotos(photosData);
-  };
+  /** Guard reload only for cat / subcat / amount / 備註 — ignore payment, date, plate, etc. */
+  const hasUnsavedInput = useMemo(() => {
+    const amt = String(amount || '').trim();
+    const hasAmount = amt !== '' && amt !== '0' && amt !== '0.00';
+    return Boolean(
+      selectedTag ||
+        String(input || '').trim() ||
+        hasAmount ||
+        String(remark || '').trim() ||
+        String(simpleDescription || '').trim()
+    );
+  }, [selectedTag, input, amount, remark, simpleDescription]);
 
-  // 处理汇率换算记录
+  useUnsavedGuard(hasUnsavedInput, { whenPath: ROUTES.EXPENSE });
+
+  const handlePhotoChange = (photosData) => setPhotos(photosData);
   const handleCurrencyConversion = (conversion) => {
-    setCurrencyConversions(prev => [...prev, conversion]);
+    setCurrencyConversions((prev) => [...prev, conversion]);
   };
-
-  // 处理税费计算
-  const handleTaxCalculation = (taxData) => {
-    setTaxCalculation(taxData);
-  };
-
-  // 清除缓存并重新加载
-  const handleClearCache = async () => {
-    clearKeyValueCache();
-    // 重新加载RON97价格
-    const ron97Result = await getKeyValue('ron97_price');
-    if (ron97Result.success && ron97Result.value) {
-      console.log('RON97价格已重新加载:', ron97Result.value);
-    }
-    alert('缓存已清除，数据已重新加载');
-  };
-
-  // 处理金额完成后的操作
-  const handleAmountComplete = () => {
-    setIsAmountManuallySet(true);
-    // 如果没有预设付款方式，自动滚动到付款方式选择区域
-    if (!paymentMethod) {
-      setTimeout(() => {
-        const paymentSection = document.querySelector('.step-section:nth-child(3)');
-        if (paymentSection) {
-          paymentSection.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        }
-      }, 200);
-    }
-  };
-
-  // 处理明细总额变化
+  const handleAmountComplete = () => setIsAmountManuallySet(true);
   const handleItemizedTotalChange = (total) => {
     setItemizedTotal(total || 0);
-    // 只有在用户没有手动设置金额时才自动更新
-    if (!isAmountManuallySet && total > 0) {
-      setAmount(total.toFixed(2));
-    }
+    if (!isAmountManuallySet && total > 0) setAmount(total.toFixed(2));
   };
 
-  // 处理税费建议的金额更新
-  const handleAmountSuggestion = (suggestedAmount) => {
-    setAmount(suggestedAmount.toFixed(2));
-    setIsAmountManuallySet(true);
-  };
-
-  // 格式化文件大小
   const formatFileSize = (bytes) => {
-    if (bytes === 0) return '0 Bytes';
+    if (!bytes) return '0 Bytes';
     const k = 1024;
     const sizes = ['Bytes', 'KB', 'MB', 'GB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    return `${parseFloat((bytes / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`;
   };
-
-  const handleNumber = (num) => {
-    setIsAmountManuallySet(true); // 用户手动输入了金额
-    
-    // If there's an operator in the amount, we're building an expression
-    if(/[/+\-*÷×]/.test(amount)) {
-      setAmount(amount + num);
-      return;
-    }
-    
-    // Handle special case where amount is '0' - replace it
-    if (amount === '0' || amount === '0.00') {
-      if (num === '0') {
-        return; // Don't allow multiple zeros
-      }
-      setAmount(num);
-      return;
-    }
-    
-    // Normal number entry - treat as currency input (cents)
-    let currentAmount = amount.replace(/[^\d]/g, '');
-    let newAmount = currentAmount + num;
-    
-    // Prevent numbers that are too large
-    if (newAmount.length > 8) {
-      return;
-    }
-    
-    const numericValue = Number(newAmount) / 100;
-    setAmount(numericValue.toFixed(2).toString());
-  };
-  
-  const handleOperator = (op) => {
-    // If last character is an operator, replace it
-    if (['+', '-', '×', '÷', '*'].includes(amount.slice(-1))) {
-      setAmount(amount.slice(0, -1) + op);
-      return;
-    }
-    setAmount(amount + op);
-  };
-  
-  const handleEqual = () => {
-    try {
-      const expression = amount
-        .replace(/×/g, ' * ')
-        .replace(/÷/g, ' / ')
-        .replace(/\+/g, ' + ')
-        .replace(/-/g, ' - ')
-        .trim();
-      
-      const result = Function(`return ${expression}`)();
-      setAmount(Number(result).toFixed(2).toString());
-    } catch (error) {
-      setAmount('');
-    }
-  };
-
-  async function pushToGsheet(contents) {
-    try {
-      setOutput('pushing to gsheet');
-      const response = await fetch(API_ENDPOINTS.GSHEET_SUBMIT, {
-        method: "POST",
-        mode: "no-cors",
-        redirect: "follow",
-        body: JSON.stringify(contents),
-        headers: {
-          "Content-type": "application/json; charset=UTF-8"
-        }
-      });
-      const responseText = JSON.stringify(response);
-      console.log("Success:", responseText);
-      return responseText;
-    } catch (error) {
-      console.error("Error:", error.toString());
-      throw error;
-    }
-  }
 
   useEffect(() => {
+    const CACHE_VER = 'v3'; // eWallet detection + MY/SG region
+    const defaults = {
+      Cash: { key: 'Cash', card_num: 'Cash', bank: 'Cash', shortname: 'Cash', region: '' },
+      eWallet1: { key: 'eWallet', card_num: 'TnG', bank: 'TnG', shortname: 'TnG', region: 'MY' },
+      eWallet2: { key: 'eWallet', card_num: 'GrabPay', bank: 'GrabPay', shortname: 'GrabPay', region: 'MY' },
+      eWallet3: { key: 'eWallet', card_num: 'Setel', bank: 'Setel', shortname: 'Setel', region: 'MY' },
+      eWallet4: { key: 'eWallet', card_num: 'ShopeePay', bank: 'ShopeePay', shortname: 'ShopeePay', region: 'MY' },
+    };
     const fetchPaymentOptions = async () => {
-      // Check cache and its expiration
       const cached = localStorage.getItem('paymentOptions');
       const cacheTimestamp = localStorage.getItem('paymentOptionsTimestamp');
-      const now = new Date().getTime();
-      const ONE_DAY = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
-      
-      if (cached && cacheTimestamp && (now - parseInt(cacheTimestamp)) < ONE_DAY) {
+      const cacheVer = localStorage.getItem('paymentOptionsVer');
+      const now = Date.now();
+      const ONE_DAY = 24 * 60 * 60 * 1000;
+      if (
+        cached &&
+        cacheTimestamp &&
+        cacheVer === CACHE_VER &&
+        now - parseInt(cacheTimestamp, 10) < ONE_DAY
+      ) {
         setPaymentOptions(JSON.parse(cached));
         return;
       }
-  
       try {
         const response = await fetch(API_ENDPOINTS.PAYMENT_OPTIONS);
         const data = await response.json();
         const transformedData = Object.entries(data)
-          .filter(([key, value]) => value.card_num)
-          .reduce((acc, [key, value]) => {
-            acc[value.bank] = {
-              key: value.bank,
-              card_num: value.card_num
-            };
-            return acc;
-          }, {...paymentOptions});
-        
-        // Store data with timestamp
-      localStorage.setItem('paymentOptions', JSON.stringify(transformedData));
-      localStorage.setItem('paymentOptionsTimestamp', now.toString());
-      setPaymentOptions(transformedData);
+          .filter(([, value]) => value?.card_num)
+          .reduce(
+            (acc, [id, value]) => {
+              const draft = {
+                key: value.key,
+                card_num: value.card_num,
+                bank: value.bank || '',
+                shortname: value.shortname || value.bank || '',
+              };
+              const catKey = detectPaymentCategory(draft, id) || 'Card';
+              const short =
+                value.shortname ||
+                value.bank ||
+                (value.key && !['Cash', 'eWallet', 'Card'].includes(value.key) ? value.key : '');
+              acc[id] = {
+                key: catKey,
+                card_num: value.card_num,
+                bank: value.bank || short,
+                shortname: short,
+                region: detectPaymentRegion({ ...draft, shortname: short }),
+              };
+              return acc;
+            },
+            { ...defaults }
+          );
+        localStorage.setItem('paymentOptions', JSON.stringify(transformedData));
+        localStorage.setItem('paymentOptionsTimestamp', String(now));
+        localStorage.setItem('paymentOptionsVer', CACHE_VER);
+        setPaymentOptions(transformedData);
       } catch (error) {
         console.error('Error fetching payment options:', error);
       }
     };
     fetchPaymentOptions();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Read URL parameters and handle POST data on component mount
   useEffect(() => {
-    const handleUrlParams = () => {
-      const urlParams = new URLSearchParams(window.location.search);
-      
-      // Handle various URL parameters
-      const txtParam = urlParams.get('txt');
-      const catParam = urlParams.get('cat');
-      const tagParam = urlParams.get('tag');
-      const amountParam = urlParams.get('amount');
-      const currencyParam = urlParams.get('currency');
-      const remarkParam = urlParams.get('remark');
-      const locationParam = urlParams.get('location');
-      const longitudeParam = urlParams.get('longitude');
-      const latitudeParam = urlParams.get('latitude');
-      const paymentParam = urlParams.get('payment');
-      
-      if (txtParam) setInput(txtParam);
-      if (catParam) setSelectedTag(catParam);
-      if (tagParam) setInput(tagParam);
-      if (amountParam) setAmount(amountParam);
-      if (currencyParam) setCurrency(currencyParam);
-      if (remarkParam) setRemark(remarkParam);
-      if (locationParam) setLocation(locationParam);
-      
-      // Fuzzy match payment method
-      if (paymentParam) {
-        const fuzzyMatchPayment = (searchTerm) => {
-          const lowerSearch = searchTerm.toLowerCase();
-          const matches = Object.values(paymentOptions).filter(option => 
-            option.card_num.toLowerCase().includes(lowerSearch) || 
-            option.key.toLowerCase().includes(lowerSearch)
-          );
-          return matches.length === 1 ? matches[0].card_num : null;
-        };
-        
-        const matchedPayment = fuzzyMatchPayment(paymentParam);
-        if (matchedPayment) {
-          setPaymentMethod(matchedPayment);
-        }
+    const urlParams = new URLSearchParams(window.location.search);
+    const txtParam = urlParams.get('txt');
+    const catParam = urlParams.get('cat');
+    const tagParam = urlParams.get('tag');
+    const amountParam = urlParams.get('amount');
+    const currencyParam = urlParams.get('currency');
+    const remarkParam = urlParams.get('remark');
+    const paymentParam = urlParams.get('payment');
+    if (txtParam) setInput(txtParam);
+    if (catParam) setSelectedTag(catParam);
+    if (tagParam) setInput(tagParam);
+    if (amountParam) setAmount(amountParam);
+    if (currencyParam) setCurrency(currencyParam);
+    if (remarkParam) setRemark(remarkParam);
+    if (paymentParam) {
+      const lower = paymentParam.toLowerCase();
+      const matches = Object.values(paymentOptions).filter(
+        (option) =>
+          option.card_num.toLowerCase().includes(lower) ||
+          option.key.toLowerCase().includes(lower)
+      );
+      if (matches.length === 1) setPaymentMethod(matches[0].card_num);
+    }
+    const postData = sessionStorage.getItem('expensePostData');
+    if (postData) {
+      try {
+        const data = JSON.parse(postData);
+        if (data.txt) setInput(data.txt);
+        if (data.cat) setSelectedTag(data.cat);
+        if (data.tag) setInput(data.tag);
+        if (data.amount) setAmount(data.amount.toString());
+        if (data.currency) setCurrency(data.currency);
+        if (data.remark) setRemark(data.remark);
+        sessionStorage.removeItem('expensePostData');
+      } catch (error) {
+        console.error('Error parsing POST data:', error);
       }
-      
-      // Handle coordinates if provided
-      if (longitudeParam && latitudeParam) {
-        setLocation(`https://maps.google.com/maps?q=${latitudeParam},${longitudeParam}`);
-        setSkipAutoLocation(true);
-      } else if (locationParam) {
-        setSkipAutoLocation(true);
-      }
-    };
-
-    const handlePostData = () => {
-      // Check if there's POST data stored in sessionStorage
-      const postData = sessionStorage.getItem('expensePostData');
-      if (postData) {
-        try {
-          const data = JSON.parse(postData);
-          if (data.txt) setInput(data.txt);
-          if (data.cat) setSelectedTag(data.cat);
-          if (data.tag) setInput(data.tag);
-          if (data.amount) setAmount(data.amount.toString());
-          if (data.currency) setCurrency(data.currency);
-          if (data.remark) setRemark(data.remark);
-          if (data.location) setLocation(data.location);
-          if (data.longitude && data.latitude) {
-            setLocation(`https://maps.google.com/maps?q=${data.latitude},${data.longitude}`);
-            setSkipAutoLocation(true);
-          }
-          // Clear the data after using it
-          sessionStorage.removeItem('expensePostData');
-        } catch (error) {
-          console.error('Error parsing POST data:', error);
-        }
-      }
-    };
-
-    handleUrlParams();
-    handlePostData();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const formatDateTime = (date = new Date(), format = 'YMDHIS') => {
-    const pad = num => num.toString().padStart(2, "0");
+    const pad = (num) => num.toString().padStart(2, '0');
     const parts = {
       Y: date.getFullYear(),
       M: pad(date.getMonth() + 1),
       D: pad(date.getDate()),
       H: pad(date.getHours()),
       I: pad(date.getMinutes()),
-      S: pad(date.getSeconds())
+      S: pad(date.getSeconds()),
     };
-
-    switch (format) {
-      case 'YMDHIS':
-        return `${parts.Y}-${parts.M}-${parts.D} ${parts.H}:${parts.I}:${parts.S}`;
-      case 'YM':
-        return `${parts.Y}${parts.M}`;
-      default:
-        return '';
-    }
+    if (format === 'YM') return `${parts.Y}${parts.M}`;
+    return `${parts.Y}-${parts.M}-${parts.D} ${parts.H}:${parts.I}:${parts.S}`;
   };
 
   const resetData = () => {
-      setInput('');
-      setRemark('');
-      setAmount('');
-      setSelectedTag('');
-      setCarPlate('');
-      setPaymentMethod('');
-      setPhotos([]);
-      setMileage('');
-      setTripInfo('');
-  }
-  const submitData = async (resetFields = true) => {
-    if (!amount || !selectedTag || !paymentMethod) {
-      alert('請填寫完整資料');
+    setInput('');
+    setRemark('');
+    setAmount('');
+    setSelectedTag('');
+    setCarPlate('');
+    setPaymentMethod('');
+    setPhotos([]);
+    setMileage('');
+    setTripInfo('');
+    setSimpleDescription('');
+    setIsAmountManuallySet(false);
+    setEditingId(null);
+    setSelectedDateTime(new Date());
+    setTaxAddons([]);
+  };
+
+  const fillFromHistory = (entry) => {
+    if (!entry) return;
+    setEditingId(entry.id ?? entry.timestamp_ms ?? null);
+    setInput(entry.title || '');
+    setAmount(entry.amount != null ? String(entry.amount) : '');
+    setSelectedTag(entry.tag || '');
+    setRemark(entry.remark || '');
+    setSimpleDescription(entry.remark || '');
+    setCurrency(entry.currency || 'MYR');
+    setPaymentMethod(entry.payment_method || '');
+    setCarPlate(entry.carPlate || '');
+    setMileage(entry.mileage || '');
+    setTripInfo(entry.tripInfo || '');
+    setFuelPrice(entry.fuelPrice || '');
+    setFuelType(entry.fuelType || '');
+    setIsAmountManuallySet(true);
+    const ts = entry.timestamp_ms || entry.id;
+    if (ts) setSelectedDateTime(new Date(Number(ts)));
+    setOutput('已回填，可修改後再提交（同時間戳會覆蓋更新）');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const resolveGeoUrl = () => {
+    if (smartLoc) return toMapsUrl(smartLoc.lat, smartLoc.lng, smartLoc.label || '');
+    return mapsUrl || '';
+  };
+
+  /** Only focus when user submits with incomplete fields — never chase remark after picks */
+  const focusFirstIncomplete = () => {
+    if (!selectedTag || !input) {
+      focusElement('.tag-collapsed-chip, .tag-container .tag, .manual-tag-input', 80);
+      return '請選擇分類／項目';
+    }
+    if (!amount || amount === '0') {
+      if (window.showCalculator) window.showCalculator();
+      else focusElement('.amount-triple-amount', 80);
+      return '請填入金額';
+    }
+    if (!paymentMethod) {
+      focusElement('.amount-triple-payment', 80);
+      return '請選擇付款方式';
+    }
+    return null;
+  };
+
+  const submitData = async () => {
+    const incomplete = focusFirstIncomplete();
+    if (incomplete) {
+      setOutput(incomplete);
       return;
     }
 
-    // === 1. 複製要提交的資料，避免被後續清空影響 ===
-    const separator = '|';
-    const submitted_value_raw =
-      input + separator +
-      amount + separator +
-      selectedTag + separator +
-      remark + separator +
-      location + separator +
-      paymentMethod;
-
-    // 格式化日期用于照片文件名
-    // day 是星期几的简写（mon, tue, wed, thu, fri, sat, sun）
+    const geo = resolveGeoUrl();
     const weekdayNames = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
-    const weekday = selectedDateTime.getDay(); // 0=Sunday, 1=Monday, ..., 6=Saturday
-    const day = weekdayNames[weekday];
-    
+    // 編輯模式沿用原 id；新筆用當前時間選擇器
+    const id = editingId != null ? Number(editingId) : selectedDateTime.getTime();
+    const dt = editingId != null ? new Date(Number(editingId)) : selectedDateTime;
+
     const contents_for_gsheets = {
-      timestamp: formatDateTime(selectedDateTime, 'YMDHIS'),
-      yearmonth: formatDateTime(selectedDateTime, 'YM'),
-      day: day, // 星期几简写：mon, tue, wed, thu, fri, sat, sun
+      id,
+      action: 'upsertExpense',
+      timestamp_ms: id,
+      timestamp: formatDateTime(dt, 'YMDHIS'),
+      yearmonth: formatDateTime(dt, 'YM'),
+      day: weekdayNames[dt.getDay()],
       title: input,
-      amount: amount,
-      remark: remark,
-      geolocation: location,
+      amount: computeFinalAmount(amount, taxAddons),
+      amount_input: amount,
+      tax_addons: taxAddons,
+      tax_tags: formatTaxAddonTags(taxAddons),
+      remark,
+      geolocation: geo,
+      latitude: smartLoc?.lat ?? null,
+      longitude: smartLoc?.lng ?? null,
       tag: selectedTag,
-      currency: currency,
+      currency,
       payment_method: paymentMethod,
-      carPlate: carPlate, // 车牌号
-      mileage: mileage, // 里程数
-      tripInfo: tripInfo, // 行程距离
-      fuelPrice: fuelPrice, // 油品价格（从Remark组件获取）
-      fuelType: fuelType, // 油品类型（从Remark组件获取）
-      photos: photos.map(photo => photo.uploadedUrl || photo.base64).filter(Boolean),
-      photo_urls: photos.map(photo => photo.uploadedUrl || photo.previewUrl).filter(Boolean),
+      carPlate,
+      mileage,
+      tripInfo,
+      fuelPrice,
+      fuelType,
+      photos: photos.map((photo) => photo.uploadedUrl || photo.base64).filter(Boolean),
+      photo_urls: photos.map((photo) => photo.uploadedUrl || photo.previewUrl).filter(Boolean),
     };
 
-    // === 2. 立即清空 UI（依照 resetFields 或 duplicate） ===
-    if (resetFields) {
-      resetData()
+    const historyEntry = {
+      id,
+      timestamp_ms: id,
+      title: input,
+      amount: computeFinalAmount(amount, taxAddons),
+      tag: selectedTag,
+      remark,
+      currency,
+      payment_method: paymentMethod,
+      carPlate,
+      mileage,
+      tripInfo,
+      fuelPrice,
+      fuelType,
+    };
 
-      // 自動 focus 下一筆（tag 或手動輸入）
-      focusElement('.manual-tag-input, .tag-input', 300);
-    } else {
-      // 保留現有欄位，但直接跳到金額
-      // 雙空格後跳到下一個輸入框
-      if (window.showCalculator) {
-          window.showCalculator();
-      }
-      // focusElement('.amount-input', 300);
-    }
-
-    // === 3. 背景送出資料 ===
     setIsSubmitting(true);
-
-    // log & shortcut url
-    let submitted_value = formatDateTime() + separator + submitted_value_raw;
-    setLog(prevLog => [submitted_value, ...prevLog]);
-    const shortcutUrl =
-      'shortcuts://run-shortcut?name=WebRecordExpenses&input=text&text=' +
-      encodeURIComponent(submitted_value);
-
-    // output loading 狀態
-    setOutput('Pushing to gsheet');
-    const loadingInterval = setInterval(() => {
-      setOutput(prev => prev + '.');
-    }, 1000);
+    setLog(pushExpenseHistory(historyEntry));
+    setOutput(editingId != null ? '已加入佇列（更新）…' : '已加入佇列，同步中…');
+    resetData();
 
     try {
-      const responseText = await pushToGsheet(contents_for_gsheets);
-      clearInterval(loadingInterval);
+      const result = await enqueueAndSend(contents_for_gsheets);
       setOutput(
-        `Success: ${responseText}<br/><a href="${shortcutUrl}">submit through WebRecordExpenses shortcut</a>`
+        result.sent
+          ? '已送出'
+          : '目前離線或網路異常，已暫存於本機佇列，稍後自動同步'
       );
     } catch (error) {
-      clearInterval(loadingInterval);
-      setOutput(
-        `Error: ${error.toString()}<br/><a href="${shortcutUrl}">submit through WebRecordExpenses shortcut</a>`
-      );
+      setOutput(`佇列錯誤: ${error.toString()}`);
     } finally {
       setIsSubmitting(false);
     }
   };
-  
 
-  const handleSubmit = async (e, resetFields = true) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    await submitData(resetFields);
+    await submitData();
   };
 
-  const handleSubmitAndDuplicate = async (e) => {
-    e.preventDefault();
-    await submitData(false);
+  const clearAmountSection = () => {
+    setSelectedDateTime(new Date());
+    setCurrency('MYR');
+    setAmount('');
+    setPaymentMethod('');
+    setIsAmountManuallySet(false);
+    setTaxAddons([]);
+  };
+
+  const clearDescriptionSection = () => {
+    setRemark('');
+    setSimpleDescription('');
+    setCarPlate('');
+    setMileage('');
+    setTripInfo('');
+    setFuelPrice('');
+    setFuelType('');
+    setPhotos([]);
+  };
+
+  const clearAllWithConfirm = () => {
+    if (!window.confirm('確定要全部清空嗎？分類、金額、備註都會清除。')) return;
+    resetData();
+    setOutput('');
   };
 
   return (
     <PageChrome title="記帳">
       <div className="app-container expense-page">
-      <Header onClearCache={handleClearCache} />
-
-      {/* 步骤1: 选择分类和标签 */}
-      <div className="step-section">
-        <TagSelector input={input} setInput={setInput} setRemark={setRemark} setAmount={setAmount} selectedTag={selectedTag} setSelectedTag={setSelectedTag} tags={tags} />
-      </div>
-
-      {/* 步骤2: 输入金额 */}
-      <div className="step-section">
-        <MobileCalculator 
-          amount={amount} 
-          setAmount={setAmount}
-          currency={currency}
-          setCurrency={setCurrency}
-          selectedTag={selectedTag}
-          input={input}
-          onAmountFocus={() => {
-            setTimeout(() => {
-              window.scrollTo({ top: 0, behavior: 'smooth' });
-            }, 100);
-          }}
-          onCurrencyConversion={handleCurrencyConversion}
-          onAmountComplete={handleAmountComplete}
-          />
-        
-
-      </div>
-
-      {/* 步骤3: 选择付款方式 - 使用分类选择 */}
-      <div className="step-section payment-section">
-        <PaymentMethodSelector
-          paymentOptions={paymentOptions}
-          paymentMethod={paymentMethod}
-          setPaymentMethod={setPaymentMethod}
-          onPaymentFromUrl={true}
-        />
-      </div>
-
-      {/* 步骤4: 描述和备注 - 独立行 */}
-      <div className="remark-row">
-        <div className="remark-container-wrapper">
-          <Remark 
-            input={input} 
-            setInput={setInput} 
-            remark={remark} 
-            setCarPlate={setCarPlate} 
-            carPlate={carPlate} 
-            setRemark={setRemark} 
-            amount={amount} 
+        <div className="step-section">
+          <TagSelector
+            input={input}
+            setInput={setInput}
+            setRemark={setRemark}
+            setAmount={setAmount}
             selectedTag={selectedTag}
-            onItemizedTotalChange={handleItemizedTotalChange}
-            mileage={mileage}
-            setMileage={setMileage}
-            tripInfo={tripInfo}
-            setTripInfo={setTripInfo}
-            simpleDescription={simpleDescription}
-            setSimpleDescription={setSimpleDescription}
-            onFuelDataChange={({ fuelPrice, fuelType }) => {
-              setFuelPrice(fuelPrice);
-              setFuelType(fuelType);
-            }}
-            onPhotoAdd={(photoData) => {
-              // OCR识别后，如果勾选了上传为附件，添加到照片列表
-              setPhotos(prev => [...prev, photoData]);
-              handlePhotoChange([...photos, photoData]);
-            }}
+            setSelectedTag={setSelectedTag}
+            tags={tags}
           />
-          
-          {/* 马来西亚税费计算器 - 移到明细部分 */}
-          {amount && parseFloat(amount) > 0 && currency === 'MYR' && (
-            <MalaysiaTaxCalculator
-              totalAmount={parseFloat(amount)}
-              itemizedTotal={itemizedTotal}
-              onTaxCalculation={handleTaxCalculation}
-              onAmountSuggestion={handleAmountSuggestion}
+        </div>
+
+        <div className="step-section amount-block">
+          <SectionHead title="時間／金額／付款" onClear={clearAmountSection} />
+          <div className="amount-datetime-slot">
+            <MobileFriendlyDateTime value={selectedDateTime} onChange={setSelectedDateTime} />
+          </div>
+          <AmountTripleRow
+            currency={currency}
+            setCurrency={setCurrency}
+            amount={amount}
+            setAmount={setAmount}
+            paymentMethod={paymentMethod}
+            setPaymentMethod={setPaymentMethod}
+            paymentOptions={paymentOptions}
+            onAmountComplete={handleAmountComplete}
+            selectedTag={selectedTag}
+            input={input}
+            carPlate={carPlate}
+            setCarPlate={setCarPlate}
+          />
+          <TaxAddonStrip
+            amount={amount}
+            addons={taxAddons}
+            setAddons={setTaxAddons}
+          />
+        </div>
+
+        <div className="remark-row">
+          <div className="remark-container-wrapper remark-container-wrapper--polished">
+            <SectionHead
+              title="備註說明"
+              onClear={clearDescriptionSection}
+              leading={
+                <CameraAICapture
+                  onPhotoReady={(photoData) => {
+                    setPhotos((prev) => [...prev, photoData]);
+                    handlePhotoChange([...photos, photoData]);
+                  }}
+                  onExtracted={() => {}}
+                />
+              }
             />
-          )}
-          
-          {/* 显示汇率换算历史 */}
-          {currencyConversions.length > 0 && (
-            <div className="currency-history">
-              <h4>汇率换算记录:</h4>
-              {currencyConversions.map((conversion, index) => (
-                <div key={index} className="conversion-record">
-                  {conversion.originalAmount} {conversion.from} → {conversion.convertedAmount} {conversion.to} (汇率: {conversion.rate})
+            <Remark
+              input={input}
+              setInput={setInput}
+              remark={remark}
+              setCarPlate={setCarPlate}
+              carPlate={carPlate}
+              setRemark={setRemark}
+              amount={amount}
+              selectedTag={selectedTag}
+              onItemizedTotalChange={handleItemizedTotalChange}
+              mileage={mileage}
+              setMileage={setMileage}
+              tripInfo={tripInfo}
+              setTripInfo={setTripInfo}
+              simpleDescription={simpleDescription}
+              setSimpleDescription={setSimpleDescription}
+              hideDescriptionHeader
+              onFuelDataChange={({ fuelPrice: fp, fuelType: ft }) => {
+                setFuelPrice(fp);
+                setFuelType(ft);
+              }}
+            />
+
+            {currencyConversions.length > 0 && (
+              <div className="currency-history">
+                <h4>汇率换算记录:</h4>
+                {currencyConversions.map((conversion, index) => (
+                  <div key={index} className="conversion-record">
+                    {conversion.originalAmount} {conversion.from} → {conversion.convertedAmount}{' '}
+                    {conversion.to} (汇率: {conversion.rate})
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {photos.length > 0 && (
+          <div className="photos-display-row">
+            <div className="photos-grid">
+              {photos.map((photo, index) => (
+                <div key={index} className="photo-display-item">
+                  <img src={photo.preview} alt={`照片 ${index + 1}`} className="photo-display-img" />
+                  <div className="photo-display-info">
+                    <span className="photo-display-name">{photo.filename}</span>
+                    <span className="photo-display-size">{formatFileSize(photo.originalSize)}</span>
+                  </div>
+                  <button
+                    type="button"
+                    className="photo-display-remove"
+                    onClick={() => {
+                      const newPhotos = photos.filter((_, i) => i !== index);
+                      setPhotos(newPhotos);
+                      handlePhotoChange(newPhotos);
+                    }}
+                  >
+                    ✕
+                  </button>
                 </div>
               ))}
             </div>
-          )}
-        </div>
-      </div>
-      
-      {/* 位置、图片、时间一行显示 */}
-      <div className="location-photo-datetime-row">
-        <div className="location-section">
-          <Geolocation location={location} setLocation={setLocation} skipAutoLocation={skipAutoLocation} />
-        </div>
-        <div className="photo-section">
-          <CompactPhotoUpload 
-            onPhotoChange={handlePhotoChange}
-            initialPhotos={photos}
-          />
-        </div>
-        <div className="datetime-section">
-          <MobileFriendlyDateTime 
-            value={selectedDateTime}
-            onChange={setSelectedDateTime}
-          />
-        </div>
-      </div>
-      
-      {/* 照片显示行 */}
-      {photos.length > 0 && (
-        <div className="photos-display-row">
-          <div className="photos-grid">
-            {photos.map((photo, index) => (
-              <div key={index} className="photo-display-item">
-                <img 
-                  src={photo.preview} 
-                  alt={`照片 ${index + 1}`} 
-                  className="photo-display-img"
-                />
-                <div className="photo-display-info">
-                  <span className="photo-display-name">{photo.filename}</span>
-                  <span className="photo-display-size">
-                    {formatFileSize(photo.originalSize)}
-                    {photo.uploadedUrl && <span className="upload-success-icon"> ✅</span>}
-                  </span>
-                </div>
-                <button 
-                  type="button"
-                  className="photo-display-remove"
-                  onClick={() => {
-                    const newPhotos = photos.filter((_, i) => i !== index);
-                    setPhotos(newPhotos);
-                    handlePhotoChange(newPhotos);
-                  }}
-                  title="删除照片"
-                >
-                  ✕
-                </button>
-              </div>
-            ))}
           </div>
+        )}
+
+        {editingId != null && (
+          <div className="expense-editing-banner">
+            編輯模式 · 提交後將覆蓋原紀錄
+            <button type="button" className="expense-editing-cancel" onClick={resetData}>
+              取消編輯
+            </button>
+          </div>
+        )}
+
+        <div className="submit-section submit-section--actions">
+          <button type="button" className="submit submit--ghost" onClick={clearAllWithConfirm}>
+            全部清空
+          </button>
+          <button
+            type="button"
+            className="submit submit--primary"
+            onClick={handleSubmit}
+            disabled={isSubmitting || !amount || !selectedTag || !input}
+          >
+            {isSubmitting
+              ? '佇列中…'
+              : !amount || !selectedTag || !input
+                ? !amount
+                  ? '請填入金額'
+                  : '請先完成分類'
+                : editingId != null
+                  ? '更新並送出'
+                  : '提交'}
+          </button>
         </div>
-      )}
-      
-      
-      {/* 提交按钮移到最下方 */}
-      <div className="submit-section">
-        <button 
-          className="submit" 
-          onClick={(e) => resetData()}
-          
-        >
-          清空
-        </button>
-        <button 
-          className="submit" 
-          onClick={(e) => handleSubmit(e, true)}
-          disabled={isSubmitting || !amount || !selectedTag || !input}
-        >
-          {isSubmitting ? '提交中...' : (!amount || !selectedTag || !input)?(!amount?'请填入金额':'请先输入内容'):'提交'}
-        </button>
-        <button 
-          className="resubmit" 
-          onClick={(e) => handleSubmit(e, false)}
-          disabled={isSubmitting || !amount || !selectedTag || !input}
-        >
-          {isSubmitting ? '提交中...' : (!amount || !selectedTag || !input)?(!amount?'请填入金额':'请先输入内容'):'下一笔'}
-        </button>
+
+        <Log
+          log={log}
+          onSelect={fillFromHistory}
+          onClear={() => {
+            clearExpenseHistory();
+            setLog([]);
+          }}
+        />
+        <Output output={output} />
+
+        <div className="expense-footer-meta">
+          <button type="button" className="expense-footer-link" onClick={() => forceReload()}>
+            🔄 強制更新
+          </button>
+          <span className="expense-version-foot">v{getBuildVersion()}</span>
+        </div>
+
+        <QuickLinksButton />
       </div>
-
-      <Log setLog={setLog} log={log} />
-      
-      {/* Output移到提交按钮下方，使用新样式 */}
-      <Output output={output} />
-
-      {/* 调试信息 - 仅在开发环境显示 */}
-      {process.env.NODE_ENV === 'development' && photos.length > 0 && (
-        <div className="help-message">
-          <h4>照片调试信息:</h4>
-          <pre style={{fontSize: '10px', textAlign: 'left'}}>
-            {JSON.stringify({
-              count: photos.length,
-              photos: photos.map(photo => ({
-                filename: photo.filename,
-                originalSize: photo.originalSize,
-                compressedSize: photo.compressedSize,
-                type: photo.type,
-                base64Length: photo.base64 ? photo.base64.length : 0,
-                hasUploadedUrl: !!photo.uploadedUrl
-              }))
-            }, null, 2)}
-          </pre>
-        </div>
-      )}
-
-      {/* 快速链接按钮 */}
-      <QuickLinksButton />
-    </div>
     </PageChrome>
   );
 }

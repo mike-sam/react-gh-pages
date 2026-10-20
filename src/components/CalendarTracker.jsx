@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
-import { API_ENDPOINTS, SHORTCUTS } from '../config';
+import { SHORTCUTS } from '../config';
 import { useSmartLocation } from '../hooks/useSmartLocation';
+import { useOfflineQueue } from '../context/QueueContext';
 import { isIOS, openShortcut } from '../utils/platform';
 
 const PRESET_TITLES = [
@@ -23,6 +24,7 @@ const PRESET_PREFIXES = ['抵達', '用餐', '開會', '離開', '途經', '停�
  */
 function CalendarTracker() {
   const { location, refreshLocation, hasLocation } = useSmartLocation();
+  const { enqueueAndSend } = useOfflineQueue();
   const [title, setTitle] = useState('外出');
   const [customTitle, setCustomTitle] = useState('');
   const [prefix, setPrefix] = useState('抵達');
@@ -57,7 +59,9 @@ function CalendarTracker() {
         }
       }
 
+      const id = Date.now();
       const payload = {
+        id,
         action: 'trackCalendar',
         title: resolvedTitle,
         prefix: prefix || '',
@@ -68,21 +72,17 @@ function CalendarTracker() {
       };
 
       if (useShortcut) {
-        // Shortcuts 可用「取得輸入字典」解析此 JSON
         openShortcut(shortcutName, JSON.stringify(payload));
         setMessage(`已透過 iOS Shortcuts「${shortcutName}」啟動`);
         return;
       }
 
-      await fetch(API_ENDPOINTS.CALENDAR_TRACK || API_ENDPOINTS.GSHEET_SUBMIT, {
-        method: 'POST',
-        mode: 'no-cors',
-        redirect: 'follow',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify(payload),
-      });
-
-      setMessage(`已送出至 Apps Script：${resolvedTitle} / ${prefix || '（無前綴）'}`);
+      const result = await enqueueAndSend(payload);
+      setMessage(
+        result.sent
+          ? `已送出：${resolvedTitle} / ${prefix || '（無前綴）'}`
+          : `已暫存佇列：${resolvedTitle}`
+      );
     } catch (err) {
       setMessage(`失敗：${err.message || err}`);
     } finally {

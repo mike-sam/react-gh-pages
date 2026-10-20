@@ -68,187 +68,18 @@ const doPost = (request = {}) => {
       case 'saveLocation':
         return saveLocation(data);
       case 'trackCalendar':
+      case 'check_current':
         return handleCalendarTrack(data);
       case 'parkLocation':
+      case 'save_parking':
         return handleParkLocation(data);
+      case 'analyzeReceipt':
+        return handleAnalyzeReceipt(data);
+      case 'upsertExpense':
+        return handleUpsertExpense(data);
       default:
-      // 默认处理费用提交
-      // 过滤掉不需要保存到Records sheet的字段（这些字段只用于KeyValueConfig）
-      const recordsData = {...data};
-      delete recordsData.carPlate;
-      delete recordsData.mileage;
-      delete recordsData.tripInfo;
-      delete recordsData.fuelPrice;
-      delete recordsData.fuelType;
-      delete recordsData.day; // day字段也过滤掉，只用于照片文件名，不需要保存到Records
-      insertRowToSheet(recordsData);
-      
-      // 如果有经纬度，自动保存到Location sheet
-      if (data.geolocation) {
-        try {
-          // 从geolocation URL中提取经纬度和名称
-          // 格式：q=lat,lng&name=locationName 或 q=lat,lng
-          const geoMatch = data.geolocation.match(/q=(-?\d+\.?\d*),(-?\d+\.?\d*)/);
-          if (geoMatch) {
-            const latitude = parseFloat(geoMatch[1]);
-            const longitude = parseFloat(geoMatch[2]);
-            
-            // 验证经纬度是否有效
-            if (!isNaN(latitude) && !isNaN(longitude) && latitude >= -90 && latitude <= 90 && longitude >= -180 && longitude <= 180) {
-              // 优先从URL中提取地点名称（如果存在）
-              let locationName = '';
-              const nameMatch = data.geolocation.match(/[&?]name=([^&]+)/);
-              if (nameMatch) {
-                locationName = decodeURIComponent(nameMatch[1]).trim();
-              }
-              
-              // 如果URL中没有名称，尝试从remark中提取
-              if (!locationName && data.remark) {
-                locationName = data.remark.split('|')[0].trim(); // 取remark的第一部分作为地点名称
-              }
-              
-              const locationData = {
-                latitude: latitude,
-                longitude: longitude,
-                name: locationName
-              };
-              
-              const saveResult = saveLocation(locationData);
-              appendLog(['Location saved:', JSON.stringify(locationData), 'Result:', saveResult]);
-            } else {
-              appendLog(['Invalid latitude/longitude:', latitude, longitude]);
-            }
-          } else {
-            appendLog(['Failed to parse geolocation URL:', data.geolocation]);
-          }
-        } catch (locationError) {
-          appendLog(['Error saving location:', locationError.toString(), locationError.stack]);
-          // 不阻止费用提交，静默失败
-        }
-      } else {
-        appendLog(['No geolocation data in request']);
-      }
-      
-      // 如果有车牌和里程数，自动保存到KeyValueConfig sheet
-      if (data.carPlate && data.mileage && parseFloat(data.mileage) > 0) {
-        try {
-          const mileageData = {
-            carPlate: data.carPlate,
-            mileage: parseFloat(data.mileage),
-            tag: data.tag || '',
-            title: data.title || '',
-            expenseType: data.tag === '交通出行' ? (data.title || '打油') : data.tag,
-            remark: data.remark || '',
-            amount: data.amount || 0,
-            tripInfo: data.tripInfo || '', // 行程距离
-            fuelPrice: data.fuelPrice || '', // 油品价格
-            fuelType: data.fuelType || '' // 油品类型
-          };
-          updateMileageToSheet(mileageData);
-          appendLog(['Mileage saved:', JSON.stringify(mileageData)]);
-        } catch (mileageError) {
-          appendLog(['Error saving mileage:', mileageError.toString()]);
-          // 不阻止费用提交，静默失败
-        }
-      }
-      
-      // 处理照片上传（如果有）
-      // 支持单个照片（旧格式）或照片数组（新格式）
-      const uploadedPhotoUrls = [];
-      
-      // 生成照片文件名：{yearmonth}_{day}_{tag}_{title}_{timestamp}.jpg
-      // day 是星期几的简写（mon, tue, wed, thu, fri, sat, sun）
-      // 如果有多张照片，格式为：{yearmonth}_{day}_{tag}_{title}_{timestamp}_{no}_of_{total}.jpg
-      const totalPhotos = data.photos && Array.isArray(data.photos) ? data.photos.filter(p => p).length : 1;
-      const generatePhotoFileName = (index, total) => {
-        const yearmonth = data.yearmonth || '';
-        const day = data.day || ''; // 星期几简写：mon, tue, wed, thu, fri, sat, sun
-        const tag = (data.tag || '').replace(/[\/\\?%*:|"<>]/g, '_'); // 清理特殊字符
-        const title = (data.title || '').replace(/[\/\\?%*:|"<>]/g, '_').substring(0, 50); // 限制长度并清理特殊字符
-        const timestamp = (data.timestamp || '').replace(/[\/\\?%*:|"<>]/g, '_').replace(/\s/g, '_');
-        
-        // 如果有多张照片（total > 1），所有照片都添加 {no}_of_{total} 格式
-        const runningNo = total > 1 ? `_${index + 1}_of_${total}` : '';
-        
-        return `${yearmonth}_${day}_${tag}_${title}_${timestamp}${runningNo}.jpg`;
-      };
-      
-      if (data.photos && Array.isArray(data.photos)) {
-        // 处理多张照片（新格式）
-        const validPhotos = data.photos.filter(p => p);
-        const totalPhotos = validPhotos.length;
-        
-        for (let i = 0; i < data.photos.length; i++) {
-          const photo = data.photos[i];
-          if (!photo) continue;
-          
-          try {
-            // 如果是base64字符串（可能带前缀或不带前缀），需要上传
-            if (typeof photo === 'string') {
-              // 检查是否是 base64 数据（长度大于100且不包含 http）
-              if (photo.length > 100 && !photo.startsWith('http')) {
-                const fileName = generatePhotoFileName(i, totalPhotos);
-                const result = uploadFileToDrive(photo, fileName, 'ExpensePhotos');
-                if (result && result.success) {
-                  // 使用预览URL，Google Sheets可以直接预览
-                  uploadedPhotoUrls.push(result.previewUrl || result.fileUrl);
-                  appendLog(['Photo uploaded successfully:', fileName, result.previewUrl || result.fileUrl]);
-                } else {
-                  appendLog(['Photo upload failed:', result ? result.error : 'Unknown error']);
-                }
-              } else if (photo.startsWith('http')) {
-                // 已经是URL，直接使用
-                uploadedPhotoUrls.push(photo);
-              }
-            }
-          } catch (photoError) {
-            appendLog(['Error uploading photo ' + i + ':', photoError.toString()]);
-            // 继续处理其他照片
-          }
-        }
-      } else if (data.photo && !data.photo_url) {
-        // 处理单个照片（旧格式兼容）
-        try {
-          const fileName = generatePhotoFileName(0, 1);
-          const result = uploadFileToDrive(data.photo, fileName, 'ExpensePhotos');
-          if (result && result.success) {
-            // 使用预览URL，Google Sheets可以直接预览
-            uploadedPhotoUrls.push(result.previewUrl || result.fileUrl);
-            appendLog(['Photo uploaded:', fileName, result.previewUrl || result.fileUrl]);
-          } else {
-            appendLog(['Photo upload failed:', result ? result.error : 'Unknown error']);
-          }
-        } catch (photoError) {
-          appendLog(['Error uploading photo:', photoError.toString()]);
-        }
-      }
-      
-      // 将上传成功的照片URL保存到数据中
-      if (uploadedPhotoUrls.length > 0) {
-        appendLog(['Total photos uploaded:', uploadedPhotoUrls.length.toString()]);
-        // 更新Sheet中的photo_urls字段
-        try {
-          const doc = SpreadsheetApp.openById(sheetId);
-          const sheet = doc.getSheetByName('Records');
-          if (sheet) {
-            const lastRow = sheet.getLastRow();
-            const headerRow = sheet.getRange('1:1').getValues()[0];
-            const photoUrlsIndex = headerRow.indexOf('photo_urls');
-            if (photoUrlsIndex > -1 && lastRow > 1) {
-              // 使用逗号分隔多个URL
-              sheet.getRange(lastRow, photoUrlsIndex + 1).setValue(uploadedPhotoUrls.join(', '));
-            }
-          }
-        } catch (updateError) {
-          appendLog(['Error updating photo_urls in sheet:', updateError.toString()]);
-        }
-      }
-      
-      var result = {
-        status: "success",
-        timestamp: data.timestamp
-      };
-      return ContentService.createTextOutput(JSON.stringify(result)).setMimeType(ContentService.MimeType.JSON);
+        // 默认：费用 Replace Into / Insert
+        return handleUpsertExpense(data);
     }
   } catch (error) {
     appendLog(['Error in doPost:', error.toString(), error.stack]);
@@ -436,6 +267,248 @@ function uploadFileToDrive(base64Data, fileName, foldername) {
       success: false,
       error: '上传失败: ' + e.toString()
     };
+  }
+}
+
+/**
+ * Replace Into：以毫秒 id（或 timestamp_ms）為 Primary Key。
+ * 優先找 header「id」欄；若無則使用第 1 欄。
+ */
+function upsertRowById(obj, sheetName) {
+  sheetName = sheetName || 'Records';
+  var doc = SpreadsheetApp.openById(sheetId);
+  var sheet = doc.getSheetByName(sheetName);
+  if (!sheet) {
+    sheet = doc.insertSheet(sheetName);
+  }
+
+  var id = obj.id !== undefined && obj.id !== null && obj.id !== ''
+    ? String(obj.id)
+    : (obj.timestamp_ms !== undefined ? String(obj.timestamp_ms) : '');
+  if (!id) {
+    id = String(new Date().getTime());
+    obj.id = id;
+  } else {
+    obj.id = id;
+  }
+
+  var headerRange = sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), 1));
+  var headers = headerRange.getValues()[0];
+  var idCol = -1;
+  for (var h = 0; h < headers.length; h++) {
+    if (headers[h] && headers[h].toString().toLowerCase() === 'id') {
+      idCol = h;
+      break;
+    }
+  }
+  if (idCol === -1) {
+    // 確保第一欄為 id
+    if (!headers[0] || headers[0].toString().trim() === '') {
+      sheet.getRange(1, 1).setValue('id');
+      headers[0] = 'id';
+    } else if (headers[0].toString().toLowerCase() !== 'id') {
+      sheet.insertColumnBefore(1);
+      sheet.getRange(1, 1).setValue('id');
+      headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+    }
+    idCol = 0;
+  }
+
+  var lastRow = sheet.getLastRow();
+  var existingRow = -1;
+  if (lastRow >= 2) {
+    var idValues = sheet.getRange(2, idCol + 1, lastRow, idCol + 1).getValues();
+    for (var r = 0; r < idValues.length; r++) {
+      if (String(idValues[r][0]) === id) {
+        existingRow = r + 2;
+        break;
+      }
+    }
+  }
+
+  // 確保 headers 含所有 keys
+  var keys = Object.keys(obj);
+  for (var i = 0; i < keys.length; i++) {
+    var k = keys[i];
+    var found = false;
+    for (var j = 0; j < headers.length; j++) {
+      if (headers[j] && headers[j].toString() === k) {
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      var newCol = sheet.getLastColumn() + 1;
+      sheet.getRange(1, newCol).setValue(k);
+      headers[newCol - 1] = k;
+    }
+  }
+  headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+
+  var targetRow = existingRow > 0 ? existingRow : sheet.getLastRow() + 1;
+  if (targetRow === 1) targetRow = 2;
+
+  for (var c = 0; c < headers.length; c++) {
+    var headerName = headers[c] ? headers[c].toString() : '';
+    if (!headerName) continue;
+    if (obj[headerName] !== undefined && obj[headerName] !== null) {
+      var val = obj[headerName];
+      if (typeof val === 'object') val = JSON.stringify(val);
+      sheet.getRange(targetRow, c + 1).setValue(val);
+    }
+  }
+
+  return { row: targetRow, updated: existingRow > 0, id: id };
+}
+
+/**
+ * 費用寫入：Replace Into + 附帶 Location / Mileage / Photo 副作用
+ */
+function handleUpsertExpense(data) {
+  try {
+    const recordsData = {...data};
+    delete recordsData.action;
+    delete recordsData.carPlate;
+    delete recordsData.mileage;
+    delete recordsData.tripInfo;
+    delete recordsData.fuelPrice;
+    delete recordsData.fuelType;
+    delete recordsData.day;
+    delete recordsData.photos; // 大字段另處理
+    delete recordsData.photo;
+
+    var upsert = upsertRowById(recordsData, 'Records');
+
+    // 地理
+    if (data.geolocation) {
+      try {
+        const geoMatch = data.geolocation.match(/q=(-?\d+\.?\d*),(-?\d+\.?\d*)/);
+        if (geoMatch) {
+          const latitude = parseFloat(geoMatch[1]);
+          const longitude = parseFloat(geoMatch[2]);
+          if (!isNaN(latitude) && !isNaN(longitude)) {
+            let locationName = '';
+            const nameMatch = data.geolocation.match(/[&?]name=([^&]+)/);
+            if (nameMatch) locationName = decodeURIComponent(nameMatch[1]).trim();
+            saveLocation({ latitude: latitude, longitude: longitude, name: locationName });
+          }
+        }
+      } catch (e) {
+        appendLog(['upsertExpense location side-effect', e.toString()]);
+      }
+    } else if (data.latitude && data.longitude) {
+      try {
+        saveLocation({
+          latitude: parseFloat(data.latitude),
+          longitude: parseFloat(data.longitude),
+          name: ''
+        });
+      } catch (e2) {}
+    }
+
+    // 里程
+    if (data.carPlate && data.mileage && parseFloat(data.mileage) > 0) {
+      try {
+        updateMileageToSheet({
+          carPlate: data.carPlate,
+          mileage: parseFloat(data.mileage),
+          tag: data.tag || '',
+          title: data.title || '',
+          expenseType: data.tag === '交通出行' ? (data.title || '打油') : data.tag,
+          remark: data.remark || '',
+          amount: data.amount || 0,
+          tripInfo: data.tripInfo || '',
+          fuelPrice: data.fuelPrice || '',
+          fuelType: data.fuelType || ''
+        });
+      } catch (e3) {
+        appendLog(['upsertExpense mileage', e3.toString()]);
+      }
+    }
+
+    // 照片
+    var uploadedPhotoUrls = [];
+    var generatePhotoFileName = function (index, total) {
+      var yearmonth = data.yearmonth || '';
+      var day = data.day || '';
+      var tag = (data.tag || '').replace(/[\/\\?%*:|"<>]/g, '_');
+      var title = (data.title || '').replace(/[\/\\?%*:|"<>]/g, '_').substring(0, 50);
+      var timestamp = (data.timestamp || data.id || '').toString().replace(/[\/\\?%*:|"<>]/g, '_').replace(/\s/g, '_');
+      var runningNo = total > 1 ? '_' + (index + 1) + '_of_' + total : '';
+      return yearmonth + '_' + day + '_' + tag + '_' + title + '_' + timestamp + runningNo + '.jpg';
+    };
+    if (data.photos && Array.isArray(data.photos)) {
+      var valid = data.photos.filter(function (p) { return p; });
+      for (var i = 0; i < data.photos.length; i++) {
+        var photo = data.photos[i];
+        if (!photo || typeof photo !== 'string') continue;
+        if (photo.length > 100 && photo.indexOf('http') !== 0) {
+          var result = uploadFileToDrive(photo, generatePhotoFileName(i, valid.length), 'ExpensePhotos');
+          if (result && result.success) uploadedPhotoUrls.push(result.previewUrl || result.fileUrl);
+        } else if (photo.indexOf('http') === 0) {
+          uploadedPhotoUrls.push(photo);
+        }
+      }
+    }
+
+    if (uploadedPhotoUrls.length > 0) {
+      try {
+        var doc = SpreadsheetApp.openById(sheetId);
+        var sheet = doc.getSheetByName('Records');
+        var headerRow = sheet.getRange('1:1').getValues()[0];
+        var photoUrlsIndex = headerRow.indexOf('photo_urls');
+        if (photoUrlsIndex > -1) {
+          sheet.getRange(upsert.row, photoUrlsIndex + 1).setValue(uploadedPhotoUrls.join(', '));
+        }
+      } catch (e4) {}
+    }
+
+    return ContentService.createTextOutput(JSON.stringify({
+      success: true,
+      status: 'success',
+      id: upsert.id,
+      updated: upsert.updated,
+      row: upsert.row,
+      timestamp: data.timestamp
+    })).setMimeType(ContentService.MimeType.JSON);
+  } catch (error) {
+    appendLog(['Error in handleUpsertExpense:', error.toString(), error.stack]);
+    return ContentService.createTextOutput(JSON.stringify({
+      success: false,
+      error: error.toString()
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+/**
+ * 收據 AI 辨識 stub：請在 Script Properties 設定 GEMINI_API_KEY 後擴充。
+ * 目前先存圖並回傳空欄位，保持 thin-client 契約。
+ */
+function handleAnalyzeReceipt(data) {
+  try {
+    var uploaded = null;
+    if (data.photo) {
+      var fileName = 'receipt_' + (data.id || new Date().getTime()) + '.jpg';
+      uploaded = uploadFileToDrive(data.photo, fileName, 'ExpensePhotos');
+    }
+    // TODO: UrlFetchApp → Gemini；回填 amount/title/merchant
+    return ContentService.createTextOutput(JSON.stringify({
+      success: true,
+      action: 'analyzeReceipt',
+      photoUrl: uploaded && uploaded.success ? (uploaded.previewUrl || uploaded.fileUrl) : null,
+      extracted: {
+        amount: null,
+        title: null,
+        currency: null,
+        remark: null
+      },
+      note: 'Set GEMINI_API_KEY in Script Properties to enable AI extraction'
+    })).setMimeType(ContentService.MimeType.JSON);
+  } catch (error) {
+    return ContentService.createTextOutput(JSON.stringify({
+      success: false,
+      error: error.toString()
+    })).setMimeType(ContentService.MimeType.JSON);
   }
 }
 

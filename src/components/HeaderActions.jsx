@@ -1,16 +1,16 @@
 import React, { useEffect, useState } from 'react';
 import LocationPinButton from './LocationPinButton';
 import ThemeToggle from './ThemeToggle';
+import QueueStatusBadge from './QueueStatusBadge';
 import { useSmartLocation } from '../hooks/useSmartLocation';
 import { formatFullTimestamp, formatRelativeTimeShort } from '../utils/locationStorage';
 
-/** Relative time + landmark pin + theme icon. */
+/** Queue badge + relative time + landmark pin + theme icon. */
 function HeaderActions({ compact = false }) {
   const { location, hasLocation } = useSmartLocation();
   const [showFullTime, setShowFullTime] = useState(false);
   const [, setTick] = useState(0);
 
-  // Refresh short relative label periodically
   useEffect(() => {
     if (!hasLocation) return undefined;
     const id = setInterval(() => setTick((n) => n + 1), 30000);
@@ -26,6 +26,7 @@ function HeaderActions({ compact = false }) {
 
   return (
     <div className={`header-actions ${compact ? 'header-actions-compact' : ''}`}>
+      <QueueStatusBadge />
       {hasLocation && (
         <button
           type="button"

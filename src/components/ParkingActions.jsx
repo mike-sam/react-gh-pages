@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { API_ENDPOINTS } from '../config';
 import { useSmartLocation } from '../hooks/useSmartLocation';
+import { useOfflineQueue } from '../context/QueueContext';
 import {
   DEFAULT_CAR_PLATES,
   formatRelativeTime,
@@ -17,6 +17,7 @@ import ParkingMapPreview from './ParkingMapPreview';
  */
 function ParkingActions() {
   const { location: smartLoc, refreshLocation, hasLocation } = useSmartLocation();
+  const { enqueueAndSend } = useOfflineQueue();
   const [presetPlates] = useState(DEFAULT_CAR_PLATES);
   const [plateMode, setPlateMode] = useState(() => {
     const saved = loadSelectedCarPlate();
@@ -137,8 +138,10 @@ function ParkingActions() {
     setIsSaving(true);
     setMessage('');
     try {
+      const id = Date.now();
       const payload = {
-        action: 'parkLocation',
+        id,
+        action: 'save_parking',
         latitude: draft.lat,
         longitude: draft.lng,
         accuracy: null,
@@ -158,15 +161,12 @@ function ParkingActions() {
       saveParkedForCar(activePlate, parkedRecord);
       setTick((n) => n + 1);
 
-      await fetch(API_ENDPOINTS.PARK_LOCATION || API_ENDPOINTS.GSHEET_SUBMIT, {
-        method: 'POST',
-        mode: 'no-cors',
-        redirect: 'follow',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify(payload),
-      });
-
-      setMessage(`已記下 ${activePlate} 車位`);
+      const result = await enqueueAndSend(payload);
+      setMessage(
+        result.sent
+          ? `已記下 ${activePlate} 車位`
+          : `已暫存 ${activePlate} 車位（離線佇列）`
+      );
     } catch (err) {
       setMessage(`失敗：${err.message || err}`);
     } finally {

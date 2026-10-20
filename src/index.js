@@ -5,6 +5,7 @@ import App from './App';
 import reportWebVitals from './reportWebVitals';
 import { LocationProvider } from './context/LocationContext';
 import { ThemeProvider } from './context/ThemeContext';
+import { QueueProvider } from './context/QueueContext';
 import { registerSW } from './utils/registerSW';
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
@@ -12,7 +13,9 @@ root.render(
   <React.StrictMode>
     <ThemeProvider>
       <LocationProvider>
-        <App />
+        <QueueProvider>
+          <App />
+        </QueueProvider>
       </LocationProvider>
     </ThemeProvider>
   </React.StrictMode>

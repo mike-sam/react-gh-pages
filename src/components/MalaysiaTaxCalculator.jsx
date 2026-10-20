@@ -5,7 +5,6 @@ const MalaysiaTaxCalculator = ({ totalAmount, itemizedTotal, onTaxCalculation, o
   const [showDiscrepancySuggestions, setShowDiscrepancySuggestions] = useState(false);
 
   const calculatePossibleScenarios = (amount) => {
-    return [];
     if (!amount || amount <= 0) return [];
 
     const scenarios = [];
