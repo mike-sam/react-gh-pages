@@ -9,10 +9,17 @@ const ItemizedDescription = ({ onChange, initialValue = '', totalAmount = 0, onI
   const [ocrItemIds, setOcrItemIds] = useState(new Set()); // 跟踪OCR添加的项目ID
   const remarkRef = useRef(null);
 
-  /** iOS has no textarea resize handle — grow with content instead */
+  /** iOS has no resize handle — autogrow. Desktop keeps drag-resize (skip forcing height). */
   const fitRemarkHeight = useCallback(() => {
     const el = remarkRef.current;
     if (!el) return;
+    const coarse =
+      typeof window !== 'undefined' &&
+      window.matchMedia?.('(pointer: coarse)').matches;
+    if (!coarse) {
+      el.style.height = '';
+      return;
+    }
     el.style.height = 'auto';
     const next = Math.min(
       REMARK_MAX_PX,

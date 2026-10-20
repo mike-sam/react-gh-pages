@@ -6,7 +6,8 @@
 .app-container {
   width: 100%;
   max-width: 100%;
-  overflow-x: hidden;
+  /* overflow-x only on content, not ancestors of sticky nav */
+  overflow-x: clip;
   padding: 12px max(12px, env(safe-area-inset-right, 0px)) 24px
     max(12px, env(safe-area-inset-left, 0px));
   box-sizing: border-box;
@@ -3493,7 +3494,9 @@
 }
 .remark-container-wrapper--polished .content-remark,
 .remark-container-wrapper--polished textarea.content-remark {
+  display: block;
   width: 100%;
+  max-width: 100%;
   min-height: 88px;
   box-sizing: border-box;
   border: 1px solid var(--border, #e0e0e0);
@@ -3503,14 +3506,14 @@
   padding: 10px 12px;
   font-size: 14px;
   line-height: 1.45;
-  /* iOS ignores resize handle; autogrow via JS */
-  resize: none;
+  /* Desktop: drag corner. iOS: no handle — JS autogrow still applies */
+  resize: vertical;
   overflow-y: auto;
-  field-sizing: content; /* progressive enhancement where supported */
+  /* Height only via JS — field-sizing:content shrinks width and leaves right gap */
   max-height: 360px;
 }
 .remark-container-wrapper--polished .content-remark--autogrow {
-  resize: none;
+  resize: vertical;
 }
 .expense-editing-banner {
   display: flex;
@@ -3712,9 +3715,9 @@
 body {
   -webkit-overflow-scrolling: touch;
   touch-action: manipulation;
-  overflow-x: hidden;
   margin: 0;
   min-height: 100%;
+  /* avoid overflow-x:hidden here — it breaks position:sticky nav */
 }
 
 .tag {
@@ -3813,16 +3816,20 @@ button.calc-key{
 #content-amount {
   text-align: right;
 }
-#content-amount, #remark-container {
+#content-amount {
   max-width: 83vw;
 }
 #remark-container {
   width: 100%;
-  padding: 0px;
+  max-width: 100%;
+  padding: 0;
+  box-sizing: border-box;
 }
 .content-remark { 
   width: 100%;
+  max-width: 100%;
   height: 100%;
+  box-sizing: border-box;
 }
 #tag-container {
   width: 100%;
@@ -4291,7 +4298,7 @@ input,textarea {
   padding: 0;
   background: var(--bg, #0f1115);
   color: var(--text, #e8eaed);
-  overflow-x: hidden;
+  /* Do NOT set overflow-x/y here — any overflow ≠ visible breaks position:sticky on .page-chrome-top */
 }
 
 .silent-submit-banner {
@@ -4335,10 +4342,9 @@ input,textarea {
 }
 
 .page-chrome-top {
+  position: -webkit-sticky;
   position: sticky;
   top: 0;
-  left: 0;
-  right: 0;
   z-index: 200;
   display: grid;
   grid-template-columns: auto 1fr auto;
@@ -4469,15 +4475,130 @@ input,textarea {
   background: var(--bg-elevated, #f5f5f5);
 }
 
+/* Entry page: ? help FAB with URL test examples */
+.entry-help-wrap {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  outline: none;
+}
+.entry-help-fab {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 1px solid var(--border, #333945);
+  background: var(--bg-card, #22262f);
+  color: var(--accent, #8ab4f8);
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
+}
+.entry-help-fab.is-open {
+  background: var(--accent, #3d9cf0);
+  color: #0f1115;
+  border-color: var(--accent, #3d9cf0);
+}
+.entry-help-panel {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  right: 0;
+  width: min(92vw, 340px);
+  max-height: min(70vh, 480px);
+  overflow: auto;
+  padding: 12px;
+  border-radius: 14px;
+  border: 1px solid var(--border, #333945);
+  background: var(--bg-card, #22262f);
+  color: var(--text, #e8eaed);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+  -webkit-overflow-scrolling: touch;
+}
+.entry-help-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.entry-help-badge {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--accent-soft, rgba(138, 180, 248, 0.2));
+  color: var(--accent, #8ab4f8);
+}
+.entry-help-hint {
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: var(--text-muted, #9aa0a6);
+  line-height: 1.4;
+}
+.entry-help-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.entry-help-link {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 11px;
+  border-radius: 10px;
+  border: 1px solid var(--border, #333945);
+  background: var(--bg-elevated, #1a1d24);
+  text-decoration: none;
+  color: inherit;
+}
+.entry-help-link:active,
+.entry-help-link:hover {
+  border-color: var(--accent, #8ab4f8);
+}
+.entry-help-item-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text, #e8eaed);
+}
+.entry-help-item-note {
+  font-size: 11px;
+  color: var(--text-muted, #9aa0a6);
+}
+.entry-help-item-url {
+  font-size: 10px;
+  color: var(--accent, #8ab4f8);
+  word-break: break-all;
+  white-space: pre-wrap;
+  margin-top: 2px;
+}
+
 .page-home-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   color: var(--accent, #3d9cf0);
   text-decoration: none;
   font-size: 13px;
+  font-weight: 600;
   white-space: nowrap;
+  line-height: 1;
+}
+.page-home-icon {
+  display: block;
+  flex-shrink: 0;
+}
+.page-home-text {
+  letter-spacing: 0.02em;
 }
 
 .page-home-link:hover {
-  text-decoration: underline;
+  opacity: 0.85;
 }
 
 .page-chrome-title {

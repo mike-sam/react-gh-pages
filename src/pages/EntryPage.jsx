@@ -1,5 +1,6 @@
 import React from 'react';
 import HeaderActions from '../components/HeaderActions';
+import EntryUrlExamples from '../components/EntryUrlExamples';
 import { forceReload } from '../utils/forceReload';
 import { hrefFor, ROUTES } from '../utils/routing';
 import '../App.css';
@@ -73,6 +74,8 @@ function EntryPage() {
           📊 Sheets
         </a>
       </div>
+
+      <EntryUrlExamples />
     </div>
   );
 }
