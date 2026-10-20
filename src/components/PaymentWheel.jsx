@@ -148,6 +148,7 @@ function PaymentWheel({ categorized, paymentMethod, setPaymentMethod, onDoubleSe
         </button>
       </div>
       <WheelPicker
+        key={payCat}
         className="payment-wheel-options"
         axis="y"
         options={options.length ? options : [{ value: '', label: '—' }]}

@@ -9,7 +9,7 @@ import {
 
 const QueueContext = createContext(null);
 
-async function postPayload(payload) {
+async function postPayload(payload, signal) {
   const endpoint =
     payload.action === 'trackCalendar'
       ? API_ENDPOINTS.CALENDAR_TRACK || API_ENDPOINTS.GSHEET_SUBMIT
@@ -26,6 +26,7 @@ async function postPayload(payload) {
     redirect: 'follow',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
     body: JSON.stringify(payload),
+    signal,
   });
 }
 
@@ -66,11 +67,18 @@ export function QueueProvider({ children }) {
   /**
    * Enqueue then try immediate send. Clears form responsibility is caller's.
    * @param {object} payload must include id (ms) and action
+   * @param {{ signal?: AbortSignal }} [opts]
    */
   const enqueueAndSend = useCallback(
-    async (payload) => {
+    async (payload, opts = {}) => {
+      const { signal } = opts;
       const id = payload.id ?? payload.timestamp_ms ?? Date.now();
       const body = { ...payload, id };
+
+      if (signal?.aborted) {
+        return { aborted: true, queued: false, sent: false };
+      }
+
       enqueueItem({
         id,
         action: body.action || 'expense',
@@ -83,11 +91,20 @@ export function QueueProvider({ children }) {
         if (typeof navigator !== 'undefined' && navigator.onLine === false) {
           return { queued: true, sent: false };
         }
-        await postPayload(body);
+        await postPayload(body, signal);
         removeFromQueue(id);
         refreshCount();
         return { queued: false, sent: true };
-      } catch {
+      } catch (err) {
+        const aborted =
+          signal?.aborted ||
+          err?.name === 'AbortError' ||
+          /abort/i.test(String(err?.message || ''));
+        if (aborted) {
+          removeFromQueue(id);
+          refreshCount();
+          return { aborted: true, queued: false, sent: false };
+        }
         refreshCount();
         return { queued: true, sent: false };
       }

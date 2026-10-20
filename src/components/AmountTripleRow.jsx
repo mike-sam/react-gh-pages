@@ -25,10 +25,12 @@ function AmountTripleRow({
   setCarPlate,
 }) {
   const [showPad, setShowPad] = useState(false);
+  const [cueAmount, setCueAmount] = useState(false);
   const [currencyModal, setCurrencyModal] = useState(false);
   const [paymentModal, setPaymentModal] = useState(false);
   /** Only auto-open once per cat+subcat selection; closing won't reopen until selection changes */
   const autoOpenedForKey = useRef('');
+  const amountBtnRef = useRef(null);
 
   // Lock parent page scroll while amount pad is open
   useEffect(() => {
@@ -52,7 +54,19 @@ function AmountTripleRow({
 
   const openPad = () => {
     if (document.activeElement?.blur) document.activeElement.blur();
+    setCueAmount(false);
     setShowPad(true);
+  };
+
+  /** Highlight amount cell, then open pad — softer than jumping straight to keypad */
+  const openPadWithCue = () => {
+    if (document.activeElement?.blur) document.activeElement.blur();
+    setCueAmount(true);
+    amountBtnRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
+    window.setTimeout(() => {
+      setCueAmount(false);
+      setShowPad(true);
+    }, 480);
   };
 
   useEffect(() => {
@@ -64,7 +78,7 @@ function AmountTripleRow({
     const key = `${selectedTag}||${input}`;
     if (autoOpenedForKey.current === key) return undefined;
     autoOpenedForKey.current = key;
-    const t = setTimeout(openPad, 120);
+    const t = setTimeout(openPadWithCue, 180);
     return () => clearTimeout(t);
   }, [selectedTag, input]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -147,7 +161,12 @@ function AmountTripleRow({
         ariaLabel="幣別（上下，雙擊搜尋）"
       />
 
-      <button type="button" className="amount-triple-amount" onClick={openPad}>
+      <button
+        type="button"
+        ref={amountBtnRef}
+        className={`amount-triple-amount${cueAmount ? ' is-cue' : ''}`}
+        onClick={openPad}
+      >
         {amount || '0.00'}
       </button>
 
@@ -182,12 +201,12 @@ function AmountTripleRow({
 
       {showPad && (
         <div
-          className="amount-pad-overlay"
+          className="amount-pad-overlay amount-pad-overlay--enter"
           onClick={() => setShowPad(false)}
           onWheel={(e) => e.preventDefault()}
         >
           <div
-            className="amount-pad amount-pad--calc"
+            className="amount-pad amount-pad--calc amount-pad--enter"
             onClick={(e) => e.stopPropagation()}
             onTouchMove={(e) => e.stopPropagation()}
           >

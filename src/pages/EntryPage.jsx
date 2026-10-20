@@ -9,7 +9,7 @@ const ACTIONS = [
     path: ROUTES.EXPENSE,
     icon: '🧾',
     title: '記帳',
-    desc: '分類、金額、付款、照片與位置',
+    desc: '支援 URL 帶入；silent=true 時 2s 送出／3s 內可點取消',
     direct: '#/expense',
   },
   {

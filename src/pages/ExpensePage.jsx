@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import TagSelector from '../TagSelector';
 import Remark from '../Remark';
 import Log from '../Log';
@@ -26,10 +26,22 @@ import SectionHead from '../components/SectionHead';
 import { detectPaymentCategory, detectPaymentRegion } from '../utils/paymentCategory';
 import { useUnsavedGuard } from '../hooks/useUnsavedGuard';
 import { ROUTES } from '../utils/routing';
+import {
+  parseExpenseQuickDraft,
+  clearExpenseQuickQuery,
+  getMergedQueryParams,
+} from '../utils/expenseQuickUrl';
 
 function ExpensePage() {
   const { enqueueAndSend } = useOfflineQueue();
-  const { location: smartLoc, mapsUrl } = useSmartLocation();
+  const { location: smartLoc, mapsUrl, setCachedLocation } = useSmartLocation();
+  const quickAppliedRef = useRef(false);
+  const pendingSilentRef = useRef(false);
+  const silentAbortRef = useRef(null);
+  const [paymentsReady, setPaymentsReady] = useState(false);
+  /** silent countdown UI: armed | sending | aborted | null */
+  const [silentPhase, setSilentPhase] = useState(null);
+  const [silentRemainMs, setSilentRemainMs] = useState(0);
 
   const [selectedTag, setSelectedTag] = useState(null);
   const tags = EXPENSE_TAGS;
@@ -112,16 +124,16 @@ function ExpensePage() {
       const cacheVer = localStorage.getItem('paymentOptionsVer');
       const now = Date.now();
       const ONE_DAY = 24 * 60 * 60 * 1000;
-      if (
-        cached &&
-        cacheTimestamp &&
-        cacheVer === CACHE_VER &&
-        now - parseInt(cacheTimestamp, 10) < ONE_DAY
-      ) {
-        setPaymentOptions(JSON.parse(cached));
-        return;
-      }
       try {
+        if (
+          cached &&
+          cacheTimestamp &&
+          cacheVer === CACHE_VER &&
+          now - parseInt(cacheTimestamp, 10) < ONE_DAY
+        ) {
+          setPaymentOptions(JSON.parse(cached));
+          return;
+        }
         const response = await fetch(API_ENDPOINTS.PAYMENT_OPTIONS);
         const data = await response.json();
         const transformedData = Object.entries(data)
@@ -156,53 +168,73 @@ function ExpensePage() {
         setPaymentOptions(transformedData);
       } catch (error) {
         console.error('Error fetching payment options:', error);
+      } finally {
+        setPaymentsReady(true);
       }
     };
     fetchPaymentOptions();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // sessionStorage POST bridge (Shortcuts / external)
   useEffect(() => {
-    const urlParams = new URLSearchParams(window.location.search);
-    const txtParam = urlParams.get('txt');
-    const catParam = urlParams.get('cat');
-    const tagParam = urlParams.get('tag');
-    const amountParam = urlParams.get('amount');
-    const currencyParam = urlParams.get('currency');
-    const remarkParam = urlParams.get('remark');
-    const paymentParam = urlParams.get('payment');
-    if (txtParam) setInput(txtParam);
-    if (catParam) setSelectedTag(catParam);
-    if (tagParam) setInput(tagParam);
-    if (amountParam) setAmount(amountParam);
-    if (currencyParam) setCurrency(currencyParam);
-    if (remarkParam) setRemark(remarkParam);
-    if (paymentParam) {
-      const lower = paymentParam.toLowerCase();
-      const matches = Object.values(paymentOptions).filter(
-        (option) =>
-          option.card_num.toLowerCase().includes(lower) ||
-          option.key.toLowerCase().includes(lower)
-      );
-      if (matches.length === 1) setPaymentMethod(matches[0].card_num);
-    }
     const postData = sessionStorage.getItem('expensePostData');
-    if (postData) {
-      try {
-        const data = JSON.parse(postData);
-        if (data.txt) setInput(data.txt);
-        if (data.cat) setSelectedTag(data.cat);
-        if (data.tag) setInput(data.tag);
-        if (data.amount) setAmount(data.amount.toString());
-        if (data.currency) setCurrency(data.currency);
-        if (data.remark) setRemark(data.remark);
-        sessionStorage.removeItem('expensePostData');
-      } catch (error) {
-        console.error('Error parsing POST data:', error);
+    if (!postData) return;
+    try {
+      const data = JSON.parse(postData);
+      if (data.txt) setInput(data.txt);
+      if (data.cat) setSelectedTag(data.cat);
+      if (data.tag) setInput(data.tag);
+      if (data.amount) setAmount(data.amount.toString());
+      if (data.currency) setCurrency(data.currency);
+      if (data.remark) {
+        setRemark(data.remark);
+        setSimpleDescription(data.remark);
       }
+      sessionStorage.removeItem('expensePostData');
+    } catch (error) {
+      console.error('Error parsing POST data:', error);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // URL quick entry: #/expense?cat=&subcat=&amount=&desc=&timestamp=&paymentmethod=&currency=&latlong=
+  useEffect(() => {
+    if (!paymentsReady || quickAppliedRef.current) return;
+    const draft = parseExpenseQuickDraft(paymentOptions);
+    if (!draft.hasQuickKeys) {
+      quickAppliedRef.current = true;
+      return;
+    }
+    quickAppliedRef.current = true;
+
+    if (draft.cat) setSelectedTag(draft.cat);
+    if (draft.subcat) setInput(draft.subcat);
+    if (draft.amount) {
+      setAmount(draft.amount);
+      setIsAmountManuallySet(true);
+    }
+    if (draft.desc) {
+      setRemark(draft.desc);
+      setSimpleDescription(draft.desc);
+    }
+    if (draft.currency) setCurrency(draft.currency);
+    if (draft.paymentMethod) setPaymentMethod(draft.paymentMethod);
+    if (draft.timestamp) setSelectedDateTime(draft.timestamp);
+    if (draft.latlong) setCachedLocation(draft.latlong);
+
+    if (draft.paymentUnresolved) {
+      const raw = getMergedQueryParams().get('paymentmethod') || getMergedQueryParams().get('payment');
+      setOutput(`找不到付款方式「${raw}」，請手動選擇後送出`);
+    } else if (draft.readyToSubmit) {
+      pendingSilentRef.current = true;
+      setSilentPhase('armed');
+      setOutput('silent：2 秒後自動送出，3 秒內點擊畫面可取消');
+    } else if (draft.silent) {
+      setOutput('silent 已啟用，但必填未齊或付款無法解析，請補齊後送出');
+    } else {
+      setOutput('已帶入 URL 參數，確認後請手動送出（自動送出請加 silent=true）');
+    }
+  }, [paymentsReady, paymentOptions, setCachedLocation]);
 
   const formatDateTime = (date = new Date(), format = 'YMDHIS') => {
     const pad = (num) => num.toString().padStart(2, '0');
@@ -280,11 +312,12 @@ function ExpensePage() {
     return null;
   };
 
-  const submitData = async () => {
+  const submitData = useCallback(async (opts = {}) => {
+    const { signal, deferReset = false } = opts;
     const incomplete = focusFirstIncomplete();
     if (incomplete) {
       setOutput(incomplete);
-      return;
+      return false;
     }
 
     const geo = resolveGeoUrl();
@@ -337,27 +370,148 @@ function ExpensePage() {
       fuelType,
     };
 
+    if (signal?.aborted) {
+      setOutput('已取消自動送出，請手動確認後再提交');
+      return false;
+    }
+
     setIsSubmitting(true);
-    setLog(pushExpenseHistory(historyEntry));
-    setOutput(editingId != null ? '已加入佇列（更新）…' : '已加入佇列，同步中…');
-    resetData();
+    if (!deferReset) {
+      setLog(pushExpenseHistory(historyEntry));
+      setOutput(editingId != null ? '已加入佇列（更新）…' : '已加入佇列，同步中…');
+      resetData();
+    } else {
+      setOutput('silent：正在送出…');
+    }
 
     try {
-      const result = await enqueueAndSend(contents_for_gsheets);
+      const result = await enqueueAndSend(contents_for_gsheets, { signal });
+      if (result.aborted) {
+        setOutput('已取消自動送出，請手動確認後再提交');
+        return false;
+      }
+      if (deferReset) {
+        setLog(pushExpenseHistory(historyEntry));
+        resetData();
+      }
       setOutput(
         result.sent
           ? '已送出'
           : '目前離線或網路異常，已暫存於本機佇列，稍後自動同步'
       );
+      return true;
     } catch (error) {
       setOutput(`佇列錯誤: ${error.toString()}`);
+      return false;
     } finally {
       setIsSubmitting(false);
     }
-  };
+  }, [
+    editingId,
+    selectedDateTime,
+    input,
+    amount,
+    taxAddons,
+    remark,
+    smartLoc,
+    selectedTag,
+    currency,
+    paymentMethod,
+    carPlate,
+    mileage,
+    tripInfo,
+    fuelPrice,
+    fuelType,
+    photos,
+    enqueueAndSend,
+    mapsUrl,
+  ]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const submitDataRef = useRef(submitData);
+  submitDataRef.current = submitData;
+
+  // silent=true: 3s buffer, send at 2s; any click within 3s aborts → manual submit
+  useEffect(() => {
+    if (!pendingSilentRef.current) return undefined;
+    if (!selectedTag || !input || !amount || amount === '0') return undefined;
+    if (!paymentMethod) return undefined;
+
+    pendingSilentRef.current = false;
+    const ac = new AbortController();
+    silentAbortRef.current = ac;
+    let cancelled = false;
+    let sendTimer = 0;
+    let windowTimer = 0;
+    const startedAt = Date.now();
+    setSilentPhase('armed');
+    setSilentRemainMs(3000);
+
+    const tick = window.setInterval(() => {
+      const left = Math.max(0, 3000 - (Date.now() - startedAt));
+      setSilentRemainMs(left);
+    }, 100);
+
+    const cleanupListeners = () => {
+      window.clearTimeout(sendTimer);
+      window.clearTimeout(windowTimer);
+      window.clearInterval(tick);
+      document.removeEventListener('pointerdown', onPointer, true);
+    };
+
+    const abortSilent = () => {
+      if (cancelled) return;
+      cancelled = true;
+      ac.abort();
+      cleanupListeners();
+      setSilentPhase('aborted');
+      setSilentRemainMs(0);
+      setOutput('已取消自動送出，請手動確認後再提交');
+    };
+
+    const onPointer = () => {
+      abortSilent();
+    };
+
+    document.addEventListener('pointerdown', onPointer, true);
+
+    sendTimer = window.setTimeout(async () => {
+      if (cancelled || ac.signal.aborted) return;
+      setSilentPhase('sending');
+      const ok = await submitDataRef.current({ signal: ac.signal, deferReset: true });
+      if (cancelled || ac.signal.aborted) {
+        setSilentPhase('aborted');
+        setOutput('已取消自動送出，請手動確認後再提交');
+        return;
+      }
+      if (ok) {
+        setSilentPhase(null);
+        clearExpenseQuickQuery();
+      } else if (!ac.signal.aborted) {
+        setSilentPhase(null);
+      }
+    }, 2000);
+
+    windowTimer = window.setTimeout(() => {
+      document.removeEventListener('pointerdown', onPointer, true);
+      window.clearInterval(tick);
+      setSilentRemainMs(0);
+    }, 3000);
+
+    return () => {
+      // Unmount only — do not abort in-flight silent send on dep churn
+      cleanupListeners();
+    };
+  }, [selectedTag, input, amount, paymentMethod]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (silentPhase === 'armed' || silentPhase === 'sending') {
+      silentAbortRef.current?.abort();
+      setSilentPhase('aborted');
+      setSilentRemainMs(0);
+      setOutput('已取消自動送出，請手動確認後再提交');
+      return;
+    }
     await submitData();
   };
 
@@ -387,9 +541,32 @@ function ExpensePage() {
     setOutput('');
   };
 
+  const silentSec = Math.ceil(silentRemainMs / 1000);
+
   return (
     <PageChrome title="記帳">
       <div className="app-container expense-page">
+        {(silentPhase === 'armed' || silentPhase === 'sending') && (
+          <div className="silent-submit-banner" role="status">
+            <div className="silent-submit-banner-main">
+              {silentPhase === 'sending'
+                ? '正在自動送出…點擊畫面可取消'
+                : `silent 自動送出倒數 ${silentSec}s（2s 送出）· 點擊畫面取消`}
+            </div>
+            <button
+              type="button"
+              className="silent-submit-cancel"
+              onClick={() => {
+                silentAbortRef.current?.abort();
+                setSilentPhase('aborted');
+                setSilentRemainMs(0);
+                setOutput('已取消自動送出，請手動確認後再提交');
+              }}
+            >
+              取消
+            </button>
+          </div>
+        )}
         <div className="step-section">
           <TagSelector
             input={input}

@@ -23,7 +23,14 @@ export function navigate(path) {
   window.location.hash = next;
 }
 
-export function hrefFor(path) {
+export function hrefFor(path, query) {
   const next = path.startsWith('/') ? path : `/${path}`;
-  return `#${next}`;
+  if (!query || typeof query !== 'object') return `#${next}`;
+  const qs = new URLSearchParams();
+  Object.entries(query).forEach(([k, v]) => {
+    if (v == null || v === '') return;
+    qs.set(k, String(v));
+  });
+  const s = qs.toString();
+  return s ? `#${next}?${s}` : `#${next}`;
 }

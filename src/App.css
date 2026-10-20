@@ -4239,6 +4239,46 @@ input,textarea {
   color: var(--text, #e8eaed);
 }
 
+.silent-submit-banner {
+  position: sticky;
+  top: 56px;
+  z-index: 190;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--accent, #8ab4f8);
+  background: var(--accent-soft, rgba(138, 180, 248, 0.18));
+  color: var(--text, #e8eaed);
+  font-size: 13px;
+  font-weight: 600;
+  animation: silent-banner-pulse 1s ease-in-out infinite alternate;
+}
+@keyframes silent-banner-pulse {
+  from { box-shadow: 0 0 0 0 rgba(138, 180, 248, 0.15); }
+  to { box-shadow: 0 0 0 4px rgba(138, 180, 248, 0.12); }
+}
+.silent-submit-banner-main {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.35;
+}
+.silent-submit-cancel {
+  appearance: none;
+  flex-shrink: 0;
+  border: 1px solid var(--border, #444);
+  background: var(--bg-card, #22262f);
+  color: var(--text, #e8eaed);
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
 .page-chrome-top {
   position: sticky;
   top: 0;
@@ -4996,6 +5036,19 @@ input,textarea {
   min-height: 72px;
   height: 72px;
   box-sizing: border-box;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+}
+.amount-triple-amount.is-cue {
+  animation: amount-cue-pulse 0.48s ease-out;
+  border-color: var(--accent, #8ab4f8);
+  box-shadow: 0 0 0 3px var(--accent-soft, rgba(138, 180, 248, 0.35));
+  color: var(--accent, #8ab4f8);
+}
+@keyframes amount-cue-pulse {
+  0% { transform: scale(1); }
+  35% { transform: scale(1.06); }
+  70% { transform: scale(0.98); }
+  100% { transform: scale(1); }
 }
 
 /* Infinite wheel: 3 visible slots — neighbors gray, wraps last→first */
@@ -5141,7 +5194,8 @@ input,textarea {
   box-sizing: border-box;
 }
 
-/* Payment: one cell — cat bar + option wheel (fixed 72px to match currency) */
+/* Payment: one cell — cat bar + option wheel
+   Outer 72px border-box → 70px content; catbar 22 + options 48 = 70 (exact 16×3 slots) */
 .payment-wheel {
   display: flex;
   flex-direction: column;
@@ -5160,11 +5214,12 @@ input,textarea {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: 24px;
-  min-height: 24px;
+  height: 22px;
+  min-height: 22px;
+  max-height: 22px;
   padding: 0 2px;
   border-bottom: 1px solid var(--border, #333945);
-  flex-shrink: 0;
+  flex: 0 0 22px;
   touch-action: pan-x;
   box-sizing: border-box;
 }
@@ -5184,19 +5239,46 @@ input,textarea {
   padding: 2px 6px;
   cursor: pointer;
 }
-.payment-wheel-options {
-  flex: 1;
-  min-height: 0;
-  /* 48 = 16×3 so selected row sits exactly in center band */
+.payment-wheel-options,
+.payment-wheel-options.wheel-picker--y {
+  flex: 0 0 48px;
+  width: 100%;
   height: 48px !important;
+  min-height: 48px !important;
+  max-height: 48px !important;
   border: none !important;
   border-radius: 0 !important;
-}
-.payment-wheel-options.wheel-picker--y {
-  height: 48px !important;
+  box-sizing: border-box;
 }
 .payment-wheel-options .wheel-picker-center-band {
   top: 33.333%;
+  height: 33.333%;
+}
+/* Keep selected label visually centered in the 16px slot */
+.payment-wheel-options .wheel-picker-item {
+  font-size: 10px !important;
+  transform: none !important;
+  opacity: 0.35;
+}
+.payment-wheel-options .wheel-picker-item.is-neighbor {
+  opacity: 0.55;
+  font-size: 10px !important;
+}
+.payment-wheel-options .wheel-picker-item.is-active {
+  opacity: 1;
+  font-size: 11px !important;
+  font-weight: 700;
+}
+.payment-wheel-options .wheel-picker-item.is-far {
+  opacity: 0.2;
+}
+.payment-wheel-options .wheel-picker-label {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  line-height: 1;
+  max-width: 100%;
 }
 .payment-wheel-regionbar {
   display: none; /* MY/SG via double-click modal only */
@@ -5554,6 +5636,13 @@ input,textarea {
   overscroll-behavior: none;
   touch-action: none;
 }
+.amount-pad-overlay--enter {
+  animation: amount-overlay-fade 0.28s ease-out;
+}
+@keyframes amount-overlay-fade {
+  from { background: rgba(0, 0, 0, 0); }
+  to { background: rgba(0, 0, 0, 0.55); }
+}
 .amount-pad {
   width: 100%; max-width: 420px;
   background: var(--bg-card, #22262f);
@@ -5565,6 +5654,19 @@ input,textarea {
   touch-action: manipulation;
   max-height: 85vh;
   overflow-y: auto;
+}
+.amount-pad--enter {
+  animation: amount-pad-slide-up 0.32s cubic-bezier(0.22, 1, 0.36, 1);
+}
+@keyframes amount-pad-slide-up {
+  from {
+    opacity: 0.4;
+    transform: translateY(28%);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 .amount-pad-display {
   text-align: right; font-size: 28px; font-weight: 700;
