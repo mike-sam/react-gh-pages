@@ -1,6 +1,8 @@
-import React, { useState, useRef, useLayoutEffect } from 'react';
+import React, { useState, useRef, useLayoutEffect, useEffect } from 'react';
 import { SECONDARY_TAGS } from './config';
 import { createDoubleSpaceHandler, focusElement } from './utils/keyboardNavigation';
+
+const COLLAPSE_MS = 220;
 
 function TagSelector({
   input,
@@ -12,44 +14,64 @@ function TagSelector({
   tags,
 }) {
   const [showManualInput, setShowManualInput] = useState(false);
-  /** After cat+subcat chosen, collapse; tap compact bar to expand again */
-  const [expanded, setExpanded] = useState(true);
+  /** expanded | collapsing | collapsed */
+  const [phase, setPhase] = useState('expanded');
   const manualInputRef = useRef(null);
+  const collapseTimer = useRef(null);
 
   const secondaryList =
     selectedTag && SECONDARY_TAGS[selectedTag] ? SECONDARY_TAGS[selectedTag] : [];
   const hasSecondaryList = secondaryList.length > 0;
   const selectionComplete = Boolean(selectedTag && input && input.trim());
-  const collapsed = selectionComplete && !expanded;
   const isPresetSubcat = hasSecondaryList && secondaryList.includes(input);
+  const collapsed = phase === 'collapsed';
+  const collapsing = phase === 'collapsing';
+
+  useEffect(() => () => {
+    if (collapseTimer.current) clearTimeout(collapseTimer.current);
+  }, []);
+
+  const requestCollapse = () => {
+    if (phase === 'collapsing' || phase === 'collapsed') return;
+    setPhase('collapsing');
+    if (collapseTimer.current) clearTimeout(collapseTimer.current);
+    collapseTimer.current = setTimeout(() => {
+      setPhase('collapsed');
+      collapseTimer.current = null;
+    }, COLLAPSE_MS);
+  };
+
+  const requestExpand = () => {
+    if (collapseTimer.current) {
+      clearTimeout(collapseTimer.current);
+      collapseTimer.current = null;
+    }
+    setPhase('expanded');
+  };
 
   /** Clear only cat / subcat (section clear) */
   const clearCategory = () => {
     setInput('');
     setShowManualInput(false);
     setSelectedTag('');
-    setExpanded(true);
-  };
-
-  const handleReset = () => {
-    clearCategory();
-    setRemark('');
-    setAmount('');
+    requestExpand();
   };
 
   useLayoutEffect(() => {
-    if (showManualInput && manualInputRef.current && expanded) {
+    if (showManualInput && manualInputRef.current && phase === 'expanded') {
       focusElement('.manual-tag-input', 120);
     }
-  }, [showManualInput, expanded]);
+  }, [showManualInput, phase]);
 
   const commitManualInput = (raw) => {
     const trimmed = (raw ?? input ?? '').trim();
     if (!trimmed) return;
     setInput(trimmed);
     setShowManualInput(false);
-    setExpanded(false); // same as picking a preset subcat
-    if (window.showCalculator) window.showCalculator();
+    requestCollapse();
+    if (window.showCalculator) {
+      window.setTimeout(() => window.showCalculator?.(), COLLAPSE_MS);
+    }
   };
 
   const handleKeyDown = (e) => {
@@ -68,36 +90,38 @@ function TagSelector({
       setSelectedTag('');
       setInput('');
       setShowManualInput(false);
-      setExpanded(true);
+      requestExpand();
       return;
     }
     setInput('');
     setShowManualInput(tag === '其他');
     setSelectedTag(tag);
-    setExpanded(true);
+    requestExpand();
   };
 
   /** Pick a preset subcat — works anytime, no need to clear manual text first */
   const handleSecondaryTagClick = (tag) => {
     setInput(tag);
     setShowManualInput(false);
-    setExpanded(false);
+    requestCollapse();
+    if (window.showCalculator) {
+      window.setTimeout(() => window.showCalculator?.(), COLLAPSE_MS);
+    }
   };
 
   const openManualInput = () => {
     setShowManualInput(true);
-    setExpanded(true);
-    // Only wipe when switching away from a preset chip; keep custom text if already typing
+    requestExpand();
     if (isPresetSubcat) setInput('');
   };
 
-  if (collapsed) {
+  if (collapsed && selectionComplete) {
     return (
-      <div className="tag-selector-collapsed">
+      <div className="tag-selector-collapsed tag-selector-collapsed--enter">
         <button
           type="button"
           className="tag-collapsed-chip"
-          onClick={() => setExpanded(true)}
+          onClick={requestExpand}
           title="點擊展開重新選擇"
         >
           <span className="tag-collapsed-cat">{selectedTag}</span>
@@ -113,15 +137,18 @@ function TagSelector({
   }
 
   return (
-    <div className="tag-selector-expanded">
+    <div
+      className={`tag-selector-expanded${collapsing ? ' is-collapsing' : ''}`}
+      aria-busy={collapsing}
+    >
       <div className="section-head">
         <span className="section-head-title">分類</span>
         <div className="section-head-actions">
-          {selectionComplete && (
+          {selectionComplete && !collapsing && (
             <button
               type="button"
               className="tag-collapse-hint"
-              onClick={() => setExpanded(false)}
+              onClick={requestCollapse}
             >
               收合 ▴
             </button>
@@ -132,64 +159,78 @@ function TagSelector({
         </div>
       </div>
 
-      <div className="tag-container">
-        {tags.map((tag) => (
-          <div
-            key={tag}
-            className={`tag ${selectedTag === tag ? 'selected' : ''}`}
-            onClick={() => selectTag(tag)}
-          >
-            {tag}
-          </div>
-        ))}
+      <div className="tag-level tag-level--cat">
+        <div className="tag-level-label">主分類</div>
+        <div className="tag-container tag-container--cats">
+          {tags.map((tag) => (
+            <button
+              type="button"
+              key={tag}
+              className={`tag tag--cat${selectedTag === tag ? ' selected' : ''}`}
+              onClick={() => selectTag(tag)}
+            >
+              {tag}
+            </button>
+          ))}
+        </div>
       </div>
 
-      <div className="secondary-tags-container">
-        {hasSecondaryList ? (
-          <ul className="second-tag">
-            {secondaryList.map((tag, index) => (
-              <li
-                className={`tag ${!showManualInput && tag === input ? 'selected' : ''}`}
-                key={index}
-                // pointerDown before input blur — avoids collapse/unmount eating the click
-                onPointerDown={(e) => {
-                  e.preventDefault();
-                  handleSecondaryTagClick(tag);
-                }}
-              >
-                {tag}
+      <div className="tag-level tag-level--sub">
+        <div className="tag-level-label">子分類</div>
+        <div className="secondary-tags-container">
+          {hasSecondaryList ? (
+            <ul className="second-tag">
+              {secondaryList.map((tag, index) => (
+                <li key={index}>
+                  <button
+                    type="button"
+                    className={`tag tag--sub${!showManualInput && tag === input ? ' selected' : ''}`}
+                    onPointerDown={(e) => {
+                      e.preventDefault();
+                      handleSecondaryTagClick(tag);
+                    }}
+                  >
+                    {tag}
+                  </button>
+                </li>
+              ))}
+              <li>
+                <button
+                  type="button"
+                  className={`tag tag--sub tag--manual${showManualInput || (input && !isPresetSubcat) ? ' selected' : ''}`}
+                  onPointerDown={(e) => {
+                    e.preventDefault();
+                    openManualInput();
+                  }}
+                >
+                  手动输入
+                </button>
               </li>
-            ))}
-            <li
-              className={`tag manual-input-tag ${showManualInput || (input && !isPresetSubcat) ? 'selected' : ''}`}
-              onPointerDown={(e) => {
-                e.preventDefault();
-                openManualInput();
-              }}
-            >
-              手动输入
-            </li>
-          </ul>
-        ) : selectedTag ? (
-          <ul className="second-tag">
-            <li
-              className="tag manual-input-tag selected"
-              onPointerDown={(e) => {
-                e.preventDefault();
-                openManualInput();
-              }}
-            >
-              手动输入
-            </li>
-          </ul>
-        ) : (
-          <p className="help-message">请先选择分类</p>
-        )}
+            </ul>
+          ) : selectedTag ? (
+            <ul className="second-tag">
+              <li>
+                <button
+                  type="button"
+                  className="tag tag--sub tag--manual selected"
+                  onPointerDown={(e) => {
+                    e.preventDefault();
+                    openManualInput();
+                  }}
+                >
+                  手动输入
+                </button>
+              </li>
+            </ul>
+          ) : (
+            <p className="help-message help-message--tag">请先选择主分類</p>
+          )}
+        </div>
       </div>
 
       {(showManualInput || (selectedTag && !hasSecondaryList) || (input && !isPresetSubcat && selectedTag)) &&
         selectedTag && (
-          <div className="input-container grid grid-2">
+          <div className="tag-manual-row">
             <input
               type="text"
               ref={manualInputRef}
@@ -201,7 +242,6 @@ function TagSelector({
               }}
               onKeyDown={handleKeyDown}
               onBlur={(e) => {
-                // 完成輸入後收合（與選 preset 一致）；點其他子分類時由 pointerDown 搶先處理
                 if (e.target.value.trim()) {
                   setTimeout(() => {
                     if (document.activeElement?.classList?.contains('manual-tag-input')) return;
@@ -210,9 +250,12 @@ function TagSelector({
                 }
               }}
               placeholder="输入自定义子分类，Enter 完成"
-              style={{ padding: '10px' }}
             />
-            <button type="button" onClick={() => commitManualInput(input)}>
+            <button
+              type="button"
+              className="tag-manual-done"
+              onClick={() => commitManualInput(input)}
+            >
               完成
             </button>
           </div>

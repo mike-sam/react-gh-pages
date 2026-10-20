@@ -1,9 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 /**
  * Searchable picker sheet.
- * Anchored from the top with a stable height so few results + keyboard
- * don't collapse the sheet under the soft keyboard.
+ * Portaled to document.body so sticky page-chrome cannot cover it.
+ * Anchored from the top; height follows visualViewport (keyboard-safe).
  */
 function PickerModal({
   title,
@@ -21,6 +22,14 @@ function PickerModal({
     offsetTop: 0,
   }));
   const q = query.trim().toLowerCase();
+
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, []);
 
   useEffect(() => {
     const vv = window.visualViewport;
@@ -79,7 +88,7 @@ function PickerModal({
     transform: viewport.offsetTop ? `translateY(${viewport.offsetTop}px)` : undefined,
   };
 
-  return (
+  const node = (
     <div className="picker-modal-overlay picker-modal-overlay--top" onClick={onClose}>
       <div
         className="picker-modal picker-modal--search picker-modal--top"
@@ -131,6 +140,9 @@ function PickerModal({
       </div>
     </div>
   );
+
+  if (typeof document === 'undefined') return node;
+  return createPortal(node, document.body);
 }
 
 export default PickerModal;

@@ -6,6 +6,7 @@ import reportWebVitals from './reportWebVitals';
 import { LocationProvider } from './context/LocationContext';
 import { ThemeProvider } from './context/ThemeContext';
 import { QueueProvider } from './context/QueueContext';
+import { FloatingStackProvider } from './context/FloatingStackContext';
 import { registerSW } from './utils/registerSW';
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
@@ -14,7 +15,9 @@ root.render(
     <ThemeProvider>
       <LocationProvider>
         <QueueProvider>
-          <App />
+          <FloatingStackProvider>
+            <App />
+          </FloatingStackProvider>
         </QueueProvider>
       </LocationProvider>
     </ThemeProvider>

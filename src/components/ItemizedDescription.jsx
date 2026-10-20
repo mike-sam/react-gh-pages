@@ -1,8 +1,29 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import { createDoubleSpaceHandler, focusElement } from '../utils/keyboardNavigation';
+
+const REMARK_MIN_PX = 88;
+const REMARK_MAX_PX = 360;
+
 const ItemizedDescription = ({ onChange, initialValue = '', totalAmount = 0, onItemizedTotalChange, simpleDescription, setSimpleDescription, onPhotoAdd, hideHeader = false }) => {
   const [items, setItems] = useState([]);
   const [ocrItemIds, setOcrItemIds] = useState(new Set()); // 跟踪OCR添加的项目ID
+  const remarkRef = useRef(null);
+
+  /** iOS has no textarea resize handle — grow with content instead */
+  const fitRemarkHeight = useCallback(() => {
+    const el = remarkRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    const next = Math.min(
+      REMARK_MAX_PX,
+      Math.max(REMARK_MIN_PX, el.scrollHeight)
+    );
+    el.style.height = `${next}px`;
+  }, []);
+
+  useLayoutEffect(() => {
+    fitRemarkHeight();
+  }, [simpleDescription, fitRemarkHeight]);
 
   // Initialize with existing value if provided
   useEffect(() => {
@@ -272,33 +293,33 @@ const ItemizedDescription = ({ onChange, initialValue = '', totalAmount = 0, onI
             </div>
           </div>
         )}
-        <textarea 
-          className="content-remark"
-          value={simpleDescription} 
-          onChange={(e)=>{
-              setSimpleDescription(e.target.value);
-              updateParent(items, e.target.value);
-              createDoubleSpaceHandler((trimmedValue) => {
-                  setSimpleDescription(trimmedValue);
-                  if (items.length === 0) {
-                    // Add new item and focus to its name
-                    addNewItem();
-                    focusElement('.item-name[data-item-index="0"]', 100);
-                  } else {
-                    const el = document.querySelector('.item-name[data-item-index="0"]');
-                    if(items.length === 1 && el.value.trim() === ''){
-                      focusElement('.item-name[data-item-index="0"]', 100);
-                    } else {
-
-                      // Focus to location section
-                      focusElement('.unified-action-button');
-                    }
-                  }
-                  
-              })(e);
+        <textarea
+          ref={remarkRef}
+          className="content-remark content-remark--autogrow"
+          value={simpleDescription}
+          onChange={(e) => {
+            setSimpleDescription(e.target.value);
+            updateParent(items, e.target.value);
+            createDoubleSpaceHandler((trimmedValue) => {
+              setSimpleDescription(trimmedValue);
+              if (items.length === 0) {
+                addNewItem();
+                focusElement('.item-name[data-item-index="0"]', 100);
+              } else {
+                const el = document.querySelector('.item-name[data-item-index="0"]');
+                if (items.length === 1 && el.value.trim() === '') {
+                  focusElement('.item-name[data-item-index="0"]', 100);
+                } else {
+                  focusElement('.unified-action-button');
+                }
+              }
+            })(e);
+            // Grow immediately for the keystroke (before layout effect)
+            requestAnimationFrame(fitRemarkHeight);
           }}
+          onInput={fitRemarkHeight}
           placeholder="添加备注信息"
-          rows="3"
+          rows={3}
         />
       </div>
       
