@@ -2,12 +2,13 @@ import React, { useEffect, useState } from 'react';
 import LocationPinButton from './LocationPinButton';
 import ThemeToggle from './ThemeToggle';
 import QueueStatusBadge from './QueueStatusBadge';
+import QuickLinksButton from './QuickLinksButton';
 import { useSmartLocation } from '../hooks/useSmartLocation';
 import { formatFullTimestamp, formatRelativeTimeShort } from '../utils/locationStorage';
 
-/** Queue badge + relative time + landmark pin + theme icon. */
+/** Queue badge + relative time + landmark pin + theme + quick links. */
 function HeaderActions({ compact = false }) {
-  const { location, hasLocation } = useSmartLocation();
+  const { location, hasLocation, locationMode } = useSmartLocation();
   const [showFullTime, setShowFullTime] = useState(false);
   const [, setTick] = useState(0);
 
@@ -27,6 +28,11 @@ function HeaderActions({ compact = false }) {
   return (
     <div className={`header-actions ${compact ? 'header-actions-compact' : ''}`}>
       <QueueStatusBadge />
+      {locationMode === 'live' && (
+        <span className="location-mode-live-hint" title="每次記帳、行事曆、記車位會先實時 GPS">
+          實時
+        </span>
+      )}
       {hasLocation && (
         <button
           type="button"
@@ -39,6 +45,7 @@ function HeaderActions({ compact = false }) {
       )}
       <LocationPinButton compact={compact} />
       <ThemeToggle compact={compact} />
+      <QuickLinksButton compact={compact} />
     </div>
   );
 }

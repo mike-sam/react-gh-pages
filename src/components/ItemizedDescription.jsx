@@ -333,7 +333,12 @@ const ItemizedDescription = ({ onChange, initialValue = '', totalAmount = 0, onI
       {/* 项目明细在下方，添加滚动容器 */}
       <div className="items-container">
         <div className="items-header">
-          <div className="item-name-header">名称</div>
+          <div className="item-name-header">
+            <span>名称</span>
+            <button type="button" className="add-item-btn" onClick={addNewItem}>
+              + 添加明細
+            </button>
+          </div>
           <div className="item-price-header">单价</div>
           <div className="item-qty-header">数量</div>
           <div className="item-subtotal-header">小计</div>
@@ -396,12 +401,7 @@ const ItemizedDescription = ({ onChange, initialValue = '', totalAmount = 0, onI
             </button>
           </div>
         ))}
-        
-        <button type="button" className="add-item-btn" onClick={addNewItem}>
-          + 添加明細
-        </button>
-        
-        
+
         {(items?.length ?? 0) > 0 && (
           <div className="items-summary">
             <div className="items-total">

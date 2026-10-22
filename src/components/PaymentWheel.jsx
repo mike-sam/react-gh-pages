@@ -15,7 +15,7 @@ function PaymentWheel({ categorized, paymentMethod, setPaymentMethod, onDoubleSe
   const swipeConsumedRef = useRef(false);
 
   const payCat = useMemo(() => {
-    if (!paymentMethod) return 'Cash';
+    if (!paymentMethod) return '';
     for (const cat of CAT_ORDER) {
       if ((categorized[cat] || []).some((o) => o.card_num === paymentMethod)) return cat;
     }
@@ -34,7 +34,7 @@ function PaymentWheel({ categorized, paymentMethod, setPaymentMethod, onDoubleSe
   const switchCat = (dir) => {
     const available = CAT_ORDER.filter((c) => (categorized[c] || []).length > 0);
     if (!available.length) return;
-    const idx = Math.max(0, available.indexOf(payCat));
+    const idx = payCat ? Math.max(0, available.indexOf(payCat)) : -1;
     const next = available[(idx + dir + available.length) % available.length];
     const list = categorized[next] || [];
     setPaymentMethod(list[0]?.card_num || '');
@@ -137,27 +137,37 @@ function PaymentWheel({ categorized, paymentMethod, setPaymentMethod, onDoubleSe
   }, []);
 
   return (
-    <div className="payment-wheel" ref={rootRef}>
+    <div className={`payment-wheel${!paymentMethod ? ' is-incomplete' : ''}`} ref={rootRef}>
       <div className="payment-wheel-catbar">
         <button type="button" className="payment-wheel-cat-nav" onClick={onNavClick(-1)}>
           ‹
         </button>
-        <span className="payment-wheel-cat-label">{payCat}</span>
+        <span className="payment-wheel-cat-label">{paymentMethod ? payCat : '請選擇'}</span>
         <button type="button" className="payment-wheel-cat-nav" onClick={onNavClick(1)}>
           ›
         </button>
       </div>
-      <WheelPicker
-        key={payCat}
-        className="payment-wheel-options"
-        axis="y"
-        options={options.length ? options : [{ value: '', label: '—' }]}
-        value={paymentMethod || options[0]?.value || ''}
-        onChange={setPaymentMethod}
-        onDoubleSelect={onDoubleSelect}
-        infinite={options.length > 2}
-        ariaLabel="付款方式"
-      />
+      {paymentMethod ? (
+        <WheelPicker
+          key={payCat}
+          className="payment-wheel-options"
+          axis="y"
+          options={options.length ? options : [{ value: '', label: '—' }]}
+          value={paymentMethod}
+          onChange={setPaymentMethod}
+          onDoubleSelect={onDoubleSelect}
+          infinite={options.length > 2}
+          ariaLabel="付款方式"
+        />
+      ) : (
+        <button
+          type="button"
+          className="payment-wheel-placeholder"
+          onClick={() => onDoubleSelect?.()}
+        >
+          請選擇
+        </button>
+      )}
     </div>
   );
 }

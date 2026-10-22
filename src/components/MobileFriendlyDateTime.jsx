@@ -1,9 +1,25 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import WheelPicker from './WheelPicker';
+import { useHistoryOverlay } from '../hooks/useHistoryOverlay';
 
 const HOUR_ORDER = [12, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
 
-const MobileFriendlyDateTime = ({ value = new Date(), onChange }) => {
+const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+const formatCompactDateTime = (date) => {
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${MONTHS_SHORT[date.getMonth()]} ${date.getDate()} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+};
+
+const MobileFriendlyDateTime = ({
+  value = new Date(),
+  onChange,
+  title = '編輯時間',
+  hideTrigger = false,
+  autoOpen = false,
+  onDismiss,
+  compact = false,
+}) => {
   const [isEditing, setIsEditing] = useState(false);
   const [tempDate, setTempDate] = useState(value);
   const snapshotRef = useRef(null);
@@ -16,7 +32,7 @@ const MobileFriendlyDateTime = ({ value = new Date(), onChange }) => {
 
   const applyTemp = (next) => {
     setTempDate(next);
-    if (isEditing) onChange?.(new Date(next));
+    if (isEditing && !hideTrigger) onChange?.(new Date(next));
   };
 
   const patchDate = (mutator) => {
@@ -236,28 +252,50 @@ const MobileFriendlyDateTime = ({ value = new Date(), onChange }) => {
     setIsEditing(true);
   };
 
+  useEffect(() => {
+    if (!autoOpen || isEditing) return undefined;
+    openEditor();
+    return undefined;
+    // open once when autoOpen turns on
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoOpen]);
+
   const handleConfirm = () => {
     onChange(new Date(tempDate));
     setIsEditing(false);
     snapshotRef.current = null;
+    onDismiss?.();
   };
 
   const handleCancel = () => {
-    if (snapshotRef.current) onChange(new Date(snapshotRef.current));
+    if (!hideTrigger && snapshotRef.current) onChange(new Date(snapshotRef.current));
     setTempDate(snapshotRef.current || value);
     setIsEditing(false);
     snapshotRef.current = null;
+    onDismiss?.();
   };
+
+  useHistoryOverlay(isEditing, handleCancel);
 
   const dateLabel = `${tempDate.getFullYear()}-${String(tempDate.getMonth() + 1).padStart(2, '0')}-${String(tempDate.getDate()).padStart(2, '0')} ${getDayOfWeekShort(tempDate)}`;
 
+  if (hideTrigger && !isEditing) return null;
+
   return (
     <div className="mobile-datetime-picker">
-      <button type="button" className="datetime-inline-btn" onClick={openEditor}>
-        <span className="action-icon">⏰</span>
-        <span className="action-name">編輯時間</span>
-        <span className="datetime-inline-value">{formatDisplayDateTime(value)}</span>
-      </button>
+      {!hideTrigger && (
+        <button
+          type="button"
+          className={`datetime-inline-btn${compact ? ' is-compact' : ''}`}
+          onClick={openEditor}
+        >
+          {!compact && <span className="action-icon">⏰</span>}
+          <span className="action-name">{title}</span>
+          <span className="datetime-inline-value">
+            {compact ? formatCompactDateTime(value) : formatDisplayDateTime(value)}
+          </span>
+        </button>
+      )}
 
       {isEditing && (
         <div
@@ -268,7 +306,7 @@ const MobileFriendlyDateTime = ({ value = new Date(), onChange }) => {
         >
           <div className="datetime-editor" onClick={(e) => e.stopPropagation()}>
             <div className="editor-header">
-              <h4>編輯時間</h4>
+              <h4>{title}</h4>
               <button type="button" className="close-btn" onClick={handleCancel}>
                 ×
               </button>

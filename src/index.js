@@ -8,6 +8,7 @@ import { ThemeProvider } from './context/ThemeContext';
 import { QueueProvider } from './context/QueueContext';
 import { FloatingStackProvider } from './context/FloatingStackContext';
 import { registerSW } from './utils/registerSW';
+import { ensureAppBootstrap } from './utils/appBootstrap';
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(
@@ -25,6 +26,7 @@ root.render(
 );
 
 registerSW();
+ensureAppBootstrap();
 
 // If you want to start measuring performance in your app, pass a function
 // to log results (for example: reportWebVitals(console.log))

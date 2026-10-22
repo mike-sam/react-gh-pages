@@ -1,6 +1,7 @@
 import React from 'react';
 import HeaderActions from '../components/HeaderActions';
 import EntryUrlExamples from '../components/EntryUrlExamples';
+import SelfmanageMark from '../brand/SelfmanageMark';
 import { forceReload } from '../utils/forceReload';
 import { hrefFor, ROUTES } from '../utils/routing';
 import '../App.css';
@@ -10,14 +11,14 @@ const ACTIONS = [
     path: ROUTES.EXPENSE,
     icon: '🧾',
     title: '記帳',
-    desc: '單筆記一筆，或排程房租／貸款／已知單次（到期才入帳）',
+    desc: '單筆或排程入帳。URL 參數見內頁 ?',
     direct: '#/expense',
   },
   {
     path: ROUTES.CALENDAR,
     icon: '📅',
     title: '行事曆軌跡',
-    desc: '記錄行程 / 追加日誌（iOS Shortcuts 或 Apps Script）',
+    desc: '記錄行程軌跡。URL 參數見內頁 ?',
     direct: '#/calendar',
   },
   {
@@ -44,6 +45,13 @@ function EntryPage() {
       </div>
 
       <div className="entry-hero">
+        <div className="entry-brand">
+          <SelfmanageMark size={44} className="entry-brand-mark" />
+          <div>
+            <p className="entry-brand-name">Self-Manage Tools</p>
+            <p className="entry-brand-aka">自理工具</p>
+          </div>
+        </div>
         <h1 className="entry-hero-title">要做什麼？</h1>
         <p className="entry-hero-sub">選一項開始。也可直接用專屬網址開啟單一功能。</p>
       </div>

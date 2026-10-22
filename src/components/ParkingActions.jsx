@@ -6,16 +6,22 @@ import {
   DEFAULT_CAR_PLATES,
   formatFullTimestamp,
   formatRelativeTime,
+  applyParkedByCar,
   isParkedFetchFresh,
   loadParkedFetchAt,
   loadParkedForCar,
   loadSelectedCarPlate,
   markParkedFetched,
-  markParkedFetchedMany,
+  parkedDtoToLocal,
   PARKED_FETCH_TTL_MS,
   saveParkedForCar,
   saveSelectedCarPlate,
 } from '../utils/locationStorage';
+import {
+  ensureAppBootstrap,
+  isBootstrapAttemptCooling,
+  subscribeAppBootstrap,
+} from '../utils/appBootstrap';
 import { DEFAULT_MAP_CENTER } from '../utils/mapDefaults';
 import ParkingMapPreview from './ParkingMapPreview';
 
@@ -39,24 +45,12 @@ function formatCoordPair(lat, lng) {
   return `${Number(lat).toFixed(5)}, ${Number(lng).toFixed(5)}`;
 }
 
-function parkedDtoToLocal(dto, plateFallback) {
-  if (!dto || typeof dto.lat !== 'number' || typeof dto.lng !== 'number') return null;
-  const plate = (dto.carPlate || plateFallback || '').toString().trim().toUpperCase();
-  return {
-    lat: dto.lat,
-    lng: dto.lng,
-    label: dto.name || dto.label || '',
-    accuracy: dto.accuracy ?? null,
-    updatedAt: dto.timestampMs || Date.parse(String(dto.timestamp || '').replace(' ', 'T')) || Date.now(),
-    carPlate: plate,
-  };
-}
-
 /**
  * Simple parking: pick car → drag pin on inline map → save.
  */
 function ParkingActions() {
-  const { location: smartLoc, refreshLocation, hasLocation } = useSmartLocation();
+  const { location: smartLoc, refreshLocation, hasLocation, locationMode, resolveForAction } =
+    useSmartLocation();
   const { enqueueAndSend } = useOfflineQueue();
   const [presetPlates] = useState(DEFAULT_CAR_PLATES);
   const [plateMode, setPlateMode] = useState(() => {
@@ -172,9 +166,23 @@ function ParkingActions() {
         return;
       }
 
+      if (!force && isBootstrapAttemptCooling()) {
+        const existing = loadParkedForCar(plate);
+        setMapLocked(false);
+        setSyncStatus(existing ? 'cached' : 'empty');
+        setSyncNote(
+          existing
+            ? '稍早已向雲端查過，先用本機快取 · 避免重整刷爆額度'
+            : '稍早已向雲端查過 · 點「重新撈取」才會再打 GAS'
+        );
+        return;
+      }
+
       setSyncStatus('loading');
       setSyncNote(force ? `正在重新撈取 ${plate}…` : `正在讀取 ${plate} 的車位…`);
-      setMapLocked(true);
+      const existingLocal = loadParkedForCar(plate);
+      if (force && !existingLocal) setMapLocked(true);
+      else setMapLocked(false);
 
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort('timeout'), FETCH_TIMEOUT_MS);
@@ -218,41 +226,37 @@ function ParkingActions() {
     [applyCloudParked]
   );
 
-  // Prefetch all plates once per session if any default plate is stale
+  // Background only: bootstrap / bulk must not block map or save
   useEffect(() => {
     if (bulkPrefetchDone.current) return undefined;
-    const needsBulk = DEFAULT_CAR_PLATES.some((p) => !isParkedFetchFresh(p));
-    if (!needsBulk) {
-      bulkPrefetchDone.current = true;
-      return undefined;
-    }
+    bulkPrefetchDone.current = true;
     let cancelled = false;
-    (async () => {
-      try {
-        const url = `${API_ENDPOINTS.PARK_LOCATION}?action=getParkedLocations`;
-        const res = await fetch(url);
-        if (!res.ok) return;
-        const data = await res.json();
-        if (cancelled || !data?.success || !data.byCar) return;
-        const plates = [];
-        Object.entries(data.byCar).forEach(([plate, dto]) => {
-          const local = parkedDtoToLocal(dto, plate);
-          if (!local) return;
-          plates.push(plate);
-          const existing = loadParkedForCar(plate);
-          if (!existing || local.updatedAt >= (existing.updatedAt || 0)) {
-            saveParkedForCar(plate, local);
-          }
-        });
-        markParkedFetchedMany([...new Set([...plates, ...DEFAULT_CAR_PLATES])]);
-        bulkPrefetchDone.current = true;
-        if (!cancelled) setTick((n) => n + 1);
-      } catch (err) {
-        console.warn('getParkedLocations failed', err);
-      }
-    })();
+    const unsub = subscribeAppBootstrap(() => {
+      if (!cancelled) setTick((n) => n + 1);
+    });
+    ensureAppBootstrap().then((result) => {
+      if (cancelled) return;
+      setTick((n) => n + 1);
+      if (result === 'ok' || result === 'cached' || result === 'cooldown') return;
+      if (isBootstrapAttemptCooling()) return;
+      if (DEFAULT_CAR_PLATES.every((p) => isParkedFetchFresh(p))) return;
+      (async () => {
+        try {
+          const url = `${API_ENDPOINTS.PARK_LOCATION}?action=getParkedLocations`;
+          const res = await fetch(url);
+          if (!res.ok) return;
+          const data = await res.json();
+          if (cancelled || !data?.success || !data.byCar) return;
+          applyParkedByCar(data.byCar);
+          if (!cancelled) setTick((n) => n + 1);
+        } catch (err) {
+          console.warn('getParkedLocations failed', err);
+        }
+      })();
+    });
     return () => {
       cancelled = true;
+      unsub();
     };
   }, []);
 
@@ -383,7 +387,7 @@ function ParkingActions() {
     setIsSeeding(true);
     setMessage('');
     try {
-      const coords = await refreshLocation();
+      const coords = await refreshLocation({ slowPromptMs: 3000 });
       setDraft({
         lat: coords.lat,
         lng: coords.lng,
@@ -426,12 +430,25 @@ function ParkingActions() {
     setIsSaving(true);
     setMessage('');
     try {
+      let lat = draft.lat;
+      let lng = draft.lng;
+      if (locationMode === 'live') {
+        const gps = await resolveForAction();
+        const pinMoved =
+          smartLoc &&
+          (Math.abs(draft.lat - smartLoc.lat) > 0.00025 ||
+            Math.abs(draft.lng - smartLoc.lng) > 0.00025);
+        if (gps && !pinMoved) {
+          lat = gps.lat;
+          lng = gps.lng;
+        }
+      }
       const id = Date.now();
       const payload = {
         id,
         action: 'save_parking',
-        latitude: draft.lat,
-        longitude: draft.lng,
+        latitude: lat,
+        longitude: lng,
         accuracy: null,
         label: draft.label || '',
         carPlate: activePlate,
@@ -439,8 +456,8 @@ function ParkingActions() {
       };
 
       const parkedRecord = {
-        lat: draft.lat,
-        lng: draft.lng,
+        lat,
+        lng,
         accuracy: null,
         updatedAt: Date.now(),
         label: draft.label || '',

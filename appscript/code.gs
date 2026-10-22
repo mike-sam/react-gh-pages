@@ -31,6 +31,8 @@ const doGet = (event = {}) => {
       return getParkedLocation(parameter.carPlate);
     case 'getParkedLocations':
       return getParkedLocations();
+    case 'getBootstrap':
+      return getBootstrap();
     case 'saveLocation':
       return saveLocation(data);
     case 'trackCalendar':
@@ -134,20 +136,12 @@ const doPost = (request = {}) => {
   }
 };
 
-function appendLog(row, output_to_logger = false){
-  if (output_to_logger){ Logger.log(JSON.stringify(row)); }
+function appendLog(row, output_to_logger) {
+  if (output_to_logger) { Logger.log(JSON.stringify(row)); }
   var doc = SpreadsheetApp.openById(sheetId);
   var sheet = doc.getSheetByName('Log');
-  try {
-    if(arguments && arguments.callee &&arguments.callee.caller){
-      row.unshift(arguments.callee.caller.name.toString());
-    }
-  } catch(e){
-    row.unshift(JSON.stringify(arguments));
-    row.unshift('Error: ' + e.toString());
-    row.unshift('-');
-  }
-  
+  if (!sheet) return;
+  if (!(row instanceof Array)) row = [row];
   row.unshift(datetimetoYMDHIS(new Date()));
   sheet.appendRow(row);
 }
@@ -658,26 +652,55 @@ function datetimetoYMDHIS(inputDateTime = new Date()){
 /**
  * 获取支付选项
  */
+function getPaymentOptionsMap() {
+  return {
+    'Cash': { key: 'Cash', card_num: 'Cash', bank: 'Cash' },
+    'TnG_eWallet': { key: 'eWallet', card_num: 'TnG', bank: 'TnG' },
+    'GrabPay_eWallet': { key: 'eWallet', card_num: 'GrabPay', bank: 'GrabPay' },
+    'Setel_eWallet': { key: 'eWallet', card_num: 'Setel', bank: 'Setel' },
+    'ShopeePay_eWallet': { key: 'eWallet', card_num: 'ShopeePay', bank: 'ShopeePay' }
+  };
+}
+
 function getPaymentOptions() {
   try {
-    const paymentOptions = {
-      'Cash': { key: 'Cash', card_num: 'Cash', bank: 'Cash' },
-      'TnG_eWallet': { key: 'eWallet', card_num: 'TnG', bank: 'TnG' },
-      'GrabPay_eWallet': { key: 'eWallet', card_num: 'GrabPay', bank: 'GrabPay' },
-      'Setel_eWallet': { key: 'eWallet', card_num: 'Setel', bank: 'Setel' },
-      'ShopeePay_eWallet': { key: 'eWallet', card_num: 'ShopeePay', bank: 'ShopeePay' }
-    };
-    
-    
-    return ContentService.createTextOutput(JSON.stringify(paymentOptions))
-      .setMimeType(ContentService.MimeType.JSON);
+    return jsonOut(getPaymentOptionsMap());
   } catch (error) {
     appendLog(['Error in getPaymentOptions:', error.toString()]);
-    return ContentService.createTextOutput(JSON.stringify({
+    return jsonOut({
       success: false,
       error: error.toString()
-    })).setMimeType(ContentService.MimeType.JSON);
+    });
   }
+}
+
+/**
+ * One GET for small, slowly-changing caches. Skips expense rows / mileage / nearby.
+ */
+function getBootstrap() {
+  var out = {
+    success: true,
+    fetchedAt: new Date().getTime(),
+    paymentOptions: null,
+    parked: { byCar: {} },
+    landmarks: []
+  };
+  try {
+    out.paymentOptions = getPaymentOptionsMap();
+  } catch (e) {
+    out.paymentOptionsError = e.toString();
+  }
+  try {
+    out.parked = { byCar: collectParkedLocationsByCar() };
+  } catch (e) {
+    out.parkedError = e.toString();
+  }
+  try {
+    out.landmarks = collectLandmarkRegions();
+  } catch (e) {
+    out.landmarksError = e.toString();
+  }
+  return jsonOut(out);
 }
 
 /**
@@ -1677,63 +1700,62 @@ function ensureLandmarkRegionSheet() {
   return sheet;
 }
 
+function collectLandmarkRegions() {
+  var sheet = ensureLandmarkRegionSheet();
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return [];
+  var lastCol = Math.max(sheet.getLastColumn(), 7);
+  var values = sheet.getRange(2, 1, lastRow, lastCol).getValues();
+  var regions = [];
+  for (var i = 0; i < values.length; i++) {
+    var row = values[i];
+    var id = (row[0] || '').toString().trim();
+    var name = (row[1] || '').toString().trim();
+    var lat = parseFloat(row[2]);
+    var lng = parseFloat(row[3]);
+    if (!id || !name || isNaN(lat) || isNaN(lng)) continue;
+    var radiusM = parseFloat(row[4]);
+    if (isNaN(radiusM) || radiusM < 10) radiusM = 150;
+    var vertices = [];
+    try {
+      if (row[5]) vertices = JSON.parse(row[5].toString());
+    } catch (e) {
+      vertices = [];
+    }
+    var updatedAt = 0;
+    if (row[6] instanceof Date) updatedAt = row[6].getTime();
+    else if (row[6]) {
+      var parsed = Date.parse(String(row[6]).replace(' ', 'T'));
+      if (!isNaN(parsed)) updatedAt = parsed;
+    }
+    regions.push({
+      id: id,
+      name: name,
+      latitude: lat,
+      longitude: lng,
+      lat: lat,
+      lng: lng,
+      radiusM: radiusM,
+      vertices: Array.isArray(vertices) ? vertices : [],
+      updatedAt: updatedAt || Date.now()
+    });
+  }
+  return regions;
+}
+
 function listLandmarkRegions() {
   try {
-    var sheet = ensureLandmarkRegionSheet();
-    var lastRow = sheet.getLastRow();
-    if (lastRow < 2) {
-      return ContentService.createTextOutput(JSON.stringify({
-        success: true,
-        regions: []
-      })).setMimeType(ContentService.MimeType.JSON);
-    }
-    var lastCol = Math.max(sheet.getLastColumn(), 7);
-    var values = sheet.getRange(2, 1, lastRow, lastCol).getValues();
-    var regions = [];
-    for (var i = 0; i < values.length; i++) {
-      var row = values[i];
-      var id = (row[0] || '').toString().trim();
-      var name = (row[1] || '').toString().trim();
-      var lat = parseFloat(row[2]);
-      var lng = parseFloat(row[3]);
-      if (!id || !name || isNaN(lat) || isNaN(lng)) continue;
-      var radiusM = parseFloat(row[4]);
-      if (isNaN(radiusM) || radiusM < 10) radiusM = 150;
-      var vertices = [];
-      try {
-        if (row[5]) vertices = JSON.parse(row[5].toString());
-      } catch (e) {
-        vertices = [];
-      }
-      var updatedAt = 0;
-      if (row[6] instanceof Date) updatedAt = row[6].getTime();
-      else if (row[6]) {
-        var parsed = Date.parse(String(row[6]).replace(' ', 'T'));
-        if (!isNaN(parsed)) updatedAt = parsed;
-      }
-      regions.push({
-        id: id,
-        name: name,
-        latitude: lat,
-        longitude: lng,
-        lat: lat,
-        lng: lng,
-        radiusM: radiusM,
-        vertices: Array.isArray(vertices) ? vertices : [],
-        updatedAt: updatedAt || Date.now()
-      });
-    }
-    return ContentService.createTextOutput(JSON.stringify({
+    return jsonOut({
       success: true,
-      regions: regions
-    })).setMimeType(ContentService.MimeType.JSON);
+      regions: collectLandmarkRegions()
+    });
   } catch (error) {
     appendLog(['Error in listLandmarkRegions:', error.toString(), error.stack]);
-    return ContentService.createTextOutput(JSON.stringify({
+    return jsonOut({
       success: false,
       error: error.toString(),
       regions: []
-    })).setMimeType(ContentService.MimeType.JSON);
+    });
   }
 }
 
@@ -1923,16 +1945,28 @@ function parseCalendarTimestamp(raw) {
     var n = Number(s);
     return new Date(s.length <= 10 ? n * 1000 : n);
   }
+  // ISO with Z / ±offset is an instant. Do not treat the digits as local wall time
+  // (toISOString() is UTC; naive parse would shift by the script timezone, e.g. -8h).
+  var hasOffset = /[zZ]$/.test(s) || /[+-]\d{2}:?\d{2}$/.test(s.replace(/\.\d+/, ''));
+  if (hasOffset) {
+    var instant = new Date(s);
+    if (!isNaN(instant.getTime())) return instant;
+  }
   var m = s.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/);
   if (m) {
-    return new Date(
-      Number(m[1]),
-      Number(m[2]) - 1,
-      Number(m[3]),
-      Number(m[4]),
-      Number(m[5]),
-      Number(m[6])
-    );
+    var naive = m[1] + '-' + m[2] + '-' + m[3] + ' ' + m[4] + ':' + m[5] + ':' + m[6];
+    try {
+      return Utilities.parseDate(naive, Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss');
+    } catch (parseErr) {
+      return new Date(
+        Number(m[1]),
+        Number(m[2]) - 1,
+        Number(m[3]),
+        Number(m[4]),
+        Number(m[5]),
+        Number(m[6])
+      );
+    }
   }
   var d = new Date(s);
   if (!isNaN(d.getTime())) return d;
@@ -2035,6 +2069,54 @@ function findEventsByFirstLine(calendar, marker, when) {
   for (var i = 0; i < events.length; i++) {
     if (descriptionFirstLine(events[i].getDescription()) === marker) {
       out.push(events[i]);
+    }
+  }
+  return out;
+}
+
+function eventIdKey(event) {
+  try {
+    return String(event.getId());
+  } catch (e) {
+    return '';
+  }
+}
+
+function mergeCalendarEvents(primary, extra) {
+  var seen = {};
+  var out = [];
+  function add(list) {
+    if (!list) return;
+    for (var i = 0; i < list.length; i++) {
+      var key = eventIdKey(list[i]);
+      if (key && seen[key]) continue;
+      if (key) seen[key] = true;
+      out.push(list[i]);
+    }
+  }
+  add(primary);
+  add(extra);
+  return out;
+}
+
+/**
+ * Timed events happening at `when` (start <= when <= end).
+ * Includes pre-planned meetings that were never marked **start**.
+ * Skips all-day, already **end** / **home**.
+ */
+function findLiveTimedEvents(calendar, when) {
+  var from = new Date(when.getTime() - CALENDAR_LOOKBACK_MS);
+  var to = new Date(when.getTime() + CALENDAR_LOOKAHEAD_MS);
+  var events = calendar.getEvents(from, to);
+  var t = when.getTime();
+  var out = [];
+  for (var i = 0; i < events.length; i++) {
+    var ev = events[i];
+    if (ev.isAllDayEvent && ev.isAllDayEvent()) continue;
+    var first = descriptionFirstLine(ev.getDescription());
+    if (first === CALENDAR_END_MARKER || first === CALENDAR_HOME_MARKER) continue;
+    if (ev.getStartTime().getTime() <= t && ev.getEndTime().getTime() >= t) {
+      out.push(ev);
     }
   }
   return out;
@@ -2147,7 +2229,7 @@ function eventSummaries(events) {
 
 /**
  * URL / JSON:
- * { action: 'trackCalendar', op, title, prefix, timestamp, lat, lng, endExisting, startHome, all }
+ * { action: 'trackCalendar', op, title, prefix, timestamp, lat, lng, endExisting, startHome, all, endAny }
  */
 function handleCalendarTrack(data) {
   try {
@@ -2165,10 +2247,13 @@ function handleCalendarTrack(data) {
     var endExisting = calendarFlag(data.endExisting, true);
     var startHome = calendarFlag(data.startHome, false);
     var all = calendarFlag(data.all, false);
+    var endAny = calendarFlag(data.endAny, false);
     var ts = formatCalendarStamp(when);
-    var calendar = CalendarApp.getDefaultCalendar();
+    var calendar = openTrackingCalendar();
     var starts = findEventsByFirstLine(calendar, CALENDAR_START_MARKER, when);
     var homes = findEventsByFirstLine(calendar, CALENDAR_HOME_MARKER, when);
+    var liveEvents = findLiveTimedEvents(calendar, when);
+    var appendable = mergeCalendarEvents(starts, liveEvents);
     var windowEvents = calendar.getEvents(
       new Date(when.getTime() - CALENDAR_LOOKBACK_MS),
       new Date(when.getTime() + CALENDAR_LOOKAHEAD_MS)
@@ -2178,7 +2263,7 @@ function handleCalendarTrack(data) {
       var resultCheck = {
         success: true,
         mode: 'check',
-        starts: eventSummaries(starts),
+        starts: eventSummaries(appendable),
         homes: eventSummaries(homes)
       };
       return calendarJson(resultCheck);
@@ -2193,7 +2278,9 @@ function handleCalendarTrack(data) {
         return calendarJson(result);
       }
       closeEvents(homes, when, 'end', placeName, lat, lng);
-      if (endExisting) {
+      if (endAny) {
+        closeEvents(mergeCalendarEvents(starts, liveEvents), when, 'end', placeName, lat, lng);
+      } else if (endExisting) {
         closeEvents(starts, when, 'end', placeName, lat, lng);
       }
       var createdStart = createMarkedEvent(
@@ -2228,9 +2315,9 @@ function handleCalendarTrack(data) {
         appendLog(['Calendar append skipped (duplicate):', ts, prefix]);
         return calendarJson(result);
       }
-      var targets = starts;
+      var targets = appendable;
       if (!all) {
-        var primary = pickPrimaryEvent(starts, when, title);
+        var primary = pickPrimaryEvent(appendable, when, title);
         targets = primary ? [primary] : [];
       }
       if (!targets.length) {
@@ -2263,7 +2350,16 @@ function handleCalendarTrack(data) {
       var logLine = buildCalendarLogLine(prefix, placeName, lat, lng, when);
       for (var a = 0; a < targets.length; a++) {
         var ev = targets[a];
-        var nextDesc = appendDescriptionLine(ev.getDescription() || '', logLine);
+        var nextDesc = ev.getDescription() || '';
+        var firstLine = descriptionFirstLine(nextDesc);
+        if (
+          firstLine !== CALENDAR_START_MARKER &&
+          firstLine !== CALENDAR_END_MARKER &&
+          firstLine !== CALENDAR_HOME_MARKER
+        ) {
+          nextDesc = setFirstLineMarker(nextDesc, CALENDAR_START_MARKER);
+        }
+        nextDesc = appendDescriptionLine(nextDesc, logLine);
         ev.setDescription(nextDesc);
         extendEventEnd(ev, when);
         applyEventLocation(ev, placeName, lat, lng);
@@ -2369,9 +2465,39 @@ function handleCalendarTrack(data) {
     appendLog(['Error in handleCalendarTrack:', error.toString(), error.stack]);
     return calendarJson({
       success: false,
-      error: error.toString()
+      error: calendarAuthHint(error)
     });
   }
+}
+
+function openTrackingCalendar() {
+  try {
+    return CalendarApp.getDefaultCalendar();
+  } catch (err) {
+    throw new Error(calendarAuthHint(err));
+  }
+}
+
+function calendarAuthHint(error) {
+  var msg = error ? error.toString() : '';
+  if (/does not have permission|auth\/calendar/i.test(msg)) {
+    return (
+      'Calendar not authorized. In the Apps Script editor: run authorizeCalendar(), ' +
+      'grant Google Calendar access, then Deploy → Manage deployments → pencil → Version: New. ' +
+      'Original: ' + msg
+    );
+  }
+  return msg;
+}
+
+/**
+ * Run once in the Apps Script editor (not via URL).
+ * Accept Calendar permission, then create a new Web App version.
+ */
+function authorizeCalendar() {
+  var cal = CalendarApp.getDefaultCalendar();
+  Logger.log('Calendar authorized: ' + cal.getName() + ' / ' + cal.getId());
+  return cal.getName();
 }
 
 /**
@@ -2482,34 +2608,32 @@ function getParkedLocation(carPlate) {
  * GET ?action=getParkedLocations
  * Latest parked location per car plate.
  */
+function collectParkedLocationsByCar() {
+  var meta = openParkedLocationSheet();
+  if (!meta.sheet || meta.lastRow < 2 || meta.lastCol < 1) return {};
+  var values = meta.sheet.getRange(2, 1, meta.lastRow, meta.lastCol).getValues();
+  var byCar = {};
+  for (var r = 0; r < values.length; r++) {
+    var dto = rowToParkedDto(values[r], meta.col);
+    if (!dto || !dto.carPlate) continue;
+    byCar[dto.carPlate] = dto;
+  }
+  return byCar;
+}
+
 function getParkedLocations() {
   try {
-    var meta = openParkedLocationSheet();
-    if (!meta.sheet || meta.lastRow < 2 || meta.lastCol < 1) {
-      return ContentService.createTextOutput(JSON.stringify({
-        success: true,
-        byCar: {}
-      })).setMimeType(ContentService.MimeType.JSON);
-    }
-    var values = meta.sheet.getRange(2, 1, meta.lastRow, meta.lastCol).getValues();
-    var byCar = {};
-    // Scan top→bottom so later rows overwrite → latest wins
-    for (var r = 0; r < values.length; r++) {
-      var dto = rowToParkedDto(values[r], meta.col);
-      if (!dto || !dto.carPlate) continue;
-      byCar[dto.carPlate] = dto;
-    }
-    return ContentService.createTextOutput(JSON.stringify({
+    return jsonOut({
       success: true,
-      byCar: byCar
-    })).setMimeType(ContentService.MimeType.JSON);
+      byCar: collectParkedLocationsByCar()
+    });
   } catch (error) {
     appendLog(['Error in getParkedLocations:', error.toString(), error.stack]);
-    return ContentService.createTextOutput(JSON.stringify({
+    return jsonOut({
       success: false,
       error: error.toString(),
       byCar: {}
-    })).setMimeType(ContentService.MimeType.JSON);
+    });
   }
 }
 

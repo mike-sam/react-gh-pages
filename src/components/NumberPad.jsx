@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react';
 
 /**
- * Compact number pad — reveals inline (not modal) on field tap.
- * Once open, stays until resetKey changes (category switch / submit clear).
+ * Compact number pad — tap the field to show or hide.
+ * Closes when resetKey changes (category switch / submit clear).
+ * Backspace is always bottom-right. 清空 clears the field.
  */
 const NumberPad = ({
   value,
@@ -12,6 +13,7 @@ const NumberPad = ({
   allowDecimal = false,
   disabled = false,
   resetKey = '',
+  onReset,
 }) => {
   const [displayValue, setDisplayValue] = useState(value || '');
   const [open, setOpen] = useState(false);
@@ -35,15 +37,21 @@ const NumberPad = ({
   };
 
   const handleBackspace = () => emit(displayValue.slice(0, -1));
-  const handleClear = () => emit('');
 
-  const openPad = () => {
-    if (!disabled) setOpen(true);
+  const hasValue = String(displayValue || '').trim() !== '';
+
+  const handleReset = () => {
+    emit('');
+    if (onReset) onReset();
+  };
+
+  const togglePad = () => {
+    if (!disabled) setOpen((v) => !v);
   };
 
   const keys = allowDecimal
     ? ['1', '2', '3', '4', '5', '6', '7', '8', '9', '.', '0', '⌫']
-    : ['1', '2', '3', '4', '5', '6', '7', '8', '9', '⌫', '0', ''];
+    : ['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', '⌫'];
 
   return (
     <div
@@ -51,23 +59,24 @@ const NumberPad = ({
     >
       <div className="number-pad-head">
         {label ? <label className="unified-label">{label}</label> : <span />}
-        {open && (
-          <button type="button" className="section-clear-btn" onClick={handleClear} title="清空">
-            清空
-          </button>
-        )}
+        <button
+          type="button"
+          className={`section-clear-btn${hasValue ? ' is-filled' : ''}`}
+          onClick={handleReset}
+          title="清空"
+        >
+          清空
+        </button>
       </div>
       <input
         type="text"
         value={displayValue}
         readOnly
-        onFocus={openPad}
-        onClick={openPad}
+        onClick={togglePad}
         placeholder={placeholder}
         className={`unified-input number-display${open ? ' is-active' : ''}`}
         inputMode="none"
         disabled={disabled}
-        aria-expanded={open}
       />
 
       <div

@@ -47,7 +47,7 @@ export function parseLatLong(raw) {
 /**
  * cash / eWallet: exact match on card_num / shortname / bank.
  * Card: 4-digit → last4 match.
- * Missing → Cash.
+ * Missing → null（頁面顯示「請選擇」，不預設 Cash）。
  * Ambiguous / no match → null (caller leaves for user).
  */
 export function resolvePaymentMethod(raw, paymentOptions) {
@@ -55,7 +55,7 @@ export function resolvePaymentMethod(raw, paymentOptions) {
   const cash =
     list.find((o) => String(o.card_num).toLowerCase() === 'cash')?.card_num || 'Cash';
 
-  if (raw == null || String(raw).trim() === '') return cash;
+  if (raw == null || String(raw).trim() === '') return null;
 
   const q = String(raw).trim();
   const lower = q.toLowerCase();
@@ -124,7 +124,12 @@ export function parseExpenseQuickDraft(paymentOptions) {
   const paymentMethod = resolvePaymentMethod(paymentRaw, paymentOptions);
   const paymentUnresolved = paymentProvided && paymentMethod == null;
   const fieldsReady = Boolean(
-    cat && subcat && amountRaw && amountRaw !== '0' && !paymentUnresolved
+    cat &&
+      subcat &&
+      amountRaw &&
+      amountRaw !== '0' &&
+      paymentMethod &&
+      !paymentUnresolved
   );
 
   return {
@@ -143,6 +148,18 @@ export function parseExpenseQuickDraft(paymentOptions) {
     readyToSubmit: Boolean(silent && fieldsReady),
   };
 }
+
+export const EXPENSE_URL_PARAMS = [
+  { name: 'cat', required: 'required', example: '餐饮美食', note: '主分類' },
+  { name: 'subcat', required: 'required', example: '午餐', note: '子分類。別名 txt / tag' },
+  { name: 'amount', required: 'required', example: '28.50', note: '金額' },
+  { name: 'paymentmethod', required: '建議', example: 'Cash', note: '別名 payment。不帶則請選擇，不預設 Cash' },
+  { name: 'desc', required: 'optional', example: '公司樓下', note: '備註。別名 remark' },
+  { name: 'currency', required: 'optional', example: 'MYR', note: '預設 MYR' },
+  { name: 'timestamp', required: 'optional', example: '2026-10-22 21:00:00', note: '記帳時間' },
+  { name: 'latlong', required: 'optional', example: '3.14,101.68', note: '座標，可加 ,Label' },
+  { name: 'silent', required: 'optional', example: 'true', note: '必填齊全才自動送出' },
+];
 
 /** Strip search + hash query; keep route path e.g. #/expense */
 export function clearExpenseQuickQuery() {

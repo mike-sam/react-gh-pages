@@ -26,6 +26,8 @@ import {
   upsertLandmarkRegionLocal,
   upsertLandmarkRegionRemote,
 } from '../utils/landmarkRegions';
+import { ensureAppBootstrap, isBootstrapAttemptCooling } from '../utils/appBootstrap';
+import { useHistoryOverlay } from '../hooks/useHistoryOverlay';
 
 const MAX_ZOOM = 19;
 const DEFAULT_ZOOM = 16;
@@ -168,6 +170,8 @@ function LocationMapPickerModal({
   onSave,
   onRefreshGps,
 }) {
+  useHistoryOverlay(open, onClose);
+
   const hasInitial =
     typeof initialLat === 'number' && typeof initialLng === 'number';
   const [position, setPosition] = useState(() => [
@@ -230,8 +234,11 @@ function LocationMapPickerModal({
   }, []);
 
   const syncFromCloud = useCallback(async ({ force = false } = {}) => {
-    if (!force && isLandmarkFetchFresh()) {
-      setSyncNote('地標快取仍有效（1h）');
+    if (!force) ensureAppBootstrap();
+    if (!force && (isLandmarkFetchFresh() || isBootstrapAttemptCooling())) {
+      setSyncNote(
+        isLandmarkFetchFresh() ? '地標快取仍有效（1h）' : '稍早已向雲端查過，先用本機地標'
+      );
       return loadLandmarkRegions();
     }
     setSyncing(true);

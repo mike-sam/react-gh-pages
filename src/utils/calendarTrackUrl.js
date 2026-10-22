@@ -4,8 +4,145 @@ export const CALENDAR_TITLES = ['Work', 'Commute', 'Driving', 'Trip', 'Sleep'];
 
 export const CALENDAR_PREFIXES = ['start', 'end', 'public transportation'];
 
+/** Query contract for GAS GET/POST. Shown in the calendar ? help panel. */
+export const CALENDAR_TRACK_PARAMS = [
+  {
+    name: 'action',
+    required: 'required',
+    example: 'trackCalendar',
+    note: '固定。check 可用 check_current',
+  },
+  {
+    name: 'op',
+    required: 'required',
+    example: 'start, append, end, home',
+    note: '按鈕對應 append / start / start+endAny / end / end+all。home 仍可用 URL',
+  },
+  {
+    name: 'title',
+    required: 'start 建議',
+    example: 'Work',
+    note: 'Work / Commute / Driving / Trip / Sleep，或其他自訂。缺則 Trip',
+  },
+  {
+    name: 'prefix',
+    required: 'optional',
+    example: 'public transportation',
+    note: '軌跡標註。空白 → [-no input-]',
+  },
+  {
+    name: 'timestamp',
+    required: '建議',
+    example: '2026-06-08 07:09:43',
+    note: '本地牆鐘。有則可重送；沒帶用收到當下',
+  },
+  {
+    name: 'lat',
+    required: 'optional',
+    example: '1.3133',
+    note: '與 lng 成對',
+  },
+  {
+    name: 'lng',
+    required: 'optional',
+    example: '103.8630',
+    note: '與 lat 成對',
+  },
+  {
+    name: 'latlong',
+    required: 'optional',
+    example: '1.3133,103.8630',
+    note: '可取代 lat+lng',
+  },
+  {
+    name: 'endExisting',
+    required: 'optional',
+    example: '1',
+    note: '預設 1。start 時 0 可重疊',
+  },
+  {
+    name: 'startHome',
+    required: 'optional',
+    example: '0',
+    note: '預設 0。home 時 1 另開 **home**',
+  },
+  {
+    name: 'all',
+    required: 'optional',
+    example: '0',
+    note: '預設 0。append/end 套用到每個 **start**',
+  },
+  {
+    name: 'endAny',
+    required: 'optional',
+    example: '0',
+    note: '預設 0。start 時 1：結束任何進行中（含既有行程）再開新的',
+  },
+];
+
+/** POST/queue body for trackCalendar (same fields as the GAS URL). */
+export function calendarActionPayload({
+  op,
+  title = '',
+  when,
+  lat = null,
+  lng = null,
+  endExisting = true,
+  all = false,
+  endAny = false,
+  prefix = '',
+  id,
+}) {
+  return {
+    id: id ?? Date.now(),
+    action: 'trackCalendar',
+    op,
+    title: title || '',
+    prefix,
+    timestamp: stampCalendarTimestamp(when instanceof Date ? when : new Date()),
+    latitude: lat ?? null,
+    longitude: lng ?? null,
+    endExisting,
+    startHome: false,
+    all: Boolean(all),
+    endAny: Boolean(endAny),
+  };
+}
+
+/** Description lines GAS writes onto the calendar event. */
+export function buildCalendarTrailPreview({
+  when,
+  prefix = '',
+  lat = null,
+  lng = null,
+  marker = '**start**',
+} = {}) {
+  const prefixPart = String(prefix || '').trim() || '-no input-';
+  const hasCoords =
+    lat != null && lng != null && Number.isFinite(Number(lat)) && Number.isFinite(Number(lng));
+  const maps = hasCoords ? `@http://maps.google.com/maps?q=${lat},${lng}` : '';
+  return {
+    marker,
+    line: `[${stampCalendarTimestamp(when instanceof Date ? when : new Date())}][${prefixPart}]${maps}`,
+  };
+}
+
+/** Local wall clock, no Z — GAS treats this as the script timezone. */
 export function stampCalendarTimestamp(date = new Date()) {
-  return date.toISOString();
+  const pad = (n) => String(n).padStart(2, '0');
+  return (
+    date.getFullYear() +
+    '-' +
+    pad(date.getMonth() + 1) +
+    '-' +
+    pad(date.getDate()) +
+    ' ' +
+    pad(date.getHours()) +
+    ':' +
+    pad(date.getMinutes()) +
+    ':' +
+    pad(date.getSeconds())
+  );
 }
 
 export function calendarTrackEndpoint() {
@@ -31,6 +168,7 @@ export function buildCalendarTrackUrl(params, base = calendarTrackEndpoint()) {
     'endExisting',
     'startHome',
     'all',
+    'endAny',
   ];
   keys.forEach((k) => {
     const v = params?.[k];
@@ -49,7 +187,7 @@ export function buildCalendarTrackUrl(params, base = calendarTrackEndpoint()) {
 }
 
 export function calendarTrackUrlExamples() {
-  const ts = '2026-06-08T07:09:43';
+  const ts = '2026-06-08 07:09:43';
   return [
     {
       title: 'Apple Pay · append',
@@ -73,10 +211,22 @@ export function calendarTrackUrlExamples() {
       },
     },
     {
-      title: '回到家 · home',
-      note: '結束所有 **start**，不自動開 Home',
+      title: 'End+Start · Work',
+      note: '結束任何進行中後開 Work',
       params: {
-        op: 'home',
+        op: 'start',
+        title: 'Work',
+        endExisting: true,
+        endAny: true,
+        timestamp: ts,
+      },
+    },
+    {
+      title: 'End All',
+      note: '結束所有進行中的 **start**',
+      params: {
+        op: 'end',
+        all: true,
         timestamp: ts,
       },
     },

@@ -1,10 +1,11 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useSmartLocation } from '../hooks/useSmartLocation';
 import LocationMapPickerModal from './LocationMapPickerModal';
 
 const CLICK_DELAY_MS = 280;
 
-function PinIcon() {
+export function PinIcon() {
   return (
     <svg
       className="location-pin-glyph"
@@ -23,26 +24,44 @@ function PinIcon() {
 
 /**
  * Landmark pin next to theme toggle.
- * - Gray: no cached location
- * - Red: has location
- * - Single click: open map picker
- * - Double click: GPS refresh
+ * - Single click: choose cache / live GPS / map pick
+ * - Double click: GPS now
  */
 function LocationPinButton({ compact = false }) {
-  const { location, hasLocation, isRefreshing, refreshLocation, setCachedLocation } =
-    useSmartLocation();
+  const {
+    location,
+    hasLocation,
+    isRefreshing,
+    locationMode,
+    refreshLocation,
+    setCachedLocation,
+    setLocationMode,
+  } = useSmartLocation();
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const [flash, setFlash] = useState('');
   const clickTimer = useRef(null);
   const flashTimer = useRef(null);
+  const wrapRef = useRef(null);
 
   const showFlash = (text) => {
     setFlash(text);
     if (flashTimer.current) clearTimeout(flashTimer.current);
-    flashTimer.current = setTimeout(() => setFlash(''), 2200);
+    flashTimer.current = setTimeout(() => setFlash(''), 2400);
   };
 
-  const openPicker = () => setPickerOpen(true);
+  useEffect(() => () => {
+    if (flashTimer.current) clearTimeout(flashTimer.current);
+  }, []);
+
+  useEffect(() => {
+    if (!menuOpen) return undefined;
+    const onPointer = (e) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) setMenuOpen(false);
+    };
+    document.addEventListener('pointerdown', onPointer, true);
+    return () => document.removeEventListener('pointerdown', onPointer, true);
+  }, [menuOpen]);
 
   const handleSingleOrDouble = () => {
     if (clickTimer.current) {
@@ -52,7 +71,7 @@ function LocationPinButton({ compact = false }) {
     }
     clickTimer.current = setTimeout(() => {
       clickTimer.current = null;
-      openPicker();
+      setMenuOpen((v) => !v);
     }, CLICK_DELAY_MS);
   };
 
@@ -63,28 +82,37 @@ function LocationPinButton({ compact = false }) {
       clearTimeout(clickTimer.current);
       clickTimer.current = null;
     }
+    setMenuOpen(false);
     try {
-      await refreshLocation();
+      await refreshLocation({ slowPromptMs: 3000 });
       showFlash('已重新定位');
     } catch {
-      // GPS 失敗不阻擋：打開地圖讓使用者手動點選
       showFlash('GPS 不可用，請在地圖上點選');
-      openPicker();
+      setPickerOpen(true);
     }
   };
 
-  const title = hasLocation
-    ? '已定位 · 單擊修正 · 雙擊重新定位'
-    : '未定位 · 單擊開地圖點選 · 雙擊嘗試 GPS';
+  const pickMode = (mode) => {
+    setLocationMode(mode);
+    setMenuOpen(false);
+    showFlash(mode === 'live' ? '之後每次操作會實時定位' : '之後操作使用快取座標');
+  };
+
+  const title = locationMode === 'live'
+    ? '實時 GPS · 單擊改設定 · 雙擊立即定位'
+    : hasLocation
+      ? '快取定位 · 單擊改設定 · 雙擊立即定位'
+      : '未定位 · 單擊設定 · 雙擊嘗試 GPS';
 
   return (
-    <>
+    <div className="location-pin-wrap" ref={wrapRef}>
       <button
         type="button"
         className={[
           'location-pin-btn',
           compact ? 'location-pin-btn-compact' : '',
           hasLocation ? 'is-located' : 'is-empty',
+          locationMode === 'live' ? 'is-live' : '',
           isRefreshing ? 'is-refreshing' : '',
         ]
           .filter(Boolean)
@@ -93,15 +121,47 @@ function LocationPinButton({ compact = false }) {
         onDoubleClick={handleDoubleClick}
         title={title}
         aria-label={title}
+        aria-expanded={menuOpen}
       >
         <PinIcon />
       </button>
 
-      {flash && (
-        <span className="location-pin-toast" role="status">
-          {flash}
-        </span>
+      {menuOpen && (
+        <div className="location-mode-menu" role="menu">
+          <button
+            type="button"
+            className={`location-mode-item${locationMode === 'cache' ? ' is-active' : ''}`}
+            onClick={() => pickMode('cache')}
+          >
+            使用快取
+          </button>
+          <button
+            type="button"
+            className={`location-mode-item${locationMode === 'live' ? ' is-active' : ''}`}
+            onClick={() => pickMode('live')}
+          >
+            每次操作實時 GPS
+          </button>
+          <button
+            type="button"
+            className="location-mode-item"
+            onClick={() => {
+              setMenuOpen(false);
+              setPickerOpen(true);
+            }}
+          >
+            在地圖上點選…
+          </button>
+        </div>
       )}
+
+      {flash &&
+        createPortal(
+          <div className="app-center-toast" role="status">
+            {flash}
+          </div>,
+          document.body
+        )}
 
       <LocationMapPickerModal
         open={pickerOpen}
@@ -112,10 +172,11 @@ function LocationPinButton({ compact = false }) {
         onRefreshGps={refreshLocation}
         onSave={(next) => {
           setCachedLocation(next);
-          showFlash('定位已儲存');
+          setLocationMode('cache');
+          showFlash('定位已儲存（快取）');
         }}
       />
-    </>
+    </div>
   );
 }
 

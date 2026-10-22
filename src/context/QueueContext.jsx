@@ -6,6 +6,8 @@ import {
   queueLength,
   removeFromQueue,
 } from '../utils/offlineQueue';
+import { stampCalendarTimestamp } from '../utils/calendarTrackUrl';
+import { markBootstrapDirty } from '../utils/appBootstrap';
 
 const QueueContext = createContext(null);
 
@@ -78,7 +80,7 @@ export function QueueProvider({ children }) {
         body.action === 'trackCalendar' &&
         (body.timestamp == null || String(body.timestamp).trim() === '')
       ) {
-        body.timestamp = new Date().toISOString();
+        body.timestamp = stampCalendarTimestamp();
       }
 
       if (signal?.aborted) {
@@ -100,6 +102,7 @@ export function QueueProvider({ children }) {
         await postPayload(body, signal);
         removeFromQueue(id);
         refreshCount();
+        markBootstrapDirty();
         return { queued: false, sent: true };
       } catch (err) {
         const aborted =

@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { FloatingStackItem } from '../context/FloatingStackContext';
 import { hrefFor, ROUTES } from '../utils/routing';
+import { EXPENSE_URL_PARAMS } from '../utils/expenseQuickUrl';
+import HelpParamTable from './HelpParamTable';
 
 /**
  * Demo / test URLs for expense quick-fill.
@@ -98,7 +100,7 @@ function EntryUrlExamples() {
         }}
       >
         {open && (
-          <div className="entry-help-panel" role="dialog" aria-label="URL 測試範例">
+          <div className="entry-help-panel entry-help-panel--wide" role="dialog" aria-label="URL 測試範例">
             <div className="entry-help-panel-head">
               <strong>記帳 URL 測試</strong>
               <span className="entry-help-badge">不上傳 · 無 silent</span>
@@ -106,6 +108,9 @@ function EntryUrlExamples() {
             <p className="entry-help-hint">
               點連結會帶入參數到記帳頁，請自行確認／提交。不會自動送出。
             </p>
+            <h3 className="entry-help-section">參數</h3>
+            <HelpParamTable rows={EXPENSE_URL_PARAMS} />
+            <h3 className="entry-help-section">範例</h3>
             <ul className="entry-help-list">
               {EXAMPLES.map((ex) => {
                 const href = hrefFor(ROUTES.EXPENSE, ex.query);

@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { useHistoryOverlay } from '../hooks/useHistoryOverlay';
 
 /**
  * Searchable picker sheet.
@@ -16,6 +17,8 @@ function PickerModal({
   searchPlaceholder = '搜尋…',
   autoFocusSearch = false,
 }) {
+  useHistoryOverlay(true, onClose);
+
   const [query, setQuery] = useState('');
   const [viewport, setViewport] = useState(() => ({
     height: typeof window !== 'undefined' ? window.innerHeight : 600,

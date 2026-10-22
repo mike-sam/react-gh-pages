@@ -45,5 +45,6 @@ export function stringifyCalendarTrackInput(payload) {
     endExisting: payload.endExisting,
     startHome: payload.startHome,
     all: payload.all,
+    endAny: payload.endAny,
   });
 }

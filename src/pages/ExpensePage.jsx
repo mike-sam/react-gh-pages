@@ -4,10 +4,9 @@ import Remark from '../Remark';
 import Log from '../Log';
 import Output from '../Output';
 import '../App.css';
-import { API_ENDPOINTS, EXPENSE_TAGS } from '../config';
-import MobileFriendlyDateTime from '../components/MobileFriendlyDateTime';
+import { EXPENSE_TAGS } from '../config';
+import ExpenseDateTimeRow from '../components/ExpenseDateTimeRow';
 import { focusElement } from '../utils/keyboardNavigation';
-import QuickLinksButton from '../components/QuickLinksButton';
 import PageChrome from '../components/PageChrome';
 import AmountTripleRow from '../components/AmountTripleRow';
 import TaxAddonStrip, { computeFinalAmount, formatTaxAddonTags } from '../components/TaxAddonStrip';
@@ -16,21 +15,30 @@ import { useOfflineQueue } from '../context/QueueContext';
 import { useSmartLocation } from '../hooks/useSmartLocation';
 import { toMapsUrl } from '../utils/locationStorage';
 import { getBuildVersion } from '../utils/buildInfo';
-import { forceReload } from '../utils/forceReload';
 import {
   loadExpenseHistory,
   pushExpenseHistory,
   clearExpenseHistory,
 } from '../utils/expenseHistory';
 import SectionHead from '../components/SectionHead';
-import { detectPaymentCategory, detectPaymentRegion } from '../utils/paymentCategory';
+import {
+  DEFAULT_PAYMENT_OPTIONS,
+  ensureAppBootstrap,
+  readPaymentOptionsCache,
+  subscribeAppBootstrap,
+} from '../utils/appBootstrap';
 import { useUnsavedGuard } from '../hooks/useUnsavedGuard';
-import { getHashPath, ROUTES } from '../utils/routing';
+import { applyHash, getHashPath, ROUTES } from '../utils/routing';
 import {
   parseExpenseQuickDraft,
   clearExpenseQuickQuery,
   getMergedQueryParams,
 } from '../utils/expenseQuickUrl';
+import { calendarActionPayload } from '../utils/calendarTrackUrl';
+import {
+  applyOptimisticCalendarAction,
+  loadCalendarStatus,
+} from '../utils/calendarStatusCache';
 import { ObligationsPanel } from './ObligationsPage';
 
 function ledgerFromLocation() {
@@ -41,11 +49,11 @@ function ledgerFromLocation() {
 
 function ExpensePage() {
   const { enqueueAndSend } = useOfflineQueue();
-  const { location: smartLoc, mapsUrl, setCachedLocation } = useSmartLocation();
+  const { location: smartLoc, mapsUrl, setCachedLocation, resolveForAction } = useSmartLocation();
   const quickAppliedRef = useRef(false);
   const pendingSilentRef = useRef(false);
   const silentAbortRef = useRef(null);
-  const [paymentsReady, setPaymentsReady] = useState(false);
+  const [paymentsReady] = useState(true);
   /** silent countdown UI: armed | sending | aborted | null */
   const [silentPhase, setSilentPhase] = useState(null);
   const [silentRemainMs, setSilentRemainMs] = useState(0);
@@ -63,6 +71,8 @@ function ExpensePage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [output, setOutput] = useState('');
   const [selectedDateTime, setSelectedDateTime] = useState(new Date());
+  const [eventStart, setEventStart] = useState(null);
+  const [eventEnd, setEventEnd] = useState(null);
   const [paymentMethod, setPaymentMethod] = useState('');
   const [simpleDescription, setSimpleDescription] = useState('');
   const [photos, setPhotos] = useState([]);
@@ -70,13 +80,9 @@ function ExpensePage() {
   const [editingId, setEditingId] = useState(null);
   /** Tax/service addons — do not mutate main amount input */
   const [taxAddons, setTaxAddons] = useState([]);
-  const [paymentOptions, setPaymentOptions] = useState({
-    Cash: { key: 'Cash', card_num: 'Cash' },
-    eWallet1: { key: 'eWallet', card_num: 'TnG' },
-    eWallet2: { key: 'eWallet', card_num: 'GrabPay' },
-    eWallet3: { key: 'eWallet', card_num: 'Setel' },
-    eWallet4: { key: 'eWallet', card_num: 'ShopeePay' },
-  });
+  const [paymentOptions, setPaymentOptions] = useState(
+    () => readPaymentOptionsCache({ allowStale: true }) || DEFAULT_PAYMENT_OPTIONS
+  );
   const [currencyConversions, setCurrencyConversions] = useState([]);
   const [isAmountManuallySet, setIsAmountManuallySet] = useState(false);
   const [itemizedTotal, setItemizedTotal] = useState(0);
@@ -129,70 +135,11 @@ function ExpensePage() {
   };
 
   useEffect(() => {
-    const CACHE_VER = 'v3'; // eWallet detection + MY/SG region
-    const defaults = {
-      Cash: { key: 'Cash', card_num: 'Cash', bank: 'Cash', shortname: 'Cash', region: '' },
-      eWallet1: { key: 'eWallet', card_num: 'TnG', bank: 'TnG', shortname: 'TnG', region: 'MY' },
-      eWallet2: { key: 'eWallet', card_num: 'GrabPay', bank: 'GrabPay', shortname: 'GrabPay', region: 'MY' },
-      eWallet3: { key: 'eWallet', card_num: 'Setel', bank: 'Setel', shortname: 'Setel', region: 'MY' },
-      eWallet4: { key: 'eWallet', card_num: 'ShopeePay', bank: 'ShopeePay', shortname: 'ShopeePay', region: 'MY' },
-    };
-    const fetchPaymentOptions = async () => {
-      const cached = localStorage.getItem('paymentOptions');
-      const cacheTimestamp = localStorage.getItem('paymentOptionsTimestamp');
-      const cacheVer = localStorage.getItem('paymentOptionsVer');
-      const now = Date.now();
-      const ONE_DAY = 24 * 60 * 60 * 1000;
-      try {
-        if (
-          cached &&
-          cacheTimestamp &&
-          cacheVer === CACHE_VER &&
-          now - parseInt(cacheTimestamp, 10) < ONE_DAY
-        ) {
-          setPaymentOptions(JSON.parse(cached));
-          return;
-        }
-        const response = await fetch(API_ENDPOINTS.PAYMENT_OPTIONS);
-        const data = await response.json();
-        const transformedData = Object.entries(data)
-          .filter(([, value]) => value?.card_num)
-          .reduce(
-            (acc, [id, value]) => {
-              const draft = {
-                key: value.key,
-                card_num: value.card_num,
-                bank: value.bank || '',
-                shortname: value.shortname || value.bank || '',
-              };
-              const catKey = detectPaymentCategory(draft, id) || 'Card';
-              const short =
-                value.shortname ||
-                value.bank ||
-                (value.key && !['Cash', 'eWallet', 'Card'].includes(value.key) ? value.key : '');
-              acc[id] = {
-                key: catKey,
-                card_num: value.card_num,
-                bank: value.bank || short,
-                shortname: short,
-                region: detectPaymentRegion({ ...draft, shortname: short }),
-              };
-              return acc;
-            },
-            { ...defaults }
-          );
-        localStorage.setItem('paymentOptions', JSON.stringify(transformedData));
-        localStorage.setItem('paymentOptionsTimestamp', String(now));
-        localStorage.setItem('paymentOptionsVer', CACHE_VER);
-        setPaymentOptions(transformedData);
-      } catch (error) {
-        console.error('Error fetching payment options:', error);
-      } finally {
-        setPaymentsReady(true);
-      }
-    };
-    fetchPaymentOptions();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    ensureAppBootstrap();
+    return subscribeAppBootstrap(() => {
+      const cached = readPaymentOptionsCache({ allowStale: true });
+      if (cached) setPaymentOptions(cached);
+    });
   }, []);
 
   // sessionStorage POST bridge (Shortcuts / external)
@@ -283,6 +230,8 @@ function ExpensePage() {
     setIsAmountManuallySet(false);
     setEditingId(null);
     setSelectedDateTime(new Date());
+    setEventStart(null);
+    setEventEnd(null);
     setTaxAddons([]);
   };
 
@@ -304,6 +253,14 @@ function ExpensePage() {
     setIsAmountManuallySet(true);
     const ts = entry.timestamp_ms || entry.id;
     if (ts) setSelectedDateTime(new Date(Number(ts)));
+    const parseExtra = (raw) => {
+      if (!raw) return null;
+      if (raw instanceof Date && !Number.isNaN(raw.getTime())) return raw;
+      const d = new Date(String(raw).replace(' ', 'T'));
+      return Number.isNaN(d.getTime()) ? null : d;
+    };
+    setEventStart(parseExtra(entry.event_start));
+    setEventEnd(parseExtra(entry.event_end));
     setOutput('已回填，可修改後再提交（同時間戳會覆蓋更新）');
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -339,11 +296,22 @@ function ExpensePage() {
       return false;
     }
 
-    const geo = resolveGeoUrl();
+    let loc = smartLoc;
+    try {
+      loc = (await resolveForAction()) || smartLoc;
+    } catch {
+      loc = smartLoc;
+    }
+    const geo = loc ? toMapsUrl(loc.lat, loc.lng, loc.label || '') : resolveGeoUrl();
     const weekdayNames = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
     // 編輯模式沿用原 id；新筆用當前時間選擇器
     const id = editingId != null ? Number(editingId) : selectedDateTime.getTime();
     const dt = editingId != null ? new Date(Number(editingId)) : selectedDateTime;
+
+    const calStart = eventStart;
+    const calEnd = eventEnd;
+    const calTitle = (input || '').trim() || selectedTag || 'Trip';
+    const shouldStartCalendar = editingId == null && Boolean(calStart && calEnd);
 
     const contents_for_gsheets = {
       id,
@@ -359,11 +327,13 @@ function ExpensePage() {
       tax_tags: formatTaxAddonTags(taxAddons),
       remark,
       geolocation: geo,
-      latitude: smartLoc?.lat ?? null,
-      longitude: smartLoc?.lng ?? null,
+      latitude: loc?.lat ?? smartLoc?.lat ?? null,
+      longitude: loc?.lng ?? smartLoc?.lng ?? null,
       tag: selectedTag,
       currency,
       payment_method: paymentMethod,
+      event_start: eventStart ? formatDateTime(eventStart, 'YMDHIS') : '',
+      event_end: eventEnd ? formatDateTime(eventEnd, 'YMDHIS') : '',
       carPlate,
       mileage,
       tripInfo,
@@ -382,6 +352,8 @@ function ExpensePage() {
       remark,
       currency,
       payment_method: paymentMethod,
+      event_start: eventStart ? formatDateTime(eventStart, 'YMDHIS') : '',
+      event_end: eventEnd ? formatDateTime(eventEnd, 'YMDHIS') : '',
       carPlate,
       mileage,
       tripInfo,
@@ -413,10 +385,58 @@ function ExpensePage() {
         setLog(pushExpenseHistory(historyEntry));
         resetData();
       }
+      if (shouldStartCalendar) {
+        const lat = loc?.lat ?? null;
+        const lng = loc?.lng ?? null;
+        const t0 = Date.now();
+        applyOptimisticCalendarAction(loadCalendarStatus(), {
+          op: 'start',
+          title: calTitle,
+          uiLabel: 'Start New',
+          queued: !result.sent,
+        });
+        applyOptimisticCalendarAction(loadCalendarStatus(), {
+          op: 'end',
+          title: calTitle,
+          uiLabel: 'End',
+          queued: !result.sent,
+        });
+        void (async () => {
+          try {
+            await enqueueAndSend(
+              calendarActionPayload({
+                op: 'start',
+                title: calTitle,
+                when: calStart,
+                lat,
+                lng,
+                endExisting: true,
+                id: t0 + 1,
+              })
+            );
+            await enqueueAndSend(
+              calendarActionPayload({
+                op: 'end',
+                title: calTitle,
+                when: calEnd,
+                lat,
+                lng,
+                id: t0 + 2,
+              })
+            );
+          } catch (err) {
+            console.warn('expense calendar range failed', err);
+          }
+        })();
+      }
       setOutput(
         result.sent
-          ? '已送出'
-          : '目前離線或網路異常，已暫存於本機佇列，稍後自動同步'
+          ? shouldStartCalendar
+            ? '已送出 · 已排入行事曆 Start New'
+            : '已送出'
+          : shouldStartCalendar
+            ? '已暫存佇列 · 含行事曆 Start New'
+            : '目前離線或網路異常，已暫存於本機佇列，稍後自動同步'
       );
       return true;
     } catch (error) {
@@ -428,6 +448,8 @@ function ExpensePage() {
   }, [
     editingId,
     selectedDateTime,
+    eventStart,
+    eventEnd,
     input,
     amount,
     taxAddons,
@@ -444,6 +466,7 @@ function ExpensePage() {
     photos,
     enqueueAndSend,
     mapsUrl,
+    resolveForAction,
   ]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const submitDataRef = useRef(submitData);
@@ -536,6 +559,8 @@ function ExpensePage() {
 
   const clearAmountSection = () => {
     setSelectedDateTime(new Date());
+    setEventStart(null);
+    setEventEnd(null);
     setCurrency('MYR');
     setAmount('');
     setPaymentMethod('');
@@ -571,7 +596,10 @@ function ExpensePage() {
 
   const goLedger = (next) => {
     setLedger(next);
-    window.location.hash = next === 'scheduled' ? '#/expense?tab=scheduled' : '#/expense';
+    applyHash(next === 'scheduled' ? '#/expense?tab=scheduled' : '#/expense', {
+      replace: true,
+      state: window.history.state,
+    });
   };
 
   return (
@@ -635,7 +663,7 @@ function ExpensePage() {
             </button>
           </div>
         )}
-        <div className="step-section">
+        <div className={`step-section${!(selectedTag && String(input || '').trim()) ? ' is-incomplete' : ''}`}>
           <TagSelector
             input={input}
             setInput={setInput}
@@ -650,7 +678,14 @@ function ExpensePage() {
         <div className="step-section amount-block">
           <SectionHead title="時間／金額／付款" onClear={clearAmountSection} />
           <div className="amount-datetime-slot">
-            <MobileFriendlyDateTime value={selectedDateTime} onChange={setSelectedDateTime} />
+            <ExpenseDateTimeRow
+              value={selectedDateTime}
+              onChange={setSelectedDateTime}
+              eventStart={eventStart}
+              setEventStart={setEventStart}
+              eventEnd={eventEnd}
+              setEventEnd={setEventEnd}
+            />
           </div>
           <AmountTripleRow
             currency={currency}
@@ -794,13 +829,8 @@ function ExpensePage() {
         <Output output={output} />
 
         <div className="expense-footer-meta">
-          <button type="button" className="expense-footer-link" onClick={() => forceReload()}>
-            🔄 強制更新
-          </button>
           <span className="expense-version-foot">v{getBuildVersion()}</span>
         </div>
-
-        <QuickLinksButton />
           </>
         )}
       </div>

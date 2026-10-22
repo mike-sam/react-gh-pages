@@ -1,9 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { GOOGLE_LINKS } from '../config';
-import { FloatingStackItem } from '../context/FloatingStackContext';
 
-/** Quick links FAB — sits in floating stack (bottom-right, order 0). */
-const QuickLinksButton = () => {
+/** Sheets / photos shortcuts — sits in the header, right of the theme toggle. */
+const QuickLinksButton = ({ compact = false }) => {
   const [showMenu, setShowMenu] = useState(false);
   const wrapRef = useRef(null);
 
@@ -34,42 +33,47 @@ const QuickLinksButton = () => {
   };
 
   return (
-    <FloatingStackItem id="quick-links" order={0}>
-      <div
-        className="quick-links-fab-wrap"
-        ref={wrapRef}
-        tabIndex={-1}
-        onBlur={(e) => {
-          if (!e.currentTarget.contains(e.relatedTarget)) closeMenu();
-        }}
+    <div
+      className="quick-links-header-wrap"
+      ref={wrapRef}
+      tabIndex={-1}
+      onBlur={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget)) closeMenu();
+      }}
+    >
+      <button
+        type="button"
+        className={[
+          'quick-links-header-btn',
+          compact ? 'quick-links-header-btn-compact' : '',
+          showMenu ? 'is-open' : '',
+        ]
+          .filter(Boolean)
+          .join(' ')}
+        onClick={() => setShowMenu((v) => !v)}
+        title="快速链接"
+        aria-label="快速链接"
+        aria-expanded={showMenu}
       >
-        {showMenu && (
-          <div className="quick-links-menu">
-            <button type="button" className="quick-links-menu-item" onClick={handleOpenSheets}>
-              <span>📊</span>
-              <span>Google Sheets</span>
-            </button>
-            <button
-              type="button"
-              className="quick-links-menu-item"
-              onClick={handleOpenPhotosFolder}
-            >
-              <span>📁</span>
-              <span>照片文件夹</span>
-            </button>
-          </div>
-        )}
-        <button
-          type="button"
-          className={`quick-links-fab${showMenu ? ' is-open' : ''}`}
-          onClick={() => setShowMenu((v) => !v)}
-          title="快速链接"
-          aria-expanded={showMenu}
-        >
-          {showMenu ? '✕' : '🔗'}
-        </button>
-      </div>
-    </FloatingStackItem>
+        {showMenu ? '✕' : '🔗'}
+      </button>
+      {showMenu && (
+        <div className="quick-links-menu" role="menu">
+          <button type="button" className="quick-links-menu-item" onClick={handleOpenSheets}>
+            <span>📊</span>
+            <span>Google Sheets</span>
+          </button>
+          <button
+            type="button"
+            className="quick-links-menu-item"
+            onClick={handleOpenPhotosFolder}
+          >
+            <span>📁</span>
+            <span>照片文件夹</span>
+          </button>
+        </div>
+      )}
+    </div>
   );
 };
 

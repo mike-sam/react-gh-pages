@@ -1,25 +1,33 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import {
   formatLocationLabel,
   formatRelativeTime,
+  loadLocationMode,
   loadSmartLocation,
+  saveLocationMode,
   saveSmartLocation,
   toMapsUrl,
 } from '../utils/locationStorage';
 import { getGeolocationBlockReason } from '../utils/geolocationGuard';
 
 const LocationContext = createContext(null);
+const SLOW_GPS_MS = 3000;
 
 export function LocationProvider({ children }) {
   const [location, setLocationState] = useState(() => loadSmartLocation());
+  const [locationMode, setLocationModeState] = useState(() => loadLocationMode());
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState(null);
+  const locationRef = useRef(location);
+  locationRef.current = location;
 
-  // Keep in sync if another tab updates localStorage
   useEffect(() => {
     const onStorage = (e) => {
       if (e.key === 'smartLocation') {
         setLocationState(loadSmartLocation());
+      }
+      if (e.key === 'locationMode') {
+        setLocationModeState(loadLocationMode());
       }
     };
     window.addEventListener('storage', onStorage);
@@ -40,10 +48,18 @@ export function LocationProvider({ children }) {
     setError(null);
   }, []);
 
+  const setLocationMode = useCallback((mode) => {
+    const next = mode === 'live' ? 'live' : 'cache';
+    saveLocationMode(next);
+    setLocationModeState(next);
+  }, []);
+
   /**
-   * Explicit GPS refresh only — never auto-called on mount.
+   * Explicit GPS refresh.
+   * @param {{ slowPromptMs?: number }} [opts] after this, ask to use cache if GPS still pending
    */
-  const refreshLocation = useCallback(() => {
+  const refreshLocation = useCallback((opts = {}) => {
+    const slowPromptMs = opts.slowPromptMs;
     return new Promise((resolve, reject) => {
       const blocked = getGeolocationBlockReason();
       if (blocked) {
@@ -52,8 +68,32 @@ export function LocationProvider({ children }) {
         return;
       }
 
+      let settled = false;
+      let slowTimer = null;
+      const finish = (fn) => {
+        if (settled) return;
+        settled = true;
+        if (slowTimer) clearTimeout(slowTimer);
+        setIsRefreshing(false);
+        fn();
+      };
+
       setIsRefreshing(true);
       setError(null);
+
+      if (slowPromptMs > 0) {
+        slowTimer = window.setTimeout(() => {
+          if (settled) return;
+          const cached = locationRef.current;
+          if (!cached) return;
+          const useCache = window.confirm('定位已超過 3 秒，改成使用快取？');
+          if (useCache) {
+            saveLocationMode('cache');
+            setLocationModeState('cache');
+            finish(() => resolve(cached));
+          }
+        }, slowPromptMs);
+      }
 
       navigator.geolocation.getCurrentPosition(
         (position) => {
@@ -62,12 +102,13 @@ export function LocationProvider({ children }) {
             lng: position.coords.longitude,
             accuracy: position.coords.accuracy,
             updatedAt: Date.now(),
-            label: location?.label || '',
+            label: locationRef.current?.label || '',
           };
-          saveSmartLocation(payload);
-          setLocationState(payload);
-          setIsRefreshing(false);
-          resolve(payload);
+          finish(() => {
+            saveSmartLocation(payload);
+            setLocationState(payload);
+            resolve(payload);
+          });
         },
         (geoError) => {
           let message = geoError?.message || '定位失敗';
@@ -75,9 +116,18 @@ export function LocationProvider({ children }) {
             message =
               `${message} — 請改用 http://localhost:3000 或 HTTPS（目前：${window.location.origin}）`;
           }
-          setError(message);
-          setIsRefreshing(false);
-          reject(new Error(message));
+          const cached = locationRef.current;
+          if (cached) {
+            finish(() => {
+              setError(message);
+              resolve(cached);
+            });
+            return;
+          }
+          finish(() => {
+            setError(message);
+            reject(new Error(message));
+          });
         },
         {
           enableHighAccuracy: true,
@@ -86,7 +136,19 @@ export function LocationProvider({ children }) {
         }
       );
     });
-  }, [location?.label]);
+  }, []);
+
+  /** Live mode: GPS (3s 後可改快取). Cache mode: last known, no wait. */
+  const resolveForAction = useCallback(async () => {
+    if (locationMode !== 'live') {
+      return locationRef.current || null;
+    }
+    try {
+      return await refreshLocation({ slowPromptMs: SLOW_GPS_MS });
+    } catch {
+      return locationRef.current || null;
+    }
+  }, [locationMode, refreshLocation]);
 
   const mapsUrl = useMemo(() => {
     if (!location) return '';
@@ -101,15 +163,29 @@ export function LocationProvider({ children }) {
   const value = useMemo(
     () => ({
       location,
+      locationMode,
       mapsUrl,
       statusText,
       isRefreshing,
       error,
       refreshLocation,
+      resolveForAction,
       setCachedLocation,
+      setLocationMode,
       hasLocation: Boolean(location),
     }),
-    [location, mapsUrl, statusText, isRefreshing, error, refreshLocation, setCachedLocation]
+    [
+      location,
+      locationMode,
+      mapsUrl,
+      statusText,
+      isRefreshing,
+      error,
+      refreshLocation,
+      resolveForAction,
+      setCachedLocation,
+      setLocationMode,
+    ]
   );
 
   return <LocationContext.Provider value={value}>{children}</LocationContext.Provider>;
@@ -122,5 +198,3 @@ export function useSmartLocation() {
   }
   return ctx;
 }
-
-export default LocationContext;

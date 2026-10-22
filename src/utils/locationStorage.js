@@ -1,4 +1,19 @@
 export const SMART_LOCATION_KEY = 'smartLocation';
+export const LOCATION_MODE_KEY = 'locationMode';
+
+/** @returns {'cache'|'live'} */
+export function loadLocationMode() {
+  try {
+    return localStorage.getItem(LOCATION_MODE_KEY) === 'live' ? 'live' : 'cache';
+  } catch {
+    return 'cache';
+  }
+}
+
+/** @param {'cache'|'live'} mode */
+export function saveLocationMode(mode) {
+  localStorage.setItem(LOCATION_MODE_KEY, mode === 'live' ? 'live' : 'cache');
+}
 export const LAST_PARKED_KEY = 'lastParkedLocation';
 export const PARKED_BY_CAR_KEY = 'parkedLocationsByCar';
 export const SELECTED_CAR_KEY = 'selectedCarPlate';
@@ -130,6 +145,36 @@ export function markParkedFetchedMany(plates, at = Date.now()) {
     if (key) all[key] = at;
   });
   localStorage.setItem(PARKED_FETCH_AT_KEY, JSON.stringify(all));
+}
+
+/** Cloud parked DTO → local SmartLocation */
+export function parkedDtoToLocal(dto, plateFallback) {
+  if (!dto || typeof dto.lat !== 'number' || typeof dto.lng !== 'number') return null;
+  const plate = (dto.carPlate || plateFallback || '').toString().trim().toUpperCase();
+  return {
+    lat: dto.lat,
+    lng: dto.lng,
+    label: dto.name || dto.label || '',
+    accuracy: dto.accuracy ?? null,
+    updatedAt: dto.timestampMs || Date.parse(String(dto.timestamp || '').replace(' ', 'T')) || Date.now(),
+    carPlate: plate,
+  };
+}
+
+/** Merge getParkedLocations / bootstrap byCar into local cache and mark TTL. */
+export function applyParkedByCar(byCar) {
+  const plates = [];
+  Object.entries(byCar || {}).forEach(([plate, dto]) => {
+    const local = parkedDtoToLocal(dto, plate);
+    if (!local) return;
+    plates.push(local.carPlate);
+    const existing = loadParkedForCar(local.carPlate);
+    if (!existing || local.updatedAt >= (existing.updatedAt || 0)) {
+      saveParkedForCar(local.carPlate, local);
+    }
+  });
+  markParkedFetchedMany([...new Set([...plates, ...DEFAULT_CAR_PLATES])]);
+  return plates;
 }
 
 /**

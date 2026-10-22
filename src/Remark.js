@@ -53,6 +53,37 @@ function Remark({ remark, setRemark, setCarPlate, carPlate, selectedTag, input, 
     const [isLoadingMileage, setIsLoadingMileage] = useState(false);
     const [lastMileage, setLastMileage] = useState(null); // 保存获取到的最新里程数
     const [lastMileageRecord, setLastMileageRecord] = useState(null); // 保存最后一次里程记录信息
+    const [userEditedMileage, setUserEditedMileage] = useState(false);
+    const [userEditedTripInfo, setUserEditedTripInfo] = useState(false);
+
+    const sameNum = (a, b) => {
+        const na = parseFloat(a);
+        const nb = parseFloat(b);
+        if (Number.isNaN(na) || Number.isNaN(nb)) return String(a ?? '') === String(b ?? '');
+        return na === nb;
+    };
+
+    const applyLastMileage = () => {
+        if (lastMileage == null || lastMileage === '') return;
+        setMileage(String(lastMileage));
+        setUserEditedMileage(false);
+    };
+
+    const computedTripFromAjax = () => {
+        if (lastMileage == null || lastMileage === '' || !mileage) return '';
+        const cur = parseFloat(mileage);
+        if (Number.isNaN(cur)) return '';
+        if (cur > lastMileage) return (cur - lastMileage).toFixed(1);
+        if (cur === lastMileage) return '0';
+        return '';
+    };
+
+    const applyComputedTrip = () => {
+        const next = computedTripFromAjax();
+        if (next === '') return;
+        setTripInfo(next);
+        setUserEditedTripInfo(false);
+    };
 
     const carPlates = ['PPQ8777', 'WD6060E'];
 
@@ -117,9 +148,7 @@ function Remark({ remark, setRemark, setCarPlate, carPlate, selectedTag, input, 
             let anotherFuelPrice = fuelType === 'ron95' ? 3.15 : 2.05;
             let anotherFuelType = fuelType === 'ron95' ? 'ron97' : 'ron95';
             let anotherAveragePrice = (anotherFuelPrice*averageLitterPer100Km/100).toFixed(2);
-            // 显示上一笔记录信息（所有交通出行分类都显示）
-            const showLastRecord = lastMileageRecord && !isLoadingMileage;
-            
+
             return (
                 <div className="special-inputs">
                     <div className="input-group">
@@ -147,7 +176,7 @@ function Remark({ remark, setRemark, setCarPlate, carPlate, selectedTag, input, 
                             </label>
                         </div>
                         {isLoadingMileage && (
-                            <div style={{fontSize: '12px', color: '#666', marginTop: '10px'}}>
+                            <div className="last-record-loading">
                                 正在获取 {carPlate} 的里程记录...
                             </div>
                         )}
@@ -186,25 +215,37 @@ function Remark({ remark, setRemark, setCarPlate, carPlate, selectedTag, input, 
                                     }
                                 }}
                                 label="里程数 (ODO)"
-                                placeholder={isLoadingMileage ? "正在获取..." : lastMileage !== null ? `點此輸入 · 上次 ${lastMileage}` : "點此輸入里程数"}
-                                disabled={isLoadingMileage}
-                                resetKey={`${selectedTag}|${input}`}
+                                placeholder={lastMileage != null ? `點此輸入 · 上次 ${lastMileage}` : '點此輸入里程数'}
+                                resetKey={`${selectedTag}|${input}|${carPlate}`}
                             />
-                            {isLoadingMileage && (
-                                <div style={{fontSize: '12px', color: '#666', marginLeft: '10px', marginTop: '5px'}}>
-                                    正在获取最新里程...
-                                </div>
-                            )}
+                            {lastMileage != null && !sameNum(mileage, lastMileage) ? (
+                                <button
+                                    type="button"
+                                    className="ajax-value-chip"
+                                    onClick={applyLastMileage}
+                                >
+                                    上次 {lastMileage} · 點擊套用
+                                </button>
+                            ) : null}
                             {lastMileageRecord && !isLoadingMileage && input === '打油' && (
-                                <div style={{fontSize: '12px', color: '#007bff', marginLeft: '10px', marginTop: '5px', padding: '8px', backgroundColor: '#f0f8ff', borderRadius: '4px', border: '1px solid #007bff'}}>
-                                    <div style={{fontWeight: 'bold', marginBottom: '4px'}}>📊 上一笔记录:</div>
-                                    <div>里程数: <strong>{lastMileageRecord.mileage}km</strong></div>
+                                <div className="last-record-card">
+                                    <div className="last-record-title">📊 上一笔记录:</div>
+                                    <div>
+                                        里程数:{' '}
+                                        <button
+                                            type="button"
+                                            className="last-record-apply"
+                                            onClick={applyLastMileage}
+                                        >
+                                            {lastMileageRecord.mileage}km
+                                        </button>
+                                    </div>
                                     <div>记录时间: {formatRecordTime(lastMileageRecord.recordTime)}</div>
                                     {lastMileageRecord.expenseType && (
                                         <div>类型: {lastMileageRecord.expenseType}</div>
                                     )}
                                     {mileage && parseFloat(mileage) > lastMileage && (
-                                        <div style={{marginTop: '4px', color: '#28a745', fontWeight: 'bold'}}>
+                                        <div className="last-record-trip">
                                             本次行程: {(parseFloat(mileage) - lastMileage).toFixed(1)}km
                                         </div>
                                     )}
@@ -306,15 +347,27 @@ function Remark({ remark, setRemark, setCarPlate, carPlate, selectedTag, input, 
                                         if (!isNaN(trip) && trip > 0) {
                                             setMileage((lastMileage + trip).toFixed(0));
                                         }
-                                    } else if ((!newTripInfo || newTripInfo.trim() === '') && !userEditedMileage) {
-                                        setMileage('');
                                     }
                                 }}
                                 label="行程距离"
                                 placeholder="點此輸入行程(km)"
                                 allowDecimal={true}
-                                resetKey={`${selectedTag}|${input}`}
+                                resetKey={`${selectedTag}|${input}|${carPlate}`}
                             />
+                            {(() => {
+                                const computed = computedTripFromAjax();
+                                if (!computed || sameNum(tripInfo, computed)) return null;
+                                if (computed === '0' && !String(tripInfo || '').trim()) return null;
+                                return (
+                                    <button
+                                        type="button"
+                                        className="ajax-value-chip"
+                                        onClick={applyComputedTrip}
+                                    >
+                                        上次推算 {computed} km · 點擊套用
+                                    </button>
+                                );
+                            })()}
                         </div>
                         {averagePrice > 0 && averageLitterPer100Km && (
                             <div className="fuel-calculation-results">
@@ -525,8 +578,8 @@ function Remark({ remark, setRemark, setCarPlate, carPlate, selectedTag, input, 
             return (
                 <div className="special-inputs">
                     {lastExpense && (
-                        <div style={{marginBottom: '15px', padding: '10px', background: '#f5f5f5', borderRadius: '4px', fontSize: '12px'}}>
-                            <div style={{fontWeight: 'bold', marginBottom: '4px'}}>📊 上一笔记录:</div>
+                        <div className="last-record-card last-record-card--expense">
+                            <div className="last-record-title">📊 上一笔记录:</div>
                             <div>金额: <strong>RM{lastExpense.amount}</strong></div>
                             <div>记录时间: {formatRecordTime(lastExpense.timestamp)}</div>
                         </div>
@@ -720,16 +773,22 @@ function Remark({ remark, setRemark, setCarPlate, carPlate, selectedTag, input, 
         return () => clearTimeout(timer);
     }, [carPlate, selectedTag, input]);
 
-    // 跟踪用户是否手动编辑了里程数或行程距离
-    const [userEditedMileage, setUserEditedMileage] = useState(false);
-    const [userEditedTripInfo, setUserEditedTripInfo] = useState(false);
-
-
-    // 重置编辑标志当lastMileage变化时
+    // 換車牌／分類時重算編輯旗標；AJAX 回來不覆蓋手輸
     useEffect(() => {
         setUserEditedMileage(false);
         setUserEditedTripInfo(false);
-    }, [lastMileage]);
+    }, [carPlate, selectedTag, input]);
+
+    // 手輸 ODO 後 AJAX 才回來時，補推行程（行程已被改過則不碰）
+    useEffect(() => {
+        if (userEditedTripInfo) return;
+        if (lastMileage == null || lastMileage <= 0) return;
+        if (!mileage || !String(mileage).trim()) return;
+        const currentMileage = parseFloat(mileage);
+        if (!Number.isNaN(currentMileage) && currentMileage > lastMileage) {
+            setTripInfo((currentMileage - lastMileage).toFixed(1));
+        }
+    }, [lastMileage, mileage, userEditedTripInfo]);
     
     useEffect(() => {
         const prevTag = prevSelectedTagRef.current;

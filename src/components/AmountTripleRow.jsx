@@ -3,6 +3,7 @@ import WheelPicker from './WheelPicker';
 import PaymentWheel from './PaymentWheel';
 import PickerModal from './PickerModal';
 import QuickPlateSelect from './QuickPlateSelect';
+import { useHistoryOverlay } from '../hooks/useHistoryOverlay';
 import { categorizePayments, paymentSectionsFromCats } from '../utils/paymentCategory';
 
 const CURRENCIES = ['MYR', 'TWD', 'USD', 'SGD', 'CNY', 'EUR'];
@@ -31,6 +32,8 @@ function AmountTripleRow({
   /** Only auto-open once per cat+subcat selection; closing won't reopen until selection changes */
   const autoOpenedForKey = useRef('');
   const amountBtnRef = useRef(null);
+
+  useHistoryOverlay(showPad, () => setShowPad(false));
 
   // Lock parent page scroll while amount pad is open
   useEffect(() => {
@@ -164,7 +167,9 @@ function AmountTripleRow({
       <button
         type="button"
         ref={amountBtnRef}
-        className={`amount-triple-amount${cueAmount ? ' is-cue' : ''}`}
+        className={`amount-triple-amount${cueAmount ? ' is-cue' : ''}${
+          !amount || amount === '0' || amount === '0.00' ? ' is-incomplete' : ''
+        }`}
         onClick={openPad}
       >
         {amount || '0.00'}
