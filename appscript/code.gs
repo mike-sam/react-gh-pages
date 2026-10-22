@@ -33,6 +33,9 @@ const doGet = (event = {}) => {
       return getParkedLocations();
     case 'saveLocation':
       return saveLocation(data);
+    case 'trackCalendar':
+    case 'check_current':
+      return handleCalendarTrack(parameter || {});
     default:
       // 兼容旧版本
       const { name, country } = parameter;
@@ -43,19 +46,34 @@ const doPost = (request = {}) => {
   try {
     const { parameter, postData: { contents, type } = {} } = request;
     
+    var queryParams = parameter || {};
+    var typeStr = (type || '').toString();
+
     if (!contents) {
+      if (queryParams.action === 'trackCalendar' || queryParams.action === 'check_current') {
+        return handleCalendarTrack(queryParams);
+      }
       return ContentService.createTextOutput(JSON.stringify({
         success: false,
         error: '请求体为空'
       })).setMimeType(ContentService.MimeType.JSON);
     }
-    
+
     appendLog(['doPost called', 'type: ' + type, 'contents length: ' + contents.length]);
-    
+
+    if (typeStr.indexOf('application/x-www-form-urlencoded') !== -1) {
+      if (queryParams.action === 'trackCalendar' || queryParams.action === 'check_current') {
+        return handleCalendarTrack(queryParams);
+      }
+    }
+
     let data;
     try {
       data = JSON.parse(contents);
     } catch (parseError) {
+      if (queryParams.action === 'trackCalendar' || queryParams.action === 'check_current') {
+        return handleCalendarTrack(queryParams);
+      }
       appendLog(['JSON parse error:', parseError.toString()]);
       return ContentService.createTextOutput(JSON.stringify({
         success: false,
@@ -1857,8 +1875,12 @@ var GEOFENCES = [
 ];
 
 var CALENDAR_START_MARKER = '**start**';
+var CALENDAR_END_MARKER = '**end**';
+var CALENDAR_HOME_MARKER = '**home**';
 var CALENDAR_DEFAULT_DURATION_MS = 60 * 60 * 1000; // 新建事件預設 1 小時
-var CALENDAR_EXTEND_MS = 20 * 60 * 1000; // 追加時至少延長到 now+20 分鐘
+var CALENDAR_EXTEND_MS = 20 * 60 * 1000; // 追加時至少延長到 timestamp+20 分鐘
+var CALENDAR_LOOKBACK_MS = 24 * 60 * 60 * 1000;
+var CALENDAR_LOOKAHEAD_MS = 60 * 60 * 1000;
 
 /**
  * 地理圍欄反查：落在預設範圍內則回傳地名，否則空字串
@@ -1879,133 +1901,476 @@ function resolvePlaceName(lat, lng) {
   return '';
 }
 
-/**
- * 格式：[HH:mm:ss] [prefix] 地點名稱 @ mapsUrl
- */
-function buildCalendarLogLine(prefix, placeName, lat, lng) {
-  var now = new Date();
-  var tz = Session.getScriptTimeZone();
-  var timeStr = Utilities.formatDate(now, tz, 'HH:mm:ss');
-  var mapsUrl = '';
-  if (lat !== undefined && lng !== undefined && !isNaN(lat) && !isNaN(lng)) {
-    mapsUrl = 'https://maps.google.com/maps?q=' + lat + ',' + lng;
-  }
-  var placePart = placeName || '';
-  var prefixPart = prefix || '';
-  return '[' + timeStr + '] [' + prefixPart + '] ' + placePart + (mapsUrl ? ' @ ' + mapsUrl : '');
+function calendarJson(obj) {
+  return ContentService.createTextOutput(JSON.stringify(obj))
+    .setMimeType(ContentService.MimeType.JSON);
 }
 
-/**
- * 尋找「當前進行中且 Description 含 **start**」的事件
- */
-function findOngoingStartedEvent(calendar, now) {
-  // getEvents(start, end) 回傳與時間區間重疊的事件
-  var events = calendar.getEvents(now, new Date(now.getTime() + 1000));
-  for (var i = 0; i < events.length; i++) {
-    var desc = events[i].getDescription() || '';
-    if (desc.indexOf(CALENDAR_START_MARKER) !== -1) {
-      return events[i];
+function calendarFlag(value, defaultVal) {
+  if (value === undefined || value === null || value === '') return defaultVal;
+  var s = String(value).trim().toLowerCase();
+  if (s === '0' || s === 'false' || s === 'no' || s === 'off') return false;
+  if (s === '1' || s === 'true' || s === 'yes' || s === 'on') return true;
+  return defaultVal;
+}
+
+function parseCalendarTimestamp(raw) {
+  if (raw === undefined || raw === null || String(raw).trim() === '') {
+    return new Date();
+  }
+  var s = String(raw).trim();
+  if (/^\d{10,13}$/.test(s)) {
+    var n = Number(s);
+    return new Date(s.length <= 10 ? n * 1000 : n);
+  }
+  var m = s.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/);
+  if (m) {
+    return new Date(
+      Number(m[1]),
+      Number(m[2]) - 1,
+      Number(m[3]),
+      Number(m[4]),
+      Number(m[5]),
+      Number(m[6])
+    );
+  }
+  var d = new Date(s);
+  if (!isNaN(d.getTime())) return d;
+  return new Date();
+}
+
+function formatCalendarStamp(when) {
+  var tz = Session.getScriptTimeZone();
+  return Utilities.formatDate(when, tz, 'yyyy-MM-dd HH:mm:ss');
+}
+
+function parseCalendarCoords(data) {
+  data = data || {};
+  var lat = parseFloat(data.latitude != null && data.latitude !== '' ? data.latitude : data.lat);
+  var lng = parseFloat(data.longitude != null && data.longitude !== '' ? data.longitude : data.lng);
+  if (!isNaN(lat) && !isNaN(lng)) return { lat: lat, lng: lng };
+  var ll = data.latlong != null ? data.latlong : data.latlng;
+  if (ll) {
+    var parts = String(ll).split(',');
+    if (parts.length >= 2) {
+      lat = parseFloat(parts[0]);
+      lng = parseFloat(parts[1]);
+      if (!isNaN(lat) && !isNaN(lng)) return { lat: lat, lng: lng };
     }
   }
-  return null;
+  return { lat: NaN, lng: NaN };
+}
+
+function trailPrefix(raw, fallback) {
+  var s = raw == null ? '' : String(raw).trim();
+  if (!s) return fallback || '-no input-';
+  return s;
+}
+
+function resolveCalendarOp(data) {
+  data = data || {};
+  var action = String(data.action || '').trim();
+  var op = String(data.op || '').trim().toLowerCase();
+  if (action === 'check_current' || op === 'check' || op === 'check_current') return 'check';
+  if (op === 'start' || op === 'append' || op === 'end' || op === 'home') return op;
+  var prefix = String(data.prefix || '').trim().toLowerCase();
+  if (prefix === 'start' || prefix === 'end') return prefix;
+  return 'append';
 }
 
 /**
- * Calendar 狀態機：
- * A) 無進行中含 **start** → 新建 1 小時事件，Description 首行 **start** + 第一筆軌跡
- * B) 已有 → 延長結束時間，Description 尾端 Append 日誌
- *
- * POST body:
- * { action: 'trackCalendar', title, prefix, latitude, longitude }
+ * 格式：[YYYY-MM-DD HH:mm:ss][prefix]place@http://maps.google.com/maps?q=lat,lng
+ */
+function buildCalendarLogLine(prefix, placeName, lat, lng, when) {
+  var timeStr = formatCalendarStamp(when || new Date());
+  var prefixPart = trailPrefix(prefix, '-no input-');
+  var placePart = placeName || '';
+  var mapsUrl = '';
+  if (lat !== undefined && lng !== undefined && !isNaN(lat) && !isNaN(lng)) {
+    mapsUrl = 'http://maps.google.com/maps?q=' + lat + ',' + lng;
+  }
+  return '[' + timeStr + '][' + prefixPart + ']' + placePart + (mapsUrl ? '@' + mapsUrl : '');
+}
+
+function descriptionFirstLine(desc) {
+  var text = (desc || '').toString().replace(/^\uFEFF/, '');
+  var nl = text.indexOf('\n');
+  var first = (nl === -1 ? text : text.substring(0, nl)).trim();
+  return first;
+}
+
+function setFirstLineMarker(desc, marker) {
+  var text = (desc || '').toString();
+  if (!text.trim()) return marker;
+  var lines = text.split('\n');
+  var first = (lines[0] || '').trim();
+  if (
+    first === CALENDAR_START_MARKER ||
+    first === CALENDAR_END_MARKER ||
+    first === CALENDAR_HOME_MARKER
+  ) {
+    lines[0] = marker;
+    return lines.join('\n');
+  }
+  return marker + '\n' + text.replace(/^\s+/, '');
+}
+
+function descriptionHasTrail(desc, timestampStr, prefix) {
+  var needle = '[' + timestampStr + '][' + prefix + ']';
+  return (desc || '').indexOf(needle) !== -1;
+}
+
+function appendDescriptionLine(desc, line) {
+  var text = (desc || '').replace(/\s+$/, '');
+  if (!text) return line;
+  if (text.indexOf(line) !== -1) return text;
+  return text + '\n' + line;
+}
+
+function findEventsByFirstLine(calendar, marker, when) {
+  var from = new Date(when.getTime() - CALENDAR_LOOKBACK_MS);
+  var to = new Date(when.getTime() + CALENDAR_LOOKAHEAD_MS);
+  var events = calendar.getEvents(from, to);
+  var out = [];
+  for (var i = 0; i < events.length; i++) {
+    if (descriptionFirstLine(events[i].getDescription()) === marker) {
+      out.push(events[i]);
+    }
+  }
+  return out;
+}
+
+function pickPrimaryEvent(events, when, title) {
+  if (!events || !events.length) return null;
+  var pool = events;
+  var want = title ? String(title).trim() : '';
+  if (want) {
+    var named = [];
+    for (var i = 0; i < events.length; i++) {
+      if (events[i].getTitle() === want) named.push(events[i]);
+    }
+    if (named.length) pool = named;
+  }
+  var overlapping = [];
+  for (var j = 0; j < pool.length; j++) {
+    var ev = pool[j];
+    if (ev.getStartTime().getTime() <= when.getTime() && ev.getEndTime().getTime() >= when.getTime()) {
+      overlapping.push(ev);
+    }
+  }
+  var ranked = overlapping.length ? overlapping : pool.slice();
+  ranked.sort(function (a, b) {
+    return b.getStartTime().getTime() - a.getStartTime().getTime();
+  });
+  return ranked[0];
+}
+
+function anyEventHasTrail(events, timestampStr, prefix) {
+  for (var i = 0; i < events.length; i++) {
+    if (descriptionHasTrail(events[i].getDescription(), timestampStr, prefix)) return true;
+  }
+  return false;
+}
+
+function applyEventLocation(event, placeName, lat, lng) {
+  if (isNaN(lat) || isNaN(lng)) return;
+  try {
+    event.setLocation(placeName || (lat + ',' + lng));
+  } catch (locErr) {
+    appendLog(['setLocation failed:', locErr.toString()]);
+  }
+}
+
+function extendEventEnd(event, when) {
+  var start = event.getStartTime();
+  var currentEnd = event.getEndTime();
+  var minEnd = new Date(when.getTime() + CALENDAR_EXTEND_MS);
+  var newEnd = currentEnd.getTime() > minEnd.getTime() ? currentEnd : minEnd;
+  if (when.getTime() > currentEnd.getTime()) {
+    newEnd = minEnd;
+  }
+  if (newEnd.getTime() <= start.getTime()) {
+    newEnd = new Date(start.getTime() + CALENDAR_EXTEND_MS);
+  }
+  event.setTime(start, newEnd);
+}
+
+function closeCalendarEvent(event, when, trailPfx, placeName, lat, lng) {
+  var prefix = trailPrefix(trailPfx, 'end');
+  var ts = formatCalendarStamp(when);
+  var desc = event.getDescription() || '';
+  var skipped = descriptionHasTrail(desc, ts, prefix);
+  desc = setFirstLineMarker(desc, CALENDAR_END_MARKER);
+  if (!skipped) {
+    desc = appendDescriptionLine(desc, buildCalendarLogLine(prefix, placeName, lat, lng, when));
+  }
+  event.setDescription(desc);
+  var start = event.getStartTime();
+  var end = when.getTime() > start.getTime() ? when : new Date(start.getTime() + 60 * 1000);
+  event.setTime(start, end);
+  applyEventLocation(event, placeName, lat, lng);
+  return { eventId: event.getId(), title: event.getTitle(), skipped: skipped };
+}
+
+function createMarkedEvent(calendar, title, marker, trailPfx, when, placeName, lat, lng) {
+  var logLine = buildCalendarLogLine(trailPfx, placeName, lat, lng, when);
+  var endTime = new Date(when.getTime() + CALENDAR_DEFAULT_DURATION_MS);
+  var event = calendar.createEvent(title, when, endTime, {
+    description: marker + '\n' + logLine
+  });
+  applyEventLocation(event, placeName, lat, lng);
+  return { event: event, logLine: logLine };
+}
+
+function closeEvents(events, when, trailPfx, placeName, lat, lng) {
+  var closed = [];
+  for (var i = 0; i < events.length; i++) {
+    closed.push(closeCalendarEvent(events[i], when, trailPfx, placeName, lat, lng));
+  }
+  return closed;
+}
+
+function eventSummaries(events) {
+  var out = [];
+  for (var i = 0; i < events.length; i++) {
+    var ev = events[i];
+    out.push({
+      eventId: ev.getId(),
+      title: ev.getTitle(),
+      start: ev.getStartTime().toISOString(),
+      end: ev.getEndTime().toISOString(),
+      marker: descriptionFirstLine(ev.getDescription())
+    });
+  }
+  return out;
+}
+
+/**
+ * URL / JSON:
+ * { action: 'trackCalendar', op, title, prefix, timestamp, lat, lng, endExisting, startHome, all }
  */
 function handleCalendarTrack(data) {
   try {
+    data = data || {};
     appendLog(['handleCalendarTrack called', JSON.stringify(data)]);
 
-    var title = (data.title || '行程').toString().trim() || '行程';
-    var prefix = (data.prefix || '').toString().trim();
-    var lat = data.latitude !== undefined ? parseFloat(data.latitude) : NaN;
-    var lng = data.longitude !== undefined ? parseFloat(data.longitude) : NaN;
+    var op = resolveCalendarOp(data);
+    var when = parseCalendarTimestamp(data.timestamp);
+    var title = (data.title || '').toString().trim();
+    var coords = parseCalendarCoords(data);
+    var lat = coords.lat;
+    var lng = coords.lng;
     var hasCoords = !isNaN(lat) && !isNaN(lng);
-
     var placeName = hasCoords ? resolvePlaceName(lat, lng) : '';
-    var logLine = buildCalendarLogLine(prefix, placeName, hasCoords ? lat : undefined, hasCoords ? lng : undefined);
-
+    var endExisting = calendarFlag(data.endExisting, true);
+    var startHome = calendarFlag(data.startHome, false);
+    var all = calendarFlag(data.all, false);
+    var ts = formatCalendarStamp(when);
     var calendar = CalendarApp.getDefaultCalendar();
-    var now = new Date();
-    var ongoing = findOngoingStartedEvent(calendar, now);
+    var starts = findEventsByFirstLine(calendar, CALENDAR_START_MARKER, when);
+    var homes = findEventsByFirstLine(calendar, CALENDAR_HOME_MARKER, when);
+    var windowEvents = calendar.getEvents(
+      new Date(when.getTime() - CALENDAR_LOOKBACK_MS),
+      new Date(when.getTime() + CALENDAR_LOOKAHEAD_MS)
+    );
+
+    if (op === 'check') {
+      var resultCheck = {
+        success: true,
+        mode: 'check',
+        starts: eventSummaries(starts),
+        homes: eventSummaries(homes)
+      };
+      return calendarJson(resultCheck);
+    }
 
     var result;
 
-    if (!ongoing) {
-      // 分支 A：建立新事件
-      var endTime = new Date(now.getTime() + CALENDAR_DEFAULT_DURATION_MS);
-      var description = CALENDAR_START_MARKER + '\n' + logLine;
-      var event = calendar.createEvent(title, now, endTime, {
-        description: description
-      });
-      if (hasCoords) {
-        try {
-          event.setLocation(placeName || (lat + ',' + lng));
-        } catch (locErr) {
-          appendLog(['setLocation failed:', locErr.toString()]);
-        }
+    if (op === 'start') {
+      if (anyEventHasTrail(windowEvents, ts, 'start')) {
+        result = { success: true, mode: 'skipped', reason: 'duplicate', op: op, timestamp: ts };
+        appendLog(['Calendar start skipped (duplicate):', ts]);
+        return calendarJson(result);
       }
+      closeEvents(homes, when, 'end', placeName, lat, lng);
+      if (endExisting) {
+        closeEvents(starts, when, 'end', placeName, lat, lng);
+      }
+      var createdStart = createMarkedEvent(
+        calendar,
+        title || 'Trip',
+        CALENDAR_START_MARKER,
+        'start',
+        when,
+        placeName,
+        lat,
+        lng
+      );
       result = {
         success: true,
         mode: 'created',
-        eventId: event.getId(),
-        title: event.getTitle(),
-        start: event.getStartTime().toISOString(),
-        end: event.getEndTime().toISOString(),
+        op: op,
+        eventId: createdStart.event.getId(),
+        title: createdStart.event.getTitle(),
+        start: createdStart.event.getStartTime().toISOString(),
+        end: createdStart.event.getEndTime().toISOString(),
         placeName: placeName,
-        logLine: logLine
+        logLine: createdStart.logLine
       };
       appendLog(['Calendar event created:', JSON.stringify(result)]);
-    } else {
-      // 分支 B：追加軌跡 + 延長結束時間
-      var currentEnd = ongoing.getEndTime();
-      var minEnd = new Date(now.getTime() + CALENDAR_EXTEND_MS);
-      var newEnd = currentEnd.getTime() > minEnd.getTime() ? currentEnd : minEnd;
-      // 若當前時間已超過原結束時間，至少延長到 now+EXTEND
-      if (now.getTime() > currentEnd.getTime()) {
-        newEnd = minEnd;
+      return calendarJson(result);
+    }
+
+    if (op === 'append') {
+      var prefix = trailPrefix(data.prefix, '-no input-');
+      if (anyEventHasTrail(windowEvents, ts, prefix)) {
+        result = { success: true, mode: 'skipped', reason: 'duplicate', op: op, timestamp: ts };
+        appendLog(['Calendar append skipped (duplicate):', ts, prefix]);
+        return calendarJson(result);
       }
-      ongoing.setTime(ongoing.getStartTime(), newEnd);
-
-      var prevDesc = ongoing.getDescription() || '';
-      var nextDesc = prevDesc.replace(/\s+$/, '') + '\n' + logLine;
-      ongoing.setDescription(nextDesc);
-
-      if (hasCoords) {
-        try {
-          ongoing.setLocation(placeName || (lat + ',' + lng));
-        } catch (locErr2) {
-          appendLog(['setLocation failed:', locErr2.toString()]);
-        }
+      var targets = starts;
+      if (!all) {
+        var primary = pickPrimaryEvent(starts, when, title);
+        targets = primary ? [primary] : [];
       }
-
+      if (!targets.length) {
+        closeEvents(homes, when, 'end', placeName, lat, lng);
+        var createdFromAppend = createMarkedEvent(
+          calendar,
+          title || 'Trip',
+          CALENDAR_START_MARKER,
+          prefix,
+          when,
+          placeName,
+          lat,
+          lng
+        );
+        result = {
+          success: true,
+          mode: 'created',
+          op: op,
+          eventId: createdFromAppend.event.getId(),
+          title: createdFromAppend.event.getTitle(),
+          start: createdFromAppend.event.getStartTime().toISOString(),
+          end: createdFromAppend.event.getEndTime().toISOString(),
+          placeName: placeName,
+          logLine: createdFromAppend.logLine
+        };
+        appendLog(['Calendar event created from append:', JSON.stringify(result)]);
+        return calendarJson(result);
+      }
+      var appended = [];
+      var logLine = buildCalendarLogLine(prefix, placeName, lat, lng, when);
+      for (var a = 0; a < targets.length; a++) {
+        var ev = targets[a];
+        var nextDesc = appendDescriptionLine(ev.getDescription() || '', logLine);
+        ev.setDescription(nextDesc);
+        extendEventEnd(ev, when);
+        applyEventLocation(ev, placeName, lat, lng);
+        appended.push({
+          eventId: ev.getId(),
+          title: ev.getTitle(),
+          start: ev.getStartTime().toISOString(),
+          end: ev.getEndTime().toISOString()
+        });
+      }
       result = {
         success: true,
         mode: 'appended',
-        eventId: ongoing.getId(),
-        title: ongoing.getTitle(),
-        start: ongoing.getStartTime().toISOString(),
-        end: ongoing.getEndTime().toISOString(),
+        op: op,
         placeName: placeName,
-        logLine: logLine
+        logLine: logLine,
+        events: appended
       };
       appendLog(['Calendar event appended:', JSON.stringify(result)]);
+      return calendarJson(result);
     }
 
-    return ContentService.createTextOutput(JSON.stringify(result))
-      .setMimeType(ContentService.MimeType.JSON);
+    if (op === 'end') {
+      var endPrefix = 'end';
+      var endTargets = starts;
+      if (title) {
+        endTargets = [];
+        for (var e = 0; e < starts.length; e++) {
+          if (starts[e].getTitle() === title) endTargets.push(starts[e]);
+        }
+        if (!endTargets.length) endTargets = starts;
+      }
+      if (!all && !title) {
+        var endPrimary = pickPrimaryEvent(starts, when, '');
+        endTargets = endPrimary ? [endPrimary] : [];
+      }
+      if (anyEventHasTrail(windowEvents, ts, endPrefix) && !endTargets.length) {
+        result = { success: true, mode: 'skipped', reason: 'duplicate', op: op, timestamp: ts };
+        return calendarJson(result);
+      }
+      var closedEnd = closeEvents(endTargets, when, endPrefix, placeName, lat, lng);
+      result = {
+        success: true,
+        mode: 'ended',
+        op: op,
+        closed: closedEnd,
+        placeName: placeName
+      };
+      appendLog(['Calendar events ended:', JSON.stringify(result)]);
+      return calendarJson(result);
+    }
+
+    if (op === 'home') {
+      var closedHomeTrips = closeEvents(starts, when, 'home', placeName, lat, lng);
+      var homeEvent = null;
+      var homeLogLine = '';
+      if (startHome) {
+        var existingHomes = findEventsByFirstLine(calendar, CALENDAR_HOME_MARKER, when);
+        if (anyEventHasTrail(existingHomes, ts, 'home')) {
+          result = {
+            success: true,
+            mode: 'skipped',
+            reason: 'duplicate',
+            op: op,
+            timestamp: ts,
+            closed: closedHomeTrips
+          };
+          return calendarJson(result);
+        }
+        var createdHome = createMarkedEvent(
+          calendar,
+          'Home',
+          CALENDAR_HOME_MARKER,
+          'home',
+          when,
+          placeName,
+          lat,
+          lng
+        );
+        homeEvent = {
+          eventId: createdHome.event.getId(),
+          title: createdHome.event.getTitle(),
+          start: createdHome.event.getStartTime().toISOString(),
+          end: createdHome.event.getEndTime().toISOString()
+        };
+        homeLogLine = createdHome.logLine;
+      }
+      result = {
+        success: true,
+        mode: startHome ? 'home_started' : 'home',
+        op: op,
+        closed: closedHomeTrips,
+        home: homeEvent,
+        placeName: placeName,
+        logLine: homeLogLine
+      };
+      appendLog(['Calendar home:', JSON.stringify(result)]);
+      return calendarJson(result);
+    }
+
+    return calendarJson({ success: false, error: 'Unknown op: ' + op });
   } catch (error) {
     appendLog(['Error in handleCalendarTrack:', error.toString(), error.stack]);
-    return ContentService.createTextOutput(JSON.stringify({
+    return calendarJson({
       success: false,
       error: error.toString()
-    })).setMimeType(ContentService.MimeType.JSON);
+    });
   }
 }
 

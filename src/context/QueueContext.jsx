@@ -74,6 +74,12 @@ export function QueueProvider({ children }) {
       const { signal } = opts;
       const id = payload.id ?? payload.timestamp_ms ?? Date.now();
       const body = { ...payload, id };
+      if (
+        body.action === 'trackCalendar' &&
+        (body.timestamp == null || String(body.timestamp).trim() === '')
+      ) {
+        body.timestamp = new Date().toISOString();
+      }
 
       if (signal?.aborted) {
         return { aborted: true, queued: false, sent: false };

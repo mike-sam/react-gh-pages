@@ -31,3 +31,19 @@ export function openShortcut(name, text) {
   window.location.href = url;
   return url;
 }
+
+/** iOS Shortcuts text input: same fields as the GAS calendar URL. */
+export function stringifyCalendarTrackInput(payload) {
+  return JSON.stringify({
+    action: 'trackCalendar',
+    op: payload.op,
+    title: payload.title || '',
+    prefix: payload.prefix || '',
+    timestamp: payload.timestamp,
+    latitude: payload.latitude ?? payload.lat ?? null,
+    longitude: payload.longitude ?? payload.lng ?? null,
+    endExisting: payload.endExisting,
+    startHome: payload.startHome,
+    all: payload.all,
+  });
+}

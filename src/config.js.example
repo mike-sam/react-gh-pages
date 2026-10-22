@@ -18,7 +18,7 @@ export const GOOGLE_LINKS = {
   PHOTOS_FOLDER_NAME: 'ExpensePhotos'
 };
 
-// iOS Shortcuts（僅在 iPhone / iPad 上走捷徑；其餘裝置走 Apps Script）
+// iOS Shortcuts（可選 in-app 跳轉；自動化請 GET/POST CALENDAR_TRACK URL）
 export const SHORTCUTS = {
   CALENDAR_TRACK: 'CalendarTrack' // Shortcuts App 內的捷徑名稱，請改成你實際的名稱
 };
