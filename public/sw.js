@@ -1,14 +1,16 @@
-/* Expense App Service Worker
+/* Selfmanage Service Worker
  * - HTML / navigations: Network-First (avoid Safari white screen on stale index)
  * - Hashed static assets: Cache-First
  * Private Safari often has no SW — that is why Private can look "fine" while normal Safari blanks.
  */
-const CACHE_NAME = 'expense-app-static-v3';
+const CACHE_NAME = 'selfmanage-static-v1';
 const PRECACHE_URLS = [
   './',
   './index.html',
   './manifest.json',
   './favicon.ico',
+  './favicon.svg',
+  './logo.svg',
   './logo192.png',
   './logo512.png',
 ];

@@ -1,6 +1,6 @@
 {
-  "short_name": "記帳",
-  "name": "Expense Entry Point",
+  "short_name": "自理",
+  "name": "Self-Manage",
   "icons": [
     {
       "src": "favicon.ico",
@@ -10,18 +10,20 @@
     {
       "src": "logo192.png",
       "type": "image/png",
-      "sizes": "192x192"
+      "sizes": "192x192",
+      "purpose": "any"
     },
     {
       "src": "logo512.png",
       "type": "image/png",
-      "sizes": "512x512"
+      "sizes": "512x512",
+      "purpose": "any"
     }
   ],
   "start_url": ".",
   "display": "standalone",
   "orientation": "portrait-primary",
   "theme_color": "#1a1a1a",
-  "background_color": "#1a1a1a",
+  "background_color": "#1a1d24",
   "description": "極速啟動的記帳與個人效率 Entry Point（離線可用）"
 }
