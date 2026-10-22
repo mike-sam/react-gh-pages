@@ -19,8 +19,14 @@ const doGet = (event = {}) => {
       return getLastExpense(parameter.tag, parameter.title);
     case 'processCommitments':
       return processCommitments();
+    case 'listObligations':
+      return listObligations();
+    case 'processDueObligations':
+      return processDueObligations();
     case 'getNearbyLocations':
       return getNearbyLocations(parseFloat(parameter.latitude), parseFloat(parameter.longitude), parseFloat(parameter.radius || 1));
+    case 'listLandmarkRegions':
+      return listLandmarkRegions();
     case 'getParkedLocation':
       return getParkedLocation(parameter.carPlate);
     case 'getParkedLocations':
@@ -71,6 +77,22 @@ const doPost = (request = {}) => {
         return setKeyValue(data);
       case 'saveLocation':
         return saveLocation(data);
+      case 'listLandmarkRegions':
+        return listLandmarkRegions();
+      case 'upsertLandmarkRegion':
+        return upsertLandmarkRegion(data);
+      case 'deleteLandmarkRegion':
+        return deleteLandmarkRegion(data);
+      case 'listObligations':
+        return listObligations();
+      case 'upsertObligation':
+        return upsertObligation(data);
+      case 'deleteObligation':
+        return deleteObligation(data);
+      case 'upsertObligationInstallment':
+        return upsertObligationInstallment(data);
+      case 'processDueObligations':
+        return processDueObligations();
       case 'trackCalendar':
       case 'check_current':
         return handleCalendarTrack(data);
@@ -1493,7 +1515,9 @@ function getNearbyLocations(latitude, longitude, radiusKm = 1) {
           name: name || '',
           distance: distance.toFixed(2),
           createdTime: createdTime || '',
-          usageCount: usageCount || 0
+          usageCount: usageCount || 0,
+          // Compat: treat legacy single points as ~100m hit radius
+          radiusM: 100
         });
       }
     }
@@ -1604,6 +1628,193 @@ function saveLocation(data) {
     
   } catch (error) {
     appendLog(['Error in saveLocation:', error.toString(), error.stack]);
+    return ContentService.createTextOutput(JSON.stringify({
+      success: false,
+      error: error.toString()
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+/**
+ * LandmarkRegion sheet helpers
+ * Columns: ID, NAME, LATITUDE, LONGITUDE, RADIUS_M, VERTICES_JSON, UPDATED_AT
+ */
+function ensureLandmarkRegionSheet() {
+  var doc = SpreadsheetApp.openById(sheetId);
+  var sheet = doc.getSheetByName('LandmarkRegion');
+  var headers = ['ID', 'NAME', 'LATITUDE', 'LONGITUDE', 'RADIUS_M', 'VERTICES_JSON', 'UPDATED_AT'];
+  if (!sheet) {
+    sheet = doc.insertSheet('LandmarkRegion');
+    sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+    sheet.getRange(1, 1, 1, headers.length).setFontWeight('bold');
+    sheet.setFrozenRows(1);
+    return sheet;
+  }
+  var lastCol = sheet.getLastColumn();
+  if (lastCol < 1) {
+    sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+    sheet.getRange(1, 1, 1, headers.length).setFontWeight('bold');
+    sheet.setFrozenRows(1);
+  }
+  return sheet;
+}
+
+function listLandmarkRegions() {
+  try {
+    var sheet = ensureLandmarkRegionSheet();
+    var lastRow = sheet.getLastRow();
+    if (lastRow < 2) {
+      return ContentService.createTextOutput(JSON.stringify({
+        success: true,
+        regions: []
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+    var lastCol = Math.max(sheet.getLastColumn(), 7);
+    var values = sheet.getRange(2, 1, lastRow, lastCol).getValues();
+    var regions = [];
+    for (var i = 0; i < values.length; i++) {
+      var row = values[i];
+      var id = (row[0] || '').toString().trim();
+      var name = (row[1] || '').toString().trim();
+      var lat = parseFloat(row[2]);
+      var lng = parseFloat(row[3]);
+      if (!id || !name || isNaN(lat) || isNaN(lng)) continue;
+      var radiusM = parseFloat(row[4]);
+      if (isNaN(radiusM) || radiusM < 10) radiusM = 150;
+      var vertices = [];
+      try {
+        if (row[5]) vertices = JSON.parse(row[5].toString());
+      } catch (e) {
+        vertices = [];
+      }
+      var updatedAt = 0;
+      if (row[6] instanceof Date) updatedAt = row[6].getTime();
+      else if (row[6]) {
+        var parsed = Date.parse(String(row[6]).replace(' ', 'T'));
+        if (!isNaN(parsed)) updatedAt = parsed;
+      }
+      regions.push({
+        id: id,
+        name: name,
+        latitude: lat,
+        longitude: lng,
+        lat: lat,
+        lng: lng,
+        radiusM: radiusM,
+        vertices: Array.isArray(vertices) ? vertices : [],
+        updatedAt: updatedAt || Date.now()
+      });
+    }
+    return ContentService.createTextOutput(JSON.stringify({
+      success: true,
+      regions: regions
+    })).setMimeType(ContentService.MimeType.JSON);
+  } catch (error) {
+    appendLog(['Error in listLandmarkRegions:', error.toString(), error.stack]);
+    return ContentService.createTextOutput(JSON.stringify({
+      success: false,
+      error: error.toString(),
+      regions: []
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+function upsertLandmarkRegion(data) {
+  try {
+    appendLog(['upsertLandmarkRegion called', JSON.stringify(data)]);
+    var name = (data.name || '').toString().trim();
+    var lat = parseFloat(data.latitude != null ? data.latitude : data.lat);
+    var lng = parseFloat(data.longitude != null ? data.longitude : data.lng);
+    var radiusM = parseFloat(data.radiusM != null ? data.radiusM : data.radius_m);
+    if (!name || isNaN(lat) || isNaN(lng)) {
+      return ContentService.createTextOutput(JSON.stringify({
+        success: false,
+        error: 'Invalid name or coordinates'
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+    if (isNaN(radiusM) || radiusM < 10) radiusM = 150;
+    var id = (data.id || '').toString().trim();
+    if (!id) id = 'lr_' + Date.now() + '_' + Math.floor(Math.random() * 10000);
+    var vertices = Array.isArray(data.vertices) ? data.vertices : [];
+    var verticesJson = JSON.stringify(vertices);
+    var updatedAt = datetimetoYMDHIS();
+
+    var sheet = ensureLandmarkRegionSheet();
+    var lastRow = sheet.getLastRow();
+    var rowIndex = -1;
+    if (lastRow >= 2) {
+      var ids = sheet.getRange(2, 1, lastRow, 1).getValues();
+      for (var i = 0; i < ids.length; i++) {
+        if (String(ids[i][0] || '').trim() === id) {
+          rowIndex = i + 2;
+          break;
+        }
+      }
+    }
+
+    var row = [id, name, lat, lng, radiusM, verticesJson, updatedAt];
+    if (rowIndex > 0) {
+      sheet.getRange(rowIndex, 1, rowIndex, 7).setValues([row]);
+    } else {
+      sheet.appendRow(row);
+    }
+
+    return ContentService.createTextOutput(JSON.stringify({
+      success: true,
+      region: {
+        id: id,
+        name: name,
+        latitude: lat,
+        longitude: lng,
+        radiusM: radiusM,
+        vertices: vertices,
+        updatedAt: Date.now()
+      }
+    })).setMimeType(ContentService.MimeType.JSON);
+  } catch (error) {
+    appendLog(['Error in upsertLandmarkRegion:', error.toString(), error.stack]);
+    return ContentService.createTextOutput(JSON.stringify({
+      success: false,
+      error: error.toString()
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+function deleteLandmarkRegion(data) {
+  try {
+    var id = (data && data.id ? data.id : '').toString().trim();
+    if (!id) {
+      return ContentService.createTextOutput(JSON.stringify({
+        success: false,
+        error: 'Missing id'
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+    var sheet = ensureLandmarkRegionSheet();
+    var lastRow = sheet.getLastRow();
+    if (lastRow < 2) {
+      return ContentService.createTextOutput(JSON.stringify({
+        success: true,
+        deleted: false
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+    var ids = sheet.getRange(2, 1, lastRow, 1).getValues();
+    for (var i = 0; i < ids.length; i++) {
+      if (String(ids[i][0] || '').trim() === id) {
+        sheet.deleteRow(i + 2);
+        return ContentService.createTextOutput(JSON.stringify({
+          success: true,
+          deleted: true,
+          id: id
+        })).setMimeType(ContentService.MimeType.JSON);
+      }
+    }
+    return ContentService.createTextOutput(JSON.stringify({
+      success: true,
+      deleted: false,
+      id: id
+    })).setMimeType(ContentService.MimeType.JSON);
+  } catch (error) {
+    appendLog(['Error in deleteLandmarkRegion:', error.toString(), error.stack]);
     return ContentService.createTextOutput(JSON.stringify({
       success: false,
       error: error.toString()
@@ -2022,4 +2233,420 @@ function handleParkLocation(data) {
       error: error.toString()
     })).setMimeType(ContentService.MimeType.JSON);
   }
+}
+
+/**
+ * Obligation (承諾／應收應付) sheets
+ * Obligation: ID KIND DIRECTION NAME TAG TITLE PRINCIPAL REMAINING RATE METHOD TERM PMT START END DUE_DAY CURRENCY PAYMENT_METHOD NOTE STATUS UPDATED_AT JSON
+ * ObligationSchedule: ID OBLIGATION_ID SEQ DUE_DATE AMOUNT PRINCIPAL INTEREST STATUS RECORD_ID NOTE KIND UPDATED_AT
+ */
+function jsonOut(obj) {
+  return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
+}
+
+function ensureObligationSheet() {
+  var doc = SpreadsheetApp.openById(sheetId);
+  var sheet = doc.getSheetByName('Obligation');
+  var headers = [
+    'ID', 'KIND', 'DIRECTION', 'NAME', 'TAG', 'TITLE', 'PRINCIPAL', 'REMAINING',
+    'RATE', 'METHOD', 'TERM', 'PMT', 'START', 'END', 'DUE_DAY', 'CURRENCY',
+    'PAYMENT_METHOD', 'NOTE', 'STATUS', 'UPDATED_AT', 'JSON'
+  ];
+  if (!sheet) {
+    sheet = doc.insertSheet('Obligation');
+    sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+    sheet.getRange(1, 1, 1, headers.length).setFontWeight('bold');
+    sheet.setFrozenRows(1);
+    return sheet;
+  }
+  if (sheet.getLastColumn() < 1) {
+    sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+    sheet.getRange(1, 1, 1, headers.length).setFontWeight('bold');
+    sheet.setFrozenRows(1);
+  }
+  return sheet;
+}
+
+function ensureObligationScheduleSheet() {
+  var doc = SpreadsheetApp.openById(sheetId);
+  var sheet = doc.getSheetByName('ObligationSchedule');
+  var headers = [
+    'ID', 'OBLIGATION_ID', 'SEQ', 'DUE_DATE', 'AMOUNT', 'PRINCIPAL', 'INTEREST',
+    'STATUS', 'RECORD_ID', 'NOTE', 'KIND', 'UPDATED_AT'
+  ];
+  if (!sheet) {
+    sheet = doc.insertSheet('ObligationSchedule');
+    sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+    sheet.getRange(1, 1, 1, headers.length).setFontWeight('bold');
+    sheet.setFrozenRows(1);
+    return sheet;
+  }
+  if (sheet.getLastColumn() < 1) {
+    sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+    sheet.getRange(1, 1, 1, headers.length).setFontWeight('bold');
+    sheet.setFrozenRows(1);
+  }
+  return sheet;
+}
+
+function parseSheetDate(value) {
+  if (!value && value !== 0) return '';
+  if (Object.prototype.toString.call(value) === '[object Date]' && !isNaN(value.getTime())) {
+    return Utilities.formatDate(value, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  }
+  var s = String(value).trim();
+  if (!s) return '';
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+  var parsed = new Date(s);
+  if (!isNaN(parsed.getTime())) {
+    return Utilities.formatDate(parsed, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  }
+  return s.slice(0, 10);
+}
+
+function readObligationRows() {
+  var sheet = ensureObligationSheet();
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return [];
+  var lastCol = Math.max(sheet.getLastColumn(), 21);
+  var values = sheet.getRange(2, 1, lastRow - 1, lastCol).getValues();
+  var list = [];
+  for (var i = 0; i < values.length; i++) {
+    var row = values[i];
+    var id = String(row[0] || '').trim();
+    var name = String(row[3] || '').trim();
+    if (!id || !name) continue;
+    var extra = {};
+    try {
+      if (row[20]) extra = JSON.parse(String(row[20]));
+    } catch (e) {
+      extra = {};
+    }
+    list.push({
+      id: id,
+      kind: String(row[1] || 'loan'),
+      direction: String(row[2] || 'payable'),
+      name: name,
+      tag: String(row[4] || ''),
+      title: String(row[5] || name),
+      principal: Number(row[6]) || 0,
+      remainingPrincipal: Number(row[7]) || 0,
+      annualRate: Number(row[8]) || 0,
+      interestMethod: String(row[9] || 'none'),
+      termMonths: Number(row[10]) || 1,
+      installmentAmount: Number(row[11]) || 0,
+      startDate: parseSheetDate(row[12]),
+      endDate: parseSheetDate(row[13]),
+      dueDay: Number(row[14]) || 1,
+      currency: String(row[15] || 'MYR'),
+      paymentMethod: String(row[16] || ''),
+      note: String(row[17] || ''),
+      status: String(row[18] || 'active'),
+      updatedAt: Number(row[19]) || Date.now(),
+      extra: extra
+    });
+  }
+  return list;
+}
+
+function readScheduleRows(obligationId) {
+  var sheet = ensureObligationScheduleSheet();
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return [];
+  var lastCol = Math.max(sheet.getLastColumn(), 12);
+  var values = sheet.getRange(2, 1, lastRow - 1, lastCol).getValues();
+  var list = [];
+  for (var i = 0; i < values.length; i++) {
+    var row = values[i];
+    var id = String(row[0] || '').trim();
+    var oid = String(row[1] || '').trim();
+    if (!id || !oid) continue;
+    if (obligationId && oid !== obligationId) continue;
+    list.push({
+      id: id,
+      obligationId: oid,
+      seq: Number(row[2]) || 0,
+      dueDate: parseSheetDate(row[3]),
+      amount: Number(row[4]) || 0,
+      principalPortion: Number(row[5]) || 0,
+      interestPortion: Number(row[6]) || 0,
+      status: String(row[7] || 'pending'),
+      postedRecordId: String(row[8] || ''),
+      note: String(row[9] || ''),
+      kind: String(row[10] || 'regular'),
+      updatedAt: Number(row[11]) || Date.now()
+    });
+  }
+  return list;
+}
+
+function listObligations() {
+  try {
+    var obligations = readObligationRows();
+    var allSched = readScheduleRows();
+    var byOb = {};
+    for (var i = 0; i < allSched.length; i++) {
+      var s = allSched[i];
+      if (!byOb[s.obligationId]) byOb[s.obligationId] = [];
+      byOb[s.obligationId].push(s);
+    }
+    for (var j = 0; j < obligations.length; j++) {
+      obligations[j].schedule = byOb[obligations[j].id] || [];
+    }
+    return jsonOut({ success: true, obligations: obligations });
+  } catch (error) {
+    appendLog(['Error in listObligations:', error.toString(), error.stack]);
+    return jsonOut({ success: false, error: error.toString(), obligations: [] });
+  }
+}
+
+function findRowIndexById(sheet, id, idCol) {
+  idCol = idCol || 1;
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return -1;
+  var ids = sheet.getRange(2, idCol, lastRow - 1, 1).getValues();
+  for (var i = 0; i < ids.length; i++) {
+    if (String(ids[i][0] || '').trim() === String(id)) return i + 2;
+  }
+  return -1;
+}
+
+function upsertObligation(data) {
+  try {
+    appendLog(['upsertObligation called', JSON.stringify({ id: data && data.id, name: data && data.name })]);
+    var name = String((data && data.name) || '').trim();
+    if (!name) return jsonOut({ success: false, error: 'Missing name' });
+    var id = String((data && data.id) || '').trim();
+    if (!id) id = 'ob_' + Date.now() + '_' + Math.floor(Math.random() * 10000);
+    var updatedAt = Number(data.updatedAt) || Date.now();
+    var sheet = ensureObligationSheet();
+    var row = [
+      id,
+      String(data.kind || 'loan'),
+      String(data.direction || 'payable'),
+      name,
+      String(data.tag || ''),
+      String(data.title || name),
+      Number(data.principal) || 0,
+      Number(data.remainingPrincipal != null ? data.remainingPrincipal : data.principal) || 0,
+      Number(data.annualRate) || 0,
+      String(data.interestMethod || 'none'),
+      Number(data.termMonths) || 1,
+      Number(data.installmentAmount) || 0,
+      String(data.startDate || ''),
+      String(data.endDate || ''),
+      Number(data.dueDay) || 1,
+      String(data.currency || 'MYR'),
+      String(data.paymentMethod || ''),
+      String(data.note || ''),
+      String(data.status || 'active'),
+      updatedAt,
+      JSON.stringify(data.json || {})
+    ];
+    var rowIndex = findRowIndexById(sheet, id, 1);
+    if (rowIndex > 0) {
+      sheet.getRange(rowIndex, 1, 1, row.length).setValues([row]);
+    } else {
+      sheet.appendRow(row);
+    }
+
+    if (Array.isArray(data.schedule)) {
+      replacePendingSchedule(id, data.schedule);
+    }
+
+    return jsonOut({ success: true, id: id, updatedAt: updatedAt });
+  } catch (error) {
+    appendLog(['Error in upsertObligation:', error.toString(), error.stack]);
+    return jsonOut({ success: false, error: error.toString() });
+  }
+}
+
+function replacePendingSchedule(obligationId, schedule) {
+  var sheet = ensureObligationScheduleSheet();
+  var lastRow = sheet.getLastRow();
+  if (lastRow >= 2) {
+    var values = sheet.getRange(2, 1, lastRow - 1, 12).getValues();
+    for (var i = values.length - 1; i >= 0; i--) {
+      var oid = String(values[i][1] || '').trim();
+      var status = String(values[i][7] || '').trim();
+      if (oid === obligationId && status !== 'posted') {
+        sheet.deleteRow(i + 2);
+      }
+    }
+  }
+  for (var j = 0; j < schedule.length; j++) {
+    var inst = schedule[j];
+    if (!inst || String(inst.status || '') === 'posted') continue;
+    writeScheduleRow(sheet, inst, obligationId);
+  }
+}
+
+function writeScheduleRow(sheet, inst, obligationId) {
+  var id = String(inst.id || '').trim();
+  if (!id) id = 'oi_' + Date.now() + '_' + Math.floor(Math.random() * 10000);
+  var row = [
+    id,
+    String(inst.obligationId || obligationId || ''),
+    Number(inst.seq) || 0,
+    String(inst.dueDate || '').slice(0, 10),
+    Number(inst.amount) || 0,
+    Number(inst.principalPortion != null ? inst.principalPortion : inst.principal) || 0,
+    Number(inst.interestPortion != null ? inst.interestPortion : inst.interest) || 0,
+    String(inst.status || 'pending'),
+    String(inst.postedRecordId || inst.record_id || ''),
+    String(inst.note || ''),
+    String(inst.kind || 'regular'),
+    Number(inst.updatedAt) || Date.now()
+  ];
+  var rowIndex = findRowIndexById(sheet, id, 1);
+  if (rowIndex > 0) {
+    sheet.getRange(rowIndex, 1, 1, row.length).setValues([row]);
+  } else {
+    sheet.appendRow(row);
+  }
+}
+
+function deleteObligation(data) {
+  try {
+    var id = String((data && data.id) || '').trim();
+    if (!id) return jsonOut({ success: false, error: 'Missing id' });
+    var sheet = ensureObligationSheet();
+    var rowIndex = findRowIndexById(sheet, id, 1);
+    if (rowIndex > 0) sheet.deleteRow(rowIndex);
+
+    var sched = ensureObligationScheduleSheet();
+    var lastRow = sched.getLastRow();
+    if (lastRow >= 2) {
+      var values = sched.getRange(2, 1, lastRow - 1, 8).getValues();
+      for (var i = values.length - 1; i >= 0; i--) {
+        var oid = String(values[i][1] || '').trim();
+        var status = String(values[i][7] || '').trim();
+        if (oid === id && status !== 'posted') {
+          sched.deleteRow(i + 2);
+        }
+      }
+    }
+    return jsonOut({ success: true, deleted: true, id: id });
+  } catch (error) {
+    appendLog(['Error in deleteObligation:', error.toString(), error.stack]);
+    return jsonOut({ success: false, error: error.toString() });
+  }
+}
+
+function upsertObligationInstallment(data) {
+  try {
+    if (!data || !data.id) return jsonOut({ success: false, error: 'Missing installment id' });
+    var sheet = ensureObligationScheduleSheet();
+    writeScheduleRow(sheet, data, data.obligationId);
+    return jsonOut({ success: true, id: data.id });
+  } catch (error) {
+    appendLog(['Error in upsertObligationInstallment:', error.toString(), error.stack]);
+    return jsonOut({ success: false, error: error.toString() });
+  }
+}
+
+function postObligationInstallmentToRecords(ob, inst) {
+  var now = new Date();
+  var sign = String(ob.direction) === 'receivable' ? -1 : 1;
+  var amount = sign * Math.abs(Number(inst.amount) || 0);
+  var totalLabel = ob.termMonths ? String(ob.termMonths) : '?';
+  var seqLabel = inst.kind === 'extra' ? '提前還' : ('第' + inst.seq + '/' + totalLabel + '期');
+  var remark = '[應→已] ' + (ob.name || ob.title || '') + ' ' + seqLabel;
+  if (Number(inst.principalPortion)) remark += ' 本金 ' + inst.principalPortion;
+  if (Number(inst.interestPortion)) remark += ' 利息 ' + inst.interestPortion;
+  if (inst.note) remark += ' ' + inst.note;
+  if (ob.note) remark += ' | ' + ob.note;
+  var recordId = 'obrec_' + inst.id;
+  var expenseData = {
+    id: recordId,
+    timestamp_ms: now.getTime(),
+    timestamp: datetimetoYMDHIS(now),
+    yearmonth: Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyyMM'),
+    title: ob.title || ob.name,
+    amount: amount.toFixed(2),
+    remark: remark,
+    tag: ob.tag || '其他',
+    currency: ob.currency || 'MYR',
+    payment_method: ob.paymentMethod || 'Auto',
+    obligation_id: ob.id,
+    installment_id: inst.id,
+    installment_seq: inst.seq
+  };
+  var upsert = upsertRowById(expenseData, 'Records');
+  return upsert.id;
+}
+
+function processDueObligations() {
+  try {
+    appendLog(['processDueObligations called']);
+    var today = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
+    var obligations = readObligationRows();
+    var byId = {};
+    for (var i = 0; i < obligations.length; i++) byId[obligations[i].id] = obligations[i];
+    var sheet = ensureObligationScheduleSheet();
+    var lastRow = sheet.getLastRow();
+    var posted = [];
+    if (lastRow < 2) {
+      return jsonOut({ success: true, posted: 0, records: posted });
+    }
+    var values = sheet.getRange(2, 1, lastRow - 1, 12).getValues();
+    for (var r = 0; r < values.length; r++) {
+      var row = values[r];
+      var instId = String(row[0] || '').trim();
+      var oid = String(row[1] || '').trim();
+      var dueDate = parseSheetDate(row[3]);
+      var status = String(row[7] || '').trim();
+      if (!instId || !oid || status !== 'pending' || !dueDate || dueDate > today) continue;
+      var ob = byId[oid];
+      if (!ob || ob.status === 'paused' || ob.status === 'closed') continue;
+      var inst = {
+        id: instId,
+        obligationId: oid,
+        seq: Number(row[2]) || 0,
+        dueDate: dueDate,
+        amount: Number(row[4]) || 0,
+        principalPortion: Number(row[5]) || 0,
+        interestPortion: Number(row[6]) || 0,
+        note: String(row[9] || ''),
+        kind: String(row[10] || 'regular')
+      };
+      var recordId = postObligationInstallmentToRecords(ob, inst);
+      sheet.getRange(r + 2, 8).setValue('posted');
+      sheet.getRange(r + 2, 9).setValue(recordId);
+      sheet.getRange(r + 2, 12).setValue(Date.now());
+      posted.push({ installmentId: instId, obligationId: oid, recordId: recordId, amount: inst.amount });
+
+      if (ob.kind === 'loan' && inst.kind !== 'extra') {
+        var remain = Math.max(0, (Number(ob.remainingPrincipal) || 0) - (Number(inst.principalPortion) || 0));
+        ob.remainingPrincipal = remain;
+        var obSheet = ensureObligationSheet();
+        var obRow = findRowIndexById(obSheet, oid, 1);
+        if (obRow > 0) {
+          obSheet.getRange(obRow, 8).setValue(remain);
+          if (remain <= 0.005) obSheet.getRange(obRow, 19).setValue('closed');
+        }
+      }
+    }
+    appendLog(['processDueObligations completed', 'Posted:', posted.length]);
+    return jsonOut({ success: true, posted: posted.length, records: posted });
+  } catch (error) {
+    appendLog(['Error in processDueObligations:', error.toString(), error.stack]);
+    return jsonOut({ success: false, error: error.toString() });
+  }
+}
+
+/** Run once in the Apps Script editor to install daily 00:00 trigger. */
+function setupObligationTrigger() {
+  var triggers = ScriptApp.getProjectTriggers();
+  for (var i = 0; i < triggers.length; i++) {
+    if (triggers[i].getHandlerFunction() === 'processDueObligations') {
+      ScriptApp.deleteTrigger(triggers[i]);
+    }
+  }
+  ScriptApp.newTrigger('processDueObligations')
+    .timeBased()
+    .atHour(0)
+    .everyDays(1)
+    .create();
+  return 'installed processDueObligations daily at 00:00';
 }

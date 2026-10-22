@@ -25,12 +25,19 @@ import {
 import SectionHead from '../components/SectionHead';
 import { detectPaymentCategory, detectPaymentRegion } from '../utils/paymentCategory';
 import { useUnsavedGuard } from '../hooks/useUnsavedGuard';
-import { ROUTES } from '../utils/routing';
+import { getHashPath, ROUTES } from '../utils/routing';
 import {
   parseExpenseQuickDraft,
   clearExpenseQuickQuery,
   getMergedQueryParams,
 } from '../utils/expenseQuickUrl';
+import { ObligationsPanel } from './ObligationsPage';
+
+function ledgerFromLocation() {
+  if (getHashPath() === ROUTES.OBLIGATIONS) return 'scheduled';
+  if (getMergedQueryParams().get('tab') === 'scheduled') return 'scheduled';
+  return 'now';
+}
 
 function ExpensePage() {
   const { enqueueAndSend } = useOfflineQueue();
@@ -554,10 +561,59 @@ function ExpensePage() {
   };
 
   const silentSec = Math.ceil(silentRemainMs / 1000);
+  const [ledger, setLedger] = useState(ledgerFromLocation);
+
+  useEffect(() => {
+    const sync = () => setLedger(ledgerFromLocation());
+    window.addEventListener('hashchange', sync);
+    return () => window.removeEventListener('hashchange', sync);
+  }, []);
+
+  const goLedger = (next) => {
+    setLedger(next);
+    window.location.hash = next === 'scheduled' ? '#/expense?tab=scheduled' : '#/expense';
+  };
 
   return (
     <PageChrome title="記帳">
       <div className="app-container expense-page">
+        <div className="ledger-tabs" role="tablist" aria-label="記帳方式">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={ledger === 'now'}
+            className={`ledger-tab${ledger === 'now' ? ' is-active' : ''}`}
+            onClick={() => goLedger('now')}
+          >
+            <svg className="ledger-tab-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden>
+              <path
+                fill="currentColor"
+                d="M7 3h10a2 2 0 0 1 2 2v14l-7-3-7 3V5a2 2 0 0 1 2-2zm2 5v2h6V8H9zm0 4v2h6v-2H9z"
+              />
+            </svg>
+            單筆
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={ledger === 'scheduled'}
+            className={`ledger-tab${ledger === 'scheduled' ? ' is-active' : ''}`}
+            onClick={() => goLedger('scheduled')}
+          >
+            <svg className="ledger-tab-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden>
+              <path
+                fill="currentColor"
+                d="M12 6V3L8 7l4 4V8c2.76 0 5 2.24 5 5a5 5 0 0 1-8.9 3.1L6.7 17.5A7 7 0 0 0 19 13c0-3.87-3.13-7-7-7zm-7 7c0-1.07.24-2.08.67-3L4.24 8.57A8.96 8.96 0 0 0 3 13a7 7 0 0 0 12.3 4.5l-1.4-1.4A5 5 0 0 1 5 13z"
+              />
+            </svg>
+            排程
+          </button>
+        </div>
+
+        {ledger === 'scheduled' ? (
+          <ObligationsPanel />
+        ) : (
+          <>
         {(silentPhase === 'armed' || silentPhase === 'sending') && (
           <div className="silent-submit-banner" role="status">
             <div className="silent-submit-banner-main">
@@ -745,6 +801,8 @@ function ExpensePage() {
         </div>
 
         <QuickLinksButton />
+          </>
+        )}
       </div>
     </PageChrome>
   );

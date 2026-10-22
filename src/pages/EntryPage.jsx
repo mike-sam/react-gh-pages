@@ -10,7 +10,7 @@ const ACTIONS = [
     path: ROUTES.EXPENSE,
     icon: '🧾',
     title: '記帳',
-    desc: '支援 URL 帶入；silent=true 時 2s 送出／3s 內可點取消',
+    desc: '單筆記一筆，或排程房租／貸款／已知單次（到期才入帳）',
     direct: '#/expense',
   },
   {

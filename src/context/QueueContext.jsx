@@ -17,7 +17,7 @@ async function postPayload(payload, signal) {
         ? API_ENDPOINTS.PARK_LOCATION || API_ENDPOINTS.GSHEET_SUBMIT
         : payload.action === 'analyzeReceipt'
           ? API_ENDPOINTS.PHOTO_UPLOAD || API_ENDPOINTS.GSHEET_SUBMIT
-          : API_ENDPOINTS.GSHEET_SUBMIT;
+          : API_ENDPOINTS.GSHEET_SUBMIT; // upsertExpense / obligations share this exec
 
   // no-cors: opaque ok = request left device; only network fail throws
   await fetch(endpoint, {

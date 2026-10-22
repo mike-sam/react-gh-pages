@@ -8,6 +8,7 @@ export const ROUTES = {
   EXPENSE: '/expense',
   CALENDAR: '/calendar',
   PARKING: '/parking',
+  OBLIGATIONS: '/obligations',
 };
 
 export function getHashPath() {

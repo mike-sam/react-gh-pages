@@ -10,7 +10,9 @@ import './App.css';
 /**
  * Hash routes (GitHub Pages friendly):
  *   #/           Entry Point
- *   #/expense    記帳
+ *   #/expense    記帳（單筆 / 排程）
+ *   #/expense?tab=scheduled  預定交易
+ *   #/obligations 同上（相容舊連結）
  *   #/calendar   行事曆軌跡
  *   #/parking    記車位 / 找車
  */
@@ -19,6 +21,7 @@ function App() {
 
   switch (path) {
     case ROUTES.EXPENSE:
+    case ROUTES.OBLIGATIONS:
       return <ExpensePage />;
     case ROUTES.CALENDAR:
       return <CalendarPage />;

@@ -9,6 +9,7 @@ export const API_ENDPOINTS = {
   // Calendar 軌跡追加 & 記車位（可與 GSHEET_SUBMIT 同一部署）
   CALENDAR_TRACK: 'https://script.google.com/macros/s/...../exec',
   PARK_LOCATION: 'https://script.google.com/macros/s/...../exec'
+  // 預定交易 list/upsert/delete 走 GSHEET_SUBMIT（?action=listObligations）
 };
 
 // Google Sheets / Drive 链接

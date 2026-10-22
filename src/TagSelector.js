@@ -14,8 +14,9 @@ function TagSelector({
   tags,
 }) {
   const [showManualInput, setShowManualInput] = useState(false);
+  const initiallyComplete = Boolean(selectedTag && String(input || '').trim());
   /** expanded | collapsing | collapsed */
-  const [phase, setPhase] = useState('expanded');
+  const [phase, setPhase] = useState(initiallyComplete ? 'collapsed' : 'expanded');
   const manualInputRef = useRef(null);
   const collapseTimer = useRef(null);
 
@@ -42,7 +43,7 @@ function TagSelector({
   };
 
   /** URL prefill / history restore: collapse when selection becomes complete (not when user taps「展開」) */
-  const prevCompleteRef = useRef(false);
+  const prevCompleteRef = useRef(initiallyComplete);
   useEffect(() => {
     const wasComplete = prevCompleteRef.current;
     prevCompleteRef.current = selectionComplete;
