@@ -49,8 +49,12 @@ const doGet = (event) => {
       return getNearbyLocations(parseFloat(parameter.latitude), parseFloat(parameter.longitude), parseFloat(parameter.radius || 1));
     case 'listLocations':
       return listLocations();
+    case 'deleteLocation':
+      return deleteLocation(parameter);
     case 'listLandmarkRegions':
       return listLandmarkRegions();
+    case 'deleteLandmarkRegion':
+      return deleteLandmarkRegion(parameter);
     case 'getParkedLocation':
       return getParkedLocation(parameter.carPlate);
     case 'getParkedLocations':
@@ -3025,6 +3029,7 @@ function collectLandmarkRegions() {
     if (isNaN(radiusM) || radiusM < 10) radiusM = 150;
     var vertices = [];
     var shape = 'circle';
+    var icon = '';
     try {
       if (row[5]) {
         var parsedVerts = JSON.parse(row[5].toString());
@@ -3037,6 +3042,7 @@ function collectLandmarkRegions() {
           if (shape !== 'rect' && shape !== 'polygon' && shape !== 'circle' && shape !== 'point') {
             shape = vertices.length >= 3 ? 'polygon' : 'circle';
           }
+          icon = (parsedVerts.icon || '').toString().trim();
         }
       }
     } catch (e) {
@@ -3059,6 +3065,7 @@ function collectLandmarkRegions() {
       radiusM: radiusM,
       vertices: Array.isArray(vertices) ? vertices : [],
       shape: shape || 'circle',
+      icon: icon || 'place',
       updatedAt: updatedAt || Date.now()
     });
   }
@@ -3158,7 +3165,9 @@ function upsertLandmarkRegion(data) {
     if (shape === 'point' && (isNaN(parseFloat(data.radiusM)) || parseFloat(data.radiusM) < 10)) {
       radiusM = 100;
     }
-    var verticesJson = JSON.stringify({ shape: shape, vertices: vertices });
+    var icon = (data.icon || '').toString().trim();
+    if (icon !== 'food' && icon !== 'fuel' && icon !== 'shop' && icon !== 'med') icon = 'place';
+    var verticesJson = JSON.stringify({ shape: shape, vertices: vertices, icon: icon });
     var updatedAt = datetimetoYMDHIS();
 
     var sheet = ensureLandmarkRegionSheet();
@@ -3191,6 +3200,7 @@ function upsertLandmarkRegion(data) {
         radiusM: radiusM,
         vertices: vertices,
         shape: shape,
+        icon: icon,
         updatedAt: Date.now()
       }
     })).setMimeType(ContentService.MimeType.JSON);
