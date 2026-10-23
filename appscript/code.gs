@@ -1008,11 +1008,11 @@ function resolveGeminiModel_(name) {
   var n = String(name || '').trim().replace(/[\r\n]/g, '');
   n = n.replace(/^models\//i, '');
   var slug = n.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9._-]/g, '');
-  // Only pass through versioned ids (gemini-2.5-flash). "gemini-flash" 404s.
-  if (/^gemini-\d+[a-z0-9._-]*$/.test(slug)) return slug;
-  if (/lite/.test(slug)) return 'gemini-2.5-flash-lite';
-  if (/pro/.test(slug)) return 'gemini-2.5-pro';
-  return 'gemini-2.5-flash';
+  // gemini-3-8-flash (hyphen) is not a model; id is gemini-3.8-flash (dot).
+  slug = slug.replace(/^(gemini)-(\d+)-(\d+)/, '$1-$2.$3');
+  if (/^gemini-2/.test(slug)) return 'gemini-3.8-flash';
+  if (/^gemini-3\.\d+[a-z0-9._-]*$/.test(slug)) return slug;
+  return 'gemini-3.8-flash';
 }
 
 function geminiHttpError_(code, text) {
@@ -1096,7 +1096,7 @@ function extractGeminiText_(httpBody) {
 
 function callGeminiVision_(apiKey, model, mimeType, base64, prompt) {
   var tried = [];
-  var models = [model, 'gemini-2.5-flash', 'gemini-2.0-flash'];
+  var models = [model, 'gemini-3.8-flash'];
   var lastErr = '';
   var i;
   for (i = 0; i < models.length; i++) {
@@ -1152,24 +1152,26 @@ function ensureAiSuggestSheet() {
  * 不把圖存進 Drive（提交記帳時才上傳）。
  */
 function handleAnalyzeReceipt(data) {
+  data = data || {};
+  var model = '';
+  var prompt = '';
   try {
-    data = data || {};
+    prompt = buildReceiptPrompt_(data);
+    var ai = lookupGroupMap_('AI');
+    model = resolveGeminiModel_(ai.NAME || lookupKeyValue_('Name', 'AI'));
     var b64 = stripBase64_(data.photo || data.base64 || '');
     if (!b64) {
-      return jsonOut({ success: false, error: '沒有圖片' });
+      return jsonOut({ success: false, error: '沒有圖片', model: model, prompt: prompt });
     }
     if (b64.length > 900000) {
-      return jsonOut({ success: false, error: '圖片仍太大，請再壓縮' });
+      return jsonOut({ success: false, error: '圖片仍太大，請再壓縮', model: model, prompt: prompt });
     }
-    var ai = lookupGroupMap_('AI');
     var apiKey = String(ai.APIKEY || lookupKeyValue_('APIKey', 'AI') || '').trim();
     if (!apiKey) {
-      return jsonOut({ success: false, error: 'KeyValueConfig group AI 未設定 APIKey' });
+      return jsonOut({ success: false, error: 'KeyValueConfig group AI 未設定 APIKey', model: model, prompt: prompt });
     }
-    var model = resolveGeminiModel_(ai.NAME || lookupKeyValue_('Name', 'AI'));
     var mime = data.mimeType || data.type || 'image/jpeg';
     if (String(mime).indexOf('image/') !== 0) mime = 'image/jpeg';
-    var prompt = buildReceiptPrompt_(data);
     var vision = callGeminiVision_(apiKey, model, mime, b64, prompt);
     var suggestions = parseGeminiSuggestions_(vision.text);
     var usedModel = vision.model || model;
@@ -1179,6 +1181,7 @@ function handleAnalyzeReceipt(data) {
       success: true,
       action: 'analyzeReceipt',
       model: usedModel,
+      prompt: prompt,
       photoHash: hash,
       suggestions: suggestions
     });
@@ -1186,7 +1189,9 @@ function handleAnalyzeReceipt(data) {
     appendLog(['analyzeReceipt error', sanitizeGeminiError_(error.toString())]);
     return jsonOut({
       success: false,
-      error: sanitizeGeminiError_(error.toString())
+      error: sanitizeGeminiError_(error.toString()),
+      model: model,
+      prompt: prompt
     });
   }
 }
