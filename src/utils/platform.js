@@ -46,5 +46,6 @@ export function stringifyCalendarTrackInput(payload) {
     startHome: payload.startHome,
     all: payload.all,
     endAny: payload.endAny,
+    lookbackDays: payload.lookbackDays,
   });
 }

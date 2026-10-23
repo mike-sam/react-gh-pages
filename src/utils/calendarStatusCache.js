@@ -1,4 +1,4 @@
-import { buildCalendarTrackUrl } from './calendarTrackUrl';
+import { buildCalendarTrackUrl, loadCalendarLookbackDays } from './calendarTrackUrl';
 
 export const CALENDAR_STATUS_KEY = 'calendarTrackStatus';
 export const CALENDAR_CHECK_ATTEMPT_KEY = 'calendarCheckAttemptAt';
@@ -90,7 +90,12 @@ export function applyOptimisticCalendarAction(prev, action) {
       homes = [];
     }
   } else if (action.op === 'end') {
-    starts = action.all || !action.title ? [] : starts.filter((e) => e.title !== title);
+    if (action.all || action.endAny || !action.title) {
+      starts = [];
+      homes = [];
+    } else {
+      starts = starts.filter((e) => e.title !== title);
+    }
   } else if (action.op === 'home') {
     starts = [];
     homes = action.startHome
@@ -125,7 +130,10 @@ export async function fetchCalendarCheck({ force = false } = {}) {
     return loadCalendarStatus();
   }
   localStorage.setItem(CALENDAR_CHECK_ATTEMPT_KEY, String(Date.now()));
-  const url = buildCalendarTrackUrl({ op: 'check' });
+  const url = buildCalendarTrackUrl({
+    op: 'check',
+    lookbackDays: loadCalendarLookbackDays(),
+  });
   if (!url) throw new Error('缺少行事曆端點');
   const res = await fetch(url);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);

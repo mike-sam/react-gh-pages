@@ -7,10 +7,13 @@ import CalendarUrlExamples from './CalendarUrlExamples';
 import MobileFriendlyDateTime from './MobileFriendlyDateTime';
 import { PinIcon } from './LocationPinButton';
 import {
+  CALENDAR_LOOKBACK_DAY_CHOICES,
   CALENDAR_PREFIXES,
   CALENDAR_TITLES,
   buildCalendarTrailPreview,
   buildCalendarTrackUrl,
+  loadCalendarLookbackDays,
+  saveCalendarLookbackDays,
   stampCalendarTimestamp,
 } from '../utils/calendarTrackUrl';
 import {
@@ -33,6 +36,7 @@ function CalendarTracker() {
   const [useShortcut, setUseShortcut] = useState(false);
   const [status, setStatus] = useState(() => loadCalendarStatus());
   const [actionTime, setActionTime] = useState(() => new Date());
+  const [lookbackDays, setLookbackDays] = useState(() => loadCalendarLookbackDays());
   const timeEditedRef = useRef(false);
   const checkTimer = useRef(null);
 
@@ -81,8 +85,9 @@ function CalendarTracker() {
       params.lng = location.lng;
     }
     params.timestamp = stampCalendarTimestamp(actionTime);
+    params.lookbackDays = lookbackDays;
     return buildCalendarTrackUrl(params);
-  }, [resolvedTitle, prefix, location, actionTime]);
+  }, [resolvedTitle, prefix, location, actionTime, lookbackDays]);
 
   const trailPreview = useMemo(
     () =>
@@ -113,6 +118,7 @@ function CalendarTracker() {
         title: flags.all ? '' : resolvedTitle,
         uiLabel: label,
         all: flags.all === true,
+        endAny: flags.endAny === true,
         startHome: flags.startHome === true,
         queued: true,
         when,
@@ -133,6 +139,7 @@ function CalendarTracker() {
       startHome: flags.startHome === true,
       all: flags.all === true,
       endAny: flags.endAny === true,
+      lookbackDays,
     });
 
     if (onIOS && useShortcut) {
@@ -255,6 +262,28 @@ function CalendarTracker() {
             onChange={(e) => setPrefix(e.target.value)}
             placeholder="空白則為 -no input-"
           />
+        </section>
+
+        <section className="calendar-field">
+          <div className="calendar-field-head">
+            <span className="entry-field-label">Days</span>
+          </div>
+          <div className="entry-chip-row">
+            {CALENDAR_LOOKBACK_DAY_CHOICES.map((n) => (
+              <button
+                key={n}
+                type="button"
+                className={`entry-chip ${lookbackDays === n ? 'active' : ''}`}
+                onClick={() => {
+                  const next = saveCalendarLookbackDays(n);
+                  setLookbackDays(next);
+                  refreshStatus({ silent: true, force: true });
+                }}
+              >
+                {n}
+              </button>
+            ))}
+          </div>
         </section>
       </div>
 
@@ -405,7 +434,7 @@ function CalendarTracker() {
         <button
           type="button"
           className="entry-btn-end-all"
-          onClick={() => handleOp('end', { all: true, uiLabel: 'End All' })}
+          onClick={() => handleOp('end', { all: true, endAny: true, uiLabel: 'End All' })}
           title="結束所有進行中的行程"
         >
           End All

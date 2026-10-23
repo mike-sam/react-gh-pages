@@ -4,6 +4,31 @@ export const CALENDAR_TITLES = ['Work', 'Commute', 'Driving', 'Trip', 'Sleep'];
 
 export const CALENDAR_PREFIXES = ['start', 'end', 'public transportation'];
 
+export const CALENDAR_LOOKBACK_DAYS_DEFAULT = 3;
+export const CALENDAR_LOOKBACK_DAY_CHOICES = [1, 3, 7];
+const LOOKBACK_DAYS_KEY = 'calendarLookbackDays';
+
+export function loadCalendarLookbackDays() {
+  try {
+    const n = Number(localStorage.getItem(LOOKBACK_DAYS_KEY));
+    if (CALENDAR_LOOKBACK_DAY_CHOICES.includes(n)) return n;
+  } catch {
+    /* ignore */
+  }
+  return CALENDAR_LOOKBACK_DAYS_DEFAULT;
+}
+
+export function saveCalendarLookbackDays(days) {
+  const n = Number(days);
+  const next = CALENDAR_LOOKBACK_DAY_CHOICES.includes(n) ? n : CALENDAR_LOOKBACK_DAYS_DEFAULT;
+  try {
+    localStorage.setItem(LOOKBACK_DAYS_KEY, String(next));
+  } catch {
+    /* ignore */
+  }
+  return next;
+}
+
 /** Query contract for GAS GET/POST. Shown in the calendar ? help panel. */
 export const CALENDAR_TRACK_PARAMS = [
   {
@@ -70,7 +95,7 @@ export const CALENDAR_TRACK_PARAMS = [
     name: 'all',
     required: 'optional',
     example: '0',
-    note: '預設 0。append/end 套用到每個 **start**',
+    note: '預設 0。append 套用每個進行中；end 結束全部進行中（含即時行程與 Home）',
   },
   {
     name: 'endAny',
@@ -91,6 +116,7 @@ export function calendarActionPayload({
   all = false,
   endAny = false,
   prefix = '',
+  lookbackDays,
   id,
 }) {
   return {
@@ -106,6 +132,7 @@ export function calendarActionPayload({
     startHome: false,
     all: Boolean(all),
     endAny: Boolean(endAny),
+    lookbackDays: Number(lookbackDays) || CALENDAR_LOOKBACK_DAYS_DEFAULT,
   };
 }
 
@@ -169,6 +196,7 @@ export function buildCalendarTrackUrl(params, base = calendarTrackEndpoint()) {
     'startHome',
     'all',
     'endAny',
+    'lookbackDays',
   ];
   keys.forEach((k) => {
     const v = params?.[k];
@@ -223,7 +251,7 @@ export function calendarTrackUrlExamples() {
     },
     {
       title: 'End All',
-      note: '結束所有進行中的 **start**',
+      note: '結束所有進行中（**start**、即時行程、Home）',
       params: {
         op: 'end',
         all: true,

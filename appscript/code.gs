@@ -1901,8 +1901,24 @@ var CALENDAR_END_MARKER = '**end**';
 var CALENDAR_HOME_MARKER = '**home**';
 var CALENDAR_DEFAULT_DURATION_MS = 60 * 60 * 1000; // 新建事件預設 1 小時
 var CALENDAR_EXTEND_MS = 20 * 60 * 1000; // 追加時至少延長到 timestamp+20 分鐘
-var CALENDAR_LOOKBACK_MS = 24 * 60 * 60 * 1000;
+var CALENDAR_LOOKBACK_DAYS_DEFAULT = 3;
+var CALENDAR_LOOKBACK_DAYS_MIN = 1;
+var CALENDAR_LOOKBACK_DAYS_MAX = 14;
 var CALENDAR_LOOKAHEAD_MS = 60 * 60 * 1000;
+
+function calendarLookbackMs(data) {
+  var days = CALENDAR_LOOKBACK_DAYS_DEFAULT;
+  try {
+    var prop = PropertiesService.getScriptProperties().getProperty('CALENDAR_LOOKBACK_DAYS');
+    if (prop != null && String(prop).trim() !== '') days = Number(prop);
+  } catch (e) {}
+  if (data && data.lookbackDays != null && String(data.lookbackDays).trim() !== '') {
+    days = Number(data.lookbackDays);
+  }
+  if (isNaN(days) || days < CALENDAR_LOOKBACK_DAYS_MIN) days = CALENDAR_LOOKBACK_DAYS_DEFAULT;
+  if (days > CALENDAR_LOOKBACK_DAYS_MAX) days = CALENDAR_LOOKBACK_DAYS_MAX;
+  return days * 24 * 60 * 60 * 1000;
+}
 
 /**
  * 地理圍欄反查：落在預設範圍內則回傳地名，否則空字串
@@ -2061,8 +2077,9 @@ function appendDescriptionLine(desc, line) {
   return text + '\n' + line;
 }
 
-function findEventsByFirstLine(calendar, marker, when) {
-  var from = new Date(when.getTime() - CALENDAR_LOOKBACK_MS);
+function findEventsByFirstLine(calendar, marker, when, lookbackMs) {
+  var back = lookbackMs || CALENDAR_LOOKBACK_DAYS_DEFAULT * 24 * 60 * 60 * 1000;
+  var from = new Date(when.getTime() - back);
   var to = new Date(when.getTime() + CALENDAR_LOOKAHEAD_MS);
   var events = calendar.getEvents(from, to);
   var out = [];
@@ -2104,8 +2121,9 @@ function mergeCalendarEvents(primary, extra) {
  * Includes pre-planned meetings that were never marked **start**.
  * Skips all-day, already **end** / **home**.
  */
-function findLiveTimedEvents(calendar, when) {
-  var from = new Date(when.getTime() - CALENDAR_LOOKBACK_MS);
+function findLiveTimedEvents(calendar, when, lookbackMs) {
+  var back = lookbackMs || CALENDAR_LOOKBACK_DAYS_DEFAULT * 24 * 60 * 60 * 1000;
+  var from = new Date(when.getTime() - back);
   var to = new Date(when.getTime() + CALENDAR_LOOKAHEAD_MS);
   var events = calendar.getEvents(from, to);
   var t = when.getTime();
@@ -2248,14 +2266,15 @@ function handleCalendarTrack(data) {
     var startHome = calendarFlag(data.startHome, false);
     var all = calendarFlag(data.all, false);
     var endAny = calendarFlag(data.endAny, false);
+    var lookbackMs = calendarLookbackMs(data);
     var ts = formatCalendarStamp(when);
     var calendar = openTrackingCalendar();
-    var starts = findEventsByFirstLine(calendar, CALENDAR_START_MARKER, when);
-    var homes = findEventsByFirstLine(calendar, CALENDAR_HOME_MARKER, when);
-    var liveEvents = findLiveTimedEvents(calendar, when);
+    var starts = findEventsByFirstLine(calendar, CALENDAR_START_MARKER, when, lookbackMs);
+    var homes = findEventsByFirstLine(calendar, CALENDAR_HOME_MARKER, when, lookbackMs);
+    var liveEvents = findLiveTimedEvents(calendar, when, lookbackMs);
     var appendable = mergeCalendarEvents(starts, liveEvents);
     var windowEvents = calendar.getEvents(
-      new Date(when.getTime() - CALENDAR_LOOKBACK_MS),
+      new Date(when.getTime() - lookbackMs),
       new Date(when.getTime() + CALENDAR_LOOKAHEAD_MS)
     );
 
@@ -2384,21 +2403,37 @@ function handleCalendarTrack(data) {
 
     if (op === 'end') {
       var endPrefix = 'end';
-      var endTargets = starts;
-      if (title) {
-        endTargets = [];
-        for (var e = 0; e < starts.length; e++) {
-          if (starts[e].getTitle() === title) endTargets.push(starts[e]);
+      // Same pool as check「進行中」: **start** + live unmarked timed events.
+      var endPool = mergeCalendarEvents(starts, liveEvents);
+      var closeAll = all || endAny;
+      if (closeAll) {
+        endPool = mergeCalendarEvents(endPool, homes);
+      }
+      var endTargets = endPool;
+      if (!closeAll) {
+        if (title) {
+          endTargets = [];
+          for (var e = 0; e < endPool.length; e++) {
+            if (endPool[e].getTitle() === title) endTargets.push(endPool[e]);
+          }
         }
-        if (!endTargets.length) endTargets = starts;
+        if (!endTargets.length) {
+          var endPrimary = pickPrimaryEvent(endPool, when, title);
+          endTargets = endPrimary ? [endPrimary] : [];
+        }
       }
-      if (!all && !title) {
-        var endPrimary = pickPrimaryEvent(starts, when, '');
-        endTargets = endPrimary ? [endPrimary] : [];
-      }
-      if (anyEventHasTrail(windowEvents, ts, endPrefix) && !endTargets.length) {
-        result = { success: true, mode: 'skipped', reason: 'duplicate', op: op, timestamp: ts };
-        return calendarJson(result);
+      if (anyEventHasTrail(endTargets, ts, endPrefix) && endTargets.length) {
+        var stillOpen = [];
+        for (var d = 0; d < endTargets.length; d++) {
+          if (!descriptionHasTrail(endTargets[d].getDescription(), ts, endPrefix)) {
+            stillOpen.push(endTargets[d]);
+          }
+        }
+        if (!stillOpen.length) {
+          result = { success: true, mode: 'skipped', reason: 'duplicate', op: op, timestamp: ts };
+          return calendarJson(result);
+        }
+        endTargets = stillOpen;
       }
       var closedEnd = closeEvents(endTargets, when, endPrefix, placeName, lat, lng);
       result = {
@@ -2417,7 +2452,7 @@ function handleCalendarTrack(data) {
       var homeEvent = null;
       var homeLogLine = '';
       if (startHome) {
-        var existingHomes = findEventsByFirstLine(calendar, CALENDAR_HOME_MARKER, when);
+        var existingHomes = findEventsByFirstLine(calendar, CALENDAR_HOME_MARKER, when, lookbackMs);
         if (anyEventHasTrail(existingHomes, ts, 'home')) {
           result = {
             success: true,
