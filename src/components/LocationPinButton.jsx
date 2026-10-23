@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useSmartLocation } from '../hooks/useSmartLocation';
 import LocationMapPickerModal from './LocationMapPickerModal';
+import { navigate, ROUTES } from '../utils/routing';
 
 const CLICK_DELAY_MS = 280;
 
@@ -151,6 +152,16 @@ function LocationPinButton({ compact = false }) {
             }}
           >
             在地圖上點選…
+          </button>
+          <button
+            type="button"
+            className="location-mode-item"
+            onClick={() => {
+              setMenuOpen(false);
+              navigate(ROUTES.REGIONS);
+            }}
+          >
+            常用區域
           </button>
         </div>
       )}

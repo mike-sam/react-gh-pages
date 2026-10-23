@@ -47,6 +47,8 @@ const doGet = (event) => {
       return processDueObligations();
     case 'getNearbyLocations':
       return getNearbyLocations(parseFloat(parameter.latitude), parseFloat(parameter.longitude), parseFloat(parameter.radius || 1));
+    case 'listLocations':
+      return listLocations();
     case 'listLandmarkRegions':
       return listLandmarkRegions();
     case 'getParkedLocation':
@@ -153,6 +155,10 @@ const doPost = (request = {}) => {
         return verifyAccess(data || {});
       case 'saveLocation':
         return saveLocation(data);
+      case 'listLocations':
+        return listLocations();
+      case 'deleteLocation':
+        return deleteLocation(data);
       case 'listLandmarkRegions':
         return listLandmarkRegions();
       case 'upsertLandmarkRegion':
@@ -1160,7 +1166,10 @@ function defaultReceiptPromptTemplate_() {
     '2. 每筆含短 label（如「含稅總額」）。數字用 number。未知欄位省略。',
     '3. currency 用 ISO（MYR/SGD/USD/CNY/TWD/HKD）。fuelType 僅 ron95 或 ron97。',
     '4. tag/title 必須是允許清單內的值；已選分類優先沿用，除非收據明顯不符。',
-    '5. 只根據照片，不要編造商家名以外的長文。'
+    '5. 只根據照片，不要編造商家名以外的長文。',
+    '6. 收據有品項列時 suggestions[].items 必填；沒有列才省略。數字欄位用 number。',
+    '7. 回傳只能是 JSON，格式：',
+    '{"suggestions":[{"label":"含稅總額","tag":"餐饮美食","title":"午餐","amount":25.5,"currency":"MYR","merchant":"店名","items":[{"name":"Nasi Lemak","unitPrice":8.5,"quantity":2,"amount":17}],"receipt_time":"2026-10-24 12:30","time_role":"printed"}]}'
   ].join('\n');
 }
 
@@ -1179,8 +1188,8 @@ function receiptHints_(data) {
   var meal = hm ? mealTitleForHour_(Number(hm[1])) : '';
   var lines = [];
   if (whenStr) lines.push('記帳時間: ' + whenStr);
-  lines.push('有品項列則 OCR 到 items:[{name,amount}] 填入明細；沒有列就省略 items。');
-  lines.push('照片若印有日期/時間，填 receipt_time（yyyy-MM-dd HH:mm）；看不清就省略，不要猜。');
+  lines.push('有品項列則填 items:[{name,unitPrice,quantity,amount}]：name 字串，unitPrice/quantity/amount 用 number。quantity 看得到才填否則 1。amount 是該列小計。不要把整張總額當單一 item。沒有列就省略 items。');
+  lines.push('時間：receipt_time 一律填印出時間（yyyy-MM-dd HH:mm）。入場/IN/開台/停車入場 → time_role=start 且 event_start=該時間，不要填 event_end。一般收據開立時間 → time_role=printed。照片同時有開始+結束才填 event_start 與 event_end。看不清就省略，不要猜。');
   lines.push('商家名填 merchant；有分店/地址才填 merchant_address。不要填經緯度。');
   if (!data.tag || data.tag === '餐饮美食') {
     var foodSubs = '早餐、午餐、晚餐、零食、饮料、外卖、聚餐';
@@ -1404,16 +1413,36 @@ function handleAnalyzeReceipt(data) {
   }
 }
 
+function ensureAiOpenApiKeyRow_() {
+  var sheet = getKeyValueSheet();
+  var data = sheet.getDataRange().getValues();
+  var i;
+  for (i = 1; i < data.length; i++) {
+    var groupStr = data[i][0] ? String(data[i][0]).trim().toUpperCase() : '';
+    var keyStr = data[i][1] ? String(data[i][1]).trim().toUpperCase() : '';
+    if (groupStr === 'AI' && (keyStr === 'OPENAPIKEY' || keyStr === 'OPENAIKEY')) return;
+  }
+  sheet.appendRow(['AI', 'OPENAPIKey', '', datetimetoYMDHIS(), 'ChatGPT/OpenAI; Gemini 慢時瀏覽器直打']);
+}
+
 function handleGetAiPrompt() {
   try {
+    ensureAiOpenApiKeyRow_();
     var ai = lookupGroupMap_('AI');
     var stored = String(ai.PROMPT || lookupKeyValue_('Prompt', 'AI') || '').trim();
+    var openaiModel = String(ai.OPENAIMODEL || lookupKeyValue_('OPENAIModel', 'AI') || 'gpt-4o-mini').trim();
+    if (!openaiModel) openaiModel = 'gpt-4o-mini';
     return jsonOut({
       success: true,
       action: 'getAiPrompt',
       template: stored,
       defaultTemplate: defaultReceiptPromptTemplate_(),
-      model: resolveGeminiModel_(ai.NAME || lookupKeyValue_('Name', 'AI'))
+      model: resolveGeminiModel_(ai.NAME || lookupKeyValue_('Name', 'AI')),
+      openaiModel: openaiModel,
+      geminiKey: String(ai.APIKEY || lookupKeyValue_('APIKey', 'AI') || '').trim(),
+      openaiKey: String(
+        ai.OPENAPIKEY || ai.OPENAIKEY || lookupKeyValue_('OPENAPIKey', 'AI') || lookupKeyValue_('OPENAIKey', 'AI') || ''
+      ).trim()
     });
   } catch (error) {
     return jsonOut({ success: false, error: error.toString() });
@@ -2793,6 +2822,7 @@ function saveLocation(data) {
     const existingData = sheet.getDataRange().getValues();
     let rowIndex = -1;
     const tolerance = 0.0001; // 约11米的位置误差容忍度
+    const nameTol = 0.0011; // ~120m：同名附近視為同一地標，避免 GPS 抖動重複列
     
     for (let i = 1; i < existingData.length; i++) {
       const [lat, lon] = existingData[i];
@@ -2800,6 +2830,19 @@ function saveLocation(data) {
           Math.abs(parseFloat(lon) - longitude) < tolerance) {
         rowIndex = i + 1; // Sheet的行索引从1开始
         break;
+      }
+    }
+
+    if (rowIndex < 0 && name && String(name).trim()) {
+      const want = String(name).trim().toLowerCase();
+      for (let i = 1; i < existingData.length; i++) {
+        const [lat, lon, existingName] = existingData[i];
+        if (String(existingName || '').trim().toLowerCase() !== want) continue;
+        if (Math.abs(parseFloat(lat) - latitude) < nameTol &&
+            Math.abs(parseFloat(lon) - longitude) < nameTol) {
+          rowIndex = i + 1;
+          break;
+        }
       }
     }
     
@@ -2849,6 +2892,90 @@ function saveLocation(data) {
     
   } catch (error) {
     appendLog(['Error in saveLocation:', error.toString(), error.stack]);
+    return ContentService.createTextOutput(JSON.stringify({
+      success: false,
+      error: error.toString()
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+function listLocations() {
+  try {
+    const doc = SpreadsheetApp.openById(sheetId);
+    const sheet = doc.getSheetByName('Location');
+    if (!sheet) {
+      return ContentService.createTextOutput(JSON.stringify({
+        success: true,
+        locations: []
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+    const data = sheet.getDataRange().getValues();
+    const locations = [];
+    for (let i = 1; i < data.length; i++) {
+      const [lat, lon, name, createdTime, usageCount] = data[i];
+      if (!lat || !lon || isNaN(lat) || isNaN(lon)) continue;
+      const n = String(name || '').trim();
+      if (!n) continue;
+      locations.push({
+        latitude: parseFloat(lat),
+        longitude: parseFloat(lon),
+        name: n,
+        createdTime: createdTime || '',
+        usageCount: usageCount || 0,
+        radiusM: 100
+      });
+    }
+    return ContentService.createTextOutput(JSON.stringify({
+      success: true,
+      locations: locations
+    })).setMimeType(ContentService.MimeType.JSON);
+  } catch (error) {
+    appendLog(['Error in listLocations:', error.toString(), error.stack]);
+    return ContentService.createTextOutput(JSON.stringify({
+      success: false,
+      error: error.toString()
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+/** Delete one Location-sheet pin. Match lat/lng (and name if given). */
+function deleteLocation(data) {
+  try {
+    const latitude = parseFloat(data.latitude);
+    const longitude = parseFloat(data.longitude);
+    const wantName = String(data.name || '').trim().toLowerCase();
+    if (isNaN(latitude) || isNaN(longitude)) {
+      return ContentService.createTextOutput(JSON.stringify({
+        success: false,
+        error: 'Invalid latitude or longitude'
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+    const doc = SpreadsheetApp.openById(sheetId);
+    const sheet = doc.getSheetByName('Location');
+    if (!sheet) {
+      return ContentService.createTextOutput(JSON.stringify({
+        success: true,
+        deleted: 0
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+    const rows = sheet.getDataRange().getValues();
+    const tolerance = 0.00015;
+    let deleted = 0;
+    for (let i = rows.length - 1; i >= 1; i--) {
+      const [lat, lon, name] = rows[i];
+      if (Math.abs(parseFloat(lat) - latitude) > tolerance) continue;
+      if (Math.abs(parseFloat(lon) - longitude) > tolerance) continue;
+      if (wantName && String(name || '').trim().toLowerCase() !== wantName) continue;
+      sheet.deleteRow(i + 1);
+      deleted++;
+    }
+    appendLog(['deleteLocation', latitude, longitude, wantName, 'deleted', deleted]);
+    return ContentService.createTextOutput(JSON.stringify({
+      success: true,
+      deleted: deleted
+    })).setMimeType(ContentService.MimeType.JSON);
+  } catch (error) {
+    appendLog(['Error in deleteLocation:', error.toString(), error.stack]);
     return ContentService.createTextOutput(JSON.stringify({
       success: false,
       error: error.toString()
@@ -3387,7 +3514,9 @@ function resolveCalendarOp(data) {
   var op = calendarPhraseKey_(data.op);
   if (action === 'check_current' || op === 'check' || op === 'check_current') return 'check';
   if (op === 'end all' || op === 'endall' || op === 'end + all' || op === 'end+all') return 'end';
-  if (op === 'start' || op === 'append' || op === 'end' || op === 'home') return op;
+  if (op === 'start' || op === 'append' || op === 'end' || op === 'home' || op === 'block' || op === 'range') {
+    return op === 'range' ? 'block' : op;
+  }
   if (CALENDAR_TITLE_ALIASES_[op]) return 'start';
   var prefix = calendarPhraseKey_(data.prefix);
   if (prefix === 'start' || prefix === 'end') return prefix;
@@ -3713,6 +3842,35 @@ function handleCalendarTrack(data) {
     }
 
     var result;
+
+    if (op === 'block') {
+      var endWhen = parseCalendarTimestamp(
+        data.timestampEnd || data.event_end || data.end,
+        data.timestampEndMs != null ? data.timestampEndMs : data.timestamp_end_ms
+      );
+      if (!endWhen || isNaN(endWhen.getTime())) endWhen = new Date();
+      if (endWhen.getTime() <= when.getTime()) endWhen = new Date(when.getTime() + 60 * 1000);
+      var loc = '';
+      if (placeName) loc = placeName;
+      else if (hasCoords) loc = lat + ',' + lng;
+      var blockDesc = String(data.description || data.body || '').trim() || 'auto populated by 記賬 / AI';
+      var blockEv = calendar.createEvent(title || 'Trip', when, endWhen, {
+        description: blockDesc,
+        location: loc || undefined
+      });
+      result = {
+        success: true,
+        mode: 'created',
+        op: 'block',
+        eventId: blockEv.getId(),
+        title: blockEv.getTitle(),
+        start: blockEv.getStartTime().toISOString(),
+        end: blockEv.getEndTime().toISOString(),
+        placeName: placeName
+      };
+      appendLog(['Calendar block created:', JSON.stringify(result)]);
+      return calendarJson(result);
+    }
 
     if (op === 'start') {
       if (anyEventHasTrail(windowEvents, ts, 'start')) {
@@ -4723,8 +4881,8 @@ function syncExpenseCalendarEvent(data, upsert) {
   if (!start || !end) return '';
   if (end.getTime() <= start.getTime()) end = new Date(start.getTime() + 60 * 60 * 1000);
   var sheet = SpreadsheetApp.openById(sheetId).getSheetByName('Records');
-  var existingId = '';
-  if (upsert.row >= RECORDS_DATA_START && sheet) {
+    var existingId = String(data.calendar_event_id || data.calendarEventId || '').trim();
+  if (!existingId && upsert.row >= RECORDS_DATA_START && sheet) {
     existingId = String(readSheetCell(sheet, upsert.row, 'calendar_event_id') || '').trim();
   }
   var calendar = openTrackingCalendar();

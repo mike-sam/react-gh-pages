@@ -4,10 +4,11 @@ import { createDoubleSpaceHandler, focusElement } from '../utils/keyboardNavigat
 const REMARK_MIN_PX = 88;
 const REMARK_MAX_PX = 360;
 
-const ItemizedDescription = ({ onChange, initialValue = '', totalAmount = 0, onItemizedTotalChange, simpleDescription, setSimpleDescription, onPhotoAdd, hideHeader = false }) => {
+const ItemizedDescription = ({ onChange, initialValue = '', totalAmount = 0, onItemizedTotalChange, simpleDescription, setSimpleDescription, onPhotoAdd, hideHeader = false, importedItems = null }) => {
   const [items, setItems] = useState([]);
   const [ocrItemIds, setOcrItemIds] = useState(new Set()); // 跟踪OCR添加的项目ID
   const remarkRef = useRef(null);
+  const importKeyRef = useRef('');
 
   /** iOS has no resize handle — autogrow. Desktop keeps drag-resize (skip forcing height). */
   const fitRemarkHeight = useCallback(() => {
@@ -62,6 +63,33 @@ const ItemizedDescription = ({ onChange, initialValue = '', totalAmount = 0, onI
       }
     }
   }, [initialValue, items.length, simpleDescription]);
+
+  useEffect(() => {
+    const key = importedItems && importedItems.key != null ? String(importedItems.key) : '';
+    const list = importedItems && Array.isArray(importedItems.items) ? importedItems.items : [];
+    if (!key || key === importKeyRef.current) return;
+    importKeyRef.current = key;
+    const next = list
+      .map((it, i) => ({
+        id: `ai-${key}-${i}`,
+        name: String(it?.name || '').trim(),
+        unitPrice: Number(it?.unitPrice) || 0,
+        quantity: Number(it?.quantity) || (Number(it?.subtotal) ? 1 : 0),
+        subtotal: Number(it?.subtotal) || 0,
+      }))
+      .filter((it) => it.name);
+    if (!next.length) {
+      setItems([]);
+      onChange(simpleDescription || '');
+      return;
+    }
+    setItems(next);
+    const formattedText = next
+      .map((item) => `${item.name}: ${item.unitPrice} × ${item.quantity} = ${item.subtotal}`)
+      .join('\n');
+    const itemizedText = `${formattedText}\n总计: 0.00`;
+    onChange([itemizedText, simpleDescription].filter(Boolean).join('\n\n'));
+  }, [importedItems, onChange, simpleDescription]);
 
   const addNewItem = () => {
     const newItem = {

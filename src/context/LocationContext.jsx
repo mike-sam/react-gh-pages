@@ -9,6 +9,7 @@ import {
   toMapsUrl,
 } from '../utils/locationStorage';
 import { getGeolocationBlockReason } from '../utils/geolocationGuard';
+import { labelFromLandmarks } from '../utils/landmarkRegions';
 
 const LocationContext = createContext(null);
 const SLOW_GPS_MS = 3000;
@@ -102,7 +103,10 @@ export function LocationProvider({ children }) {
             lng: position.coords.longitude,
             accuracy: position.coords.accuracy,
             updatedAt: Date.now(),
-            label: locationRef.current?.label || '',
+            label: labelFromLandmarks({
+              lat: position.coords.latitude,
+              lng: position.coords.longitude,
+            }),
           };
           finish(() => {
             saveSmartLocation(payload);

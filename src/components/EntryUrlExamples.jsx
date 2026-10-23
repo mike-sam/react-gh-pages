@@ -46,6 +46,30 @@ const EXAMPLES = [
     },
   },
   {
+    title: '開始時間（結束用現在）',
+    note: '只帶 start，結束為打開當下',
+    query: {
+      cat: '休闲娱乐',
+      subcat: '电影',
+      amount: '32',
+      paymentmethod: 'Cash',
+      start: '2026-10-24 19:00:00',
+    },
+  },
+  {
+    title: '開始＋結束',
+    note: 'start / end 開區間；timestamp 仍可另指定記帳時間',
+    query: {
+      cat: '餐饮美食',
+      subcat: '聚餐',
+      amount: '188',
+      paymentmethod: 'Cash',
+      start: '2026-10-24 12:00:00',
+      end: '2026-10-24 14:30:00',
+      timestamp: '2026-10-24 14:30:00',
+    },
+  },
+  {
     title: '外幣 + 座標',
     note: 'currency / latlong 帶入',
     query: {

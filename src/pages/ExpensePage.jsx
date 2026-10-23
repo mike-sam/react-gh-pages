@@ -4,7 +4,7 @@ import Remark from '../Remark';
 import Log from '../Log';
 import Output from '../Output';
 import '../App.css';
-import { API_ENDPOINTS, EXPENSE_TAGS, SECONDARY_TAGS } from '../config';
+import { EXPENSE_TAGS } from '../config';
 import ExpenseDateTimeRow from '../components/ExpenseDateTimeRow';
 import { focusElement } from '../utils/keyboardNavigation';
 import PageChrome from '../components/PageChrome';
@@ -16,21 +16,28 @@ import {
   analyzeReceiptPhoto,
   applyAiSuggestion,
   DEFAULT_RECEIPT_PROMPT_TEMPLATE,
-  fieldsForExpense,
   formatAiCurlCopy,
   formatAiFallbackCopy,
   formatWhen,
   loadAiPrompt,
+  parseAiSuggestions,
   recordAiSuggestion,
   receiptPromptFor,
+  resolveSuggestionTimes,
   saveAiPrompt,
   suggestionSummary,
 } from '../utils/aiSuggest';
+import { calendarBlockPayload } from '../utils/calendarTrackUrl';
 import { copyText } from '../utils/platform';
-import { getStoredAccessHash } from '../utils/accessGate';
 import { useSmartLocation } from '../hooks/useSmartLocation';
-import { toMapsUrl } from '../utils/locationStorage';
+import { formatRelativeTimeShort, toMapsUrl } from '../utils/locationStorage';
 import { pinMerchantIfNearHere, rememberNamedPoint } from '../utils/landmarkRegions';
+import {
+  asDraftDate,
+  clearExpenseDraft,
+  loadBootExpenseDraft,
+  saveExpenseDraft,
+} from '../utils/expenseDraft';
 import { getBuildVersion } from '../utils/buildInfo';
 import {
   loadExpenseHistory,
@@ -45,7 +52,6 @@ import {
   subscribeAppBootstrap,
   transformPaymentOptions,
 } from '../utils/appBootstrap';
-import { useUnsavedGuard } from '../hooks/useUnsavedGuard';
 import { applyHash, getHashPath, ROUTES } from '../utils/routing';
 import {
   parseExpenseQuickDraft,
@@ -72,40 +78,50 @@ function ExpensePage() {
   const pendingSilentRef = useRef(false);
   const silentAbortRef = useRef(null);
   const [paymentsReady] = useState(true);
+  const [boot] = useState(() => loadBootExpenseDraft());
   /** silent countdown UI: armed | sending | aborted | null */
   const [silentPhase, setSilentPhase] = useState(null);
   const [silentRemainMs, setSilentRemainMs] = useState(0);
+  const [draftReady, setDraftReady] = useState(false);
 
-  const [selectedTag, setSelectedTag] = useState(null);
+  const [selectedTag, setSelectedTag] = useState(boot?.selectedTag || null);
   const tags = EXPENSE_TAGS;
-  const [input, setInput] = useState('');
-  const [remark, setRemark] = useState('');
-  const [carPlate, setCarPlate] = useState('');
-  const [tripInfo, setTripInfo] = useState('');
-  const [mileage, setMileage] = useState('');
-  const [amount, setAmount] = useState('');
-  const [currency, setCurrency] = useState('MYR');
+  const [input, setInput] = useState(boot?.input || '');
+  const [remark, setRemark] = useState(boot?.remark || '');
+  const [carPlate, setCarPlate] = useState(boot?.carPlate || '');
+  const [tripInfo, setTripInfo] = useState(boot?.tripInfo || '');
+  const [mileage, setMileage] = useState(boot?.mileage || '');
+  const [amount, setAmount] = useState(boot?.amount || '');
+  const [currency, setCurrency] = useState(boot?.currency || 'MYR');
   const [log, setLog] = useState(() => loadExpenseHistory());
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [output, setOutput] = useState('');
-  const [selectedDateTime, setSelectedDateTime] = useState(new Date());
-  const [eventStart, setEventStart] = useState(null);
-  const [eventEnd, setEventEnd] = useState(null);
-  const [paymentMethod, setPaymentMethod] = useState('');
-  const [simpleDescription, setSimpleDescription] = useState('');
-  const [photos, setPhotos] = useState([]);
+  const [output, setOutput] = useState(() =>
+    boot?.savedAt ? `已還原本機暫存（${formatRelativeTimeShort(boot.savedAt)}）` : ''
+  );
+  const [selectedDateTime, setSelectedDateTime] = useState(
+    () => asDraftDate(boot?.selectedDateTime, new Date())
+  );
+  const [eventStart, setEventStart] = useState(() => asDraftDate(boot?.eventStart));
+  const [eventEnd, setEventEnd] = useState(() => asDraftDate(boot?.eventEnd));
+  const [paymentMethod, setPaymentMethod] = useState(boot?.paymentMethod || '');
+  const [simpleDescription, setSimpleDescription] = useState(boot?.simpleDescription || '');
+  const [photos, setPhotos] = useState(() => (Array.isArray(boot?.photos) ? boot.photos : []));
   /** When set, submit keeps this id → GAS Replace Into（編輯既有筆） */
-  const [editingId, setEditingId] = useState(null);
+  const [editingId, setEditingId] = useState(boot?.editingId ?? null);
   /** Tax/service addons — do not mutate main amount input */
-  const [taxAddons, setTaxAddons] = useState([]);
+  const [taxAddons, setTaxAddons] = useState(() =>
+    Array.isArray(boot?.taxAddons) ? boot.taxAddons : []
+  );
   const [paymentOptions, setPaymentOptions] = useState(
     () => transformPaymentOptions(readPaymentOptionsCache({ allowStale: true }))
   );
   const [currencyConversions, setCurrencyConversions] = useState([]);
-  const [isAmountManuallySet, setIsAmountManuallySet] = useState(false);
+  const [isAmountManuallySet, setIsAmountManuallySet] = useState(
+    () => Boolean(boot?.isAmountManuallySet)
+  );
   const [itemizedTotal, setItemizedTotal] = useState(0);
-  const [fuelPrice, setFuelPrice] = useState('');
-  const [fuelType, setFuelType] = useState('');
+  const [fuelPrice, setFuelPrice] = useState(boot?.fuelPrice || '');
+  const [fuelType, setFuelType] = useState(boot?.fuelType || '');
   const [aiBusyIndex, setAiBusyIndex] = useState(-1);
   const [aiError, setAiError] = useState('');
   const [aiSuggestions, setAiSuggestions] = useState([]);
@@ -118,8 +134,15 @@ function ExpensePage() {
   const [aiTplLoaded, setAiTplLoaded] = useState(false);
   const [aiTplBusy, setAiTplBusy] = useState(false);
   const [aiTplMsg, setAiTplMsg] = useState('');
+  const [itemizedImport, setItemizedImport] = useState(() =>
+    boot?.itemizedItems?.length
+      ? { key: `draft-${boot.savedAt || Date.now()}`, items: boot.itemizedItems }
+      : null
+  );
+  const [calendarEventId, setCalendarEventId] = useState(boot?.calendarEventId || '');
+  const [aiCalAsk, setAiCalAsk] = useState(null);
+  const [aiPaste, setAiPaste] = useState('');
 
-  /** Guard reload only for cat / subcat / amount / 備註 — ignore payment, date, plate, etc. */
   const hasUnsavedInput = useMemo(() => {
     const amt = String(amount || '').trim();
     const hasAmount = amt !== '' && amt !== '0' && amt !== '0.00';
@@ -128,11 +151,13 @@ function ExpensePage() {
         String(input || '').trim() ||
         hasAmount ||
         String(remark || '').trim() ||
-        String(simpleDescription || '').trim()
+        String(simpleDescription || '').trim() ||
+        String(carPlate || '').trim() ||
+        (Array.isArray(photos) && photos.length) ||
+        (Array.isArray(taxAddons) && taxAddons.length) ||
+        editingId != null
     );
-  }, [selectedTag, input, amount, remark, simpleDescription]);
-
-  useUnsavedGuard(hasUnsavedInput, { whenPath: ROUTES.EXPENSE });
+  }, [selectedTag, input, amount, remark, simpleDescription, carPlate, photos, taxAddons, editingId]);
 
   const ensureAiPromptLoaded = useCallback(async () => {
     if (aiTplLoaded) return aiTemplate;
@@ -145,6 +170,10 @@ function ExpensePage() {
       if (data.model) {
         setAiMeta((m) => (m.model ? m : { ...m, model: data.model }));
       }
+      const bits = [];
+      if (data.hasGemini) bits.push('Gemini');
+      if (data.hasOpenAI) bits.push('OpenAI');
+      setAiTplMsg(bits.length ? bits.join(' / ') : '未設 APIKey / OPENAPIKey');
       return data.template;
     } catch (err) {
       setAiTplLoaded(true);
@@ -208,28 +237,13 @@ function ExpensePage() {
       }));
       setAiError(
         err?.name === 'AbortError' || /逾時/.test(String(err.message || ''))
-          ? `逾時（壓縮後 ${formatFileSize(photo.compressedSize || photo.base64?.length || 0)}，不是圖太大；GAS→Gemini 排隊）`
+          ? `逾時（壓縮後 ${formatFileSize(photo.compressedSize || photo.base64?.length || 0)}；Gemini 8s 後改 OpenAI）`
           : String(err.message || 'AI 失敗')
               .split('\n')[0]
               .slice(0, 240)
       );
     } finally {
       setAiBusyIndex(-1);
-    }
-  };
-
-  const gasAnalyzeUrl = () => {
-    const endpoint = API_ENDPOINTS.GSHEET_SUBMIT;
-    const token = getStoredAccessHash();
-    if (!token) return endpoint;
-    try {
-      const u = new URL(endpoint);
-      if (!u.searchParams.get('access') && !u.searchParams.get('k')) {
-        u.searchParams.set('access', token);
-      }
-      return u.toString();
-    } catch {
-      return endpoint;
     }
   };
 
@@ -242,31 +256,40 @@ function ExpensePage() {
   };
 
   const copyAiCurl = async () => {
-    const photo = photos[aiMeta.photoIndex] || photos[0];
-    const token = getStoredAccessHash();
-    const payload = {
-      action: 'analyzeReceipt',
-      mimeType: photo?.type || 'image/jpeg',
-      tag: selectedTag || '',
-      title: input || '',
-      when: formatWhen(selectedDateTime),
-      fields: fieldsForExpense(selectedTag, input),
-      allowedTags: EXPENSE_TAGS,
-      allowedSubcats: SECONDARY_TAGS,
-      promptTemplate: String(aiTemplate || '').trim().slice(0, 8000),
-    };
-    if (token) payload.access = token;
     const text = formatAiCurlCopy({
       model: aiMeta.model,
       prompt: aiMeta.prompt,
       error: aiError,
-      gasUrl: gasAnalyzeUrl(),
-      gasPayload: payload,
     });
     if (!text) return;
     const ok = await copyText(text);
     setAiCopied(ok ? '已複製 curl' : '複製失敗');
     window.setTimeout(() => setAiCopied(''), 2200);
+  };
+
+  const applyExternalPaste = () => {
+    const list = parseAiSuggestions(aiPaste);
+    if (!list.length) {
+      setAiError('找不到 JSON');
+      setAiSuggestions([]);
+      setAiPicked(null);
+      return;
+    }
+    setAiError('');
+    setAiMeta((m) => ({
+      ...m,
+      model: 'external',
+      tried: ['external'],
+    }));
+    setAiCalAsk(null);
+    setAiCopied('');
+    if (list.length === 1) {
+      setAiSuggestions([]);
+      pickAiSuggestion(list[0]);
+      return;
+    }
+    setAiPicked(null);
+    setAiSuggestions(list);
   };
 
   /** Leaving 交通出行: wipe auto fuel/ODO remark before ItemizedDescription remounts */
@@ -301,9 +324,11 @@ function ExpensePage() {
       paymentOptions,
       selectedDateTime,
       setSelectedDateTime,
+      setItemizedImport,
     });
     setAiPicked(s);
     setAiLocMsg('');
+    setAiCalAsk(null);
     recordAiSuggestion({
       tag: s.tag || selectedTag || '',
       title: s.title || input || '',
@@ -316,6 +341,17 @@ function ExpensePage() {
     setAiSuggestions([]);
     setAiError('');
     const merchant = String(s?.merchant || '').trim();
+    const times = resolveSuggestionTimes(s);
+    if (times.calendar && times.eventStart && times.eventEnd) {
+      setAiCalAsk({
+        start: times.eventStart,
+        end: times.eventEnd,
+        inferredEnd: Boolean(times.inferredEnd),
+        title: [s.title || selectedTag, merchant].filter(Boolean).join(' · ') || 'Trip',
+        merchant,
+        label: s.label || '',
+      });
+    }
     if (!merchant) return;
     (async () => {
       let here = smartLoc;
@@ -337,10 +373,59 @@ function ExpensePage() {
         updatedAt: Date.now(),
         label: merchant,
       });
-      setAiLocMsg(
-        `已存地點 · ${merchant}${pinned.km != null ? ` ${pinned.km.toFixed(1)}km` : ''}`
-      );
+      setAiLocMsg((prev) => {
+        const loc = `已存地點 · ${merchant}${pinned.km != null ? ` ${pinned.km.toFixed(1)}km` : ''}`;
+        return prev ? `${prev} · ${loc}` : loc;
+      });
     })();
+  };
+
+  const confirmAiCalendar = async (ok) => {
+    const ask = aiCalAsk;
+    setAiCalAsk(null);
+    if (!ok || !ask?.start) return;
+    const start = ask.start instanceof Date ? ask.start : new Date(ask.start);
+    const end = ask.inferredEnd
+      ? new Date()
+      : ask.end instanceof Date
+        ? ask.end
+        : new Date(ask.end);
+    if (end.getTime() <= start.getTime()) return;
+    setEventStart(start);
+    setEventEnd(end);
+    setSelectedDateTime(end);
+    try {
+      let here = smartLoc;
+      try {
+        here = (await resolveForAction()) || smartLoc;
+      } catch {
+        here = smartLoc;
+      }
+      const result = await enqueueAndSend(
+        calendarBlockPayload({
+          title: ask.title || 'Trip',
+          start,
+          end,
+          lat: here?.lat ?? null,
+          lng: here?.lng ?? null,
+          description: [
+            'auto populated by 記賬 / AI',
+            ask.merchant ? `商家: ${ask.merchant}` : '',
+            ask.label ? `label: ${ask.label}` : '',
+          ]
+            .filter(Boolean)
+            .join('\n'),
+        })
+      );
+      const eventId = result?.data?.eventId || '';
+      if (eventId) setCalendarEventId(eventId);
+      setAiLocMsg((prev) => {
+        const cal = result?.sent ? '已寫入行事曆' : '行事曆已暫存';
+        return prev ? `${prev} · ${cal}` : cal;
+      });
+    } catch {
+      setAiLocMsg((prev) => (prev ? `${prev} · 行事曆寫入失敗` : '行事曆寫入失敗'));
+    }
   };
 
   const handleCurrencyConversion = (conversion) => {
@@ -399,12 +484,13 @@ function ExpensePage() {
     }
   }, []);
 
-  // URL quick entry: #/expense?cat=&subcat=&amount=&desc=&timestamp=&paymentmethod=&currency=&latlong=
+  // URL quick entry: #/expense?cat=&subcat=&amount=&desc=&timestamp=&start=&end=&paymentmethod=&currency=&latlong=
   useEffect(() => {
     if (!paymentsReady || quickAppliedRef.current) return;
     const draft = parseExpenseQuickDraft(paymentOptions);
     if (!draft.hasQuickKeys) {
       quickAppliedRef.current = true;
+      setDraftReady(true);
       return;
     }
     quickAppliedRef.current = true;
@@ -423,6 +509,11 @@ function ExpensePage() {
     if (draft.currency) setCurrency(draft.currency);
     if (draft.paymentMethod) setPaymentMethod(draft.paymentMethod);
     if (draft.timestamp) setSelectedDateTime(draft.timestamp);
+    else if (draft.eventEnd) setSelectedDateTime(draft.eventEnd);
+    if (draft.eventStart && draft.eventEnd) {
+      setEventStart(draft.eventStart);
+      setEventEnd(draft.eventEnd);
+    }
     if (draft.latlong) setCachedLocation(draft.latlong);
 
     if (draft.paymentUnresolved) {
@@ -437,7 +528,67 @@ function ExpensePage() {
     } else {
       setOutput('已帶入 URL 參數，確認後請手動送出（自動送出請加 silent=true）');
     }
+    setDraftReady(true);
   }, [paymentsReady, paymentOptions, setCachedLocation]);
+
+  useEffect(() => {
+    if (!paymentsReady) return undefined;
+    if (!draftReady) {
+      setDraftReady(true);
+      return undefined;
+    }
+    if (isSubmitting || silentPhase === 'sending') return undefined;
+    const timer = window.setTimeout(() => {
+      saveExpenseDraft({
+        selectedTag,
+        input,
+        remark,
+        simpleDescription,
+        amount,
+        currency,
+        paymentMethod,
+        carPlate,
+        mileage,
+        tripInfo,
+        fuelPrice,
+        fuelType,
+        taxAddons,
+        photos,
+        isAmountManuallySet,
+        editingId,
+        calendarEventId,
+        selectedDateTime,
+        eventStart,
+        eventEnd,
+      });
+    }, 450);
+    return () => window.clearTimeout(timer);
+  }, [
+    paymentsReady,
+    draftReady,
+    isSubmitting,
+    silentPhase,
+    selectedTag,
+    input,
+    remark,
+    simpleDescription,
+    amount,
+    currency,
+    paymentMethod,
+    carPlate,
+    mileage,
+    tripInfo,
+    fuelPrice,
+    fuelType,
+    taxAddons,
+    photos,
+    isAmountManuallySet,
+    editingId,
+    calendarEventId,
+    selectedDateTime,
+    eventStart,
+    eventEnd,
+  ]);
 
   const formatDateTime = (date = new Date(), format = 'YMDHIS') => {
     const pad = (num) => num.toString().padStart(2, '0');
@@ -454,6 +605,7 @@ function ExpensePage() {
   };
 
   const resetData = () => {
+    clearExpenseDraft();
     setInput('');
     setRemark('');
     setAmount('');
@@ -477,6 +629,10 @@ function ExpensePage() {
     setAiLocMsg('');
     setAiMeta({ model: '', prompt: '', photoHash: '', photoIndex: -1 });
     setAiPicked(null);
+    setItemizedImport({ key: Date.now(), items: [] });
+    setCalendarEventId('');
+    setAiCalAsk(null);
+    setAiPaste('');
   };
 
   const fillFromHistory = (entry) => {
@@ -584,6 +740,7 @@ function ExpensePage() {
       payment_method: paymentMethod,
       event_start: eventStart ? formatDateTime(eventStart, 'YMDHIS') : '',
       event_end: eventEnd ? formatDateTime(eventEnd, 'YMDHIS') : '',
+      calendar_event_id: calendarEventId || '',
       carPlate,
       mileage,
       tripInfo,
@@ -660,6 +817,7 @@ function ExpensePage() {
     selectedDateTime,
     eventStart,
     eventEnd,
+    calendarEventId,
     input,
     amount,
     taxAddons,
@@ -789,6 +947,7 @@ function ExpensePage() {
     setFuelPrice('');
     setFuelType('');
     setPhotos([]);
+    setItemizedImport({ key: Date.now(), items: [] });
   };
 
   const clearAllWithConfirm = () => {
@@ -965,7 +1124,7 @@ function ExpensePage() {
             >
               <summary>
                 <span className="ai-photo-prompt-title">📷 AI prompt</span>
-                <span className="ai-photo-prompt-sub">當提供照片給 AI 時用</span>
+                <span className="ai-photo-prompt-sub">照片建議 · 也可貼外部回傳 JSON</span>
                 {aiTemplate !== aiTemplateSaved ? (
                   <span className="ai-photo-prompt-chip">未儲存</span>
                 ) : null}
@@ -1000,6 +1159,25 @@ function ExpensePage() {
                 </button>
                 {aiTplMsg ? <span className="ai-suggest-hint">{aiTplMsg}</span> : null}
               </div>
+              <div className="ai-suggest-hint">外部 AI 回傳貼這裡，啰嗦文字會忽略，只讀 JSON</div>
+              <textarea
+                className="ai-suggest-tpl ai-suggest-paste"
+                rows={5}
+                value={aiPaste}
+                onChange={(e) => setAiPaste(e.target.value)}
+                placeholder='{"suggestions":[{...}]}'
+                spellCheck={false}
+              />
+              <div className="ai-suggest-meta">
+                <button
+                  type="button"
+                  className="ai-suggest-copy"
+                  disabled={!String(aiPaste || '').trim()}
+                  onClick={applyExternalPaste}
+                >
+                  套用 JSON
+                </button>
+              </div>
             </details>
             <Remark
               input={input}
@@ -1017,6 +1195,7 @@ function ExpensePage() {
               setTripInfo={setTripInfo}
               simpleDescription={simpleDescription}
               setSimpleDescription={setSimpleDescription}
+              itemizedImport={itemizedImport}
               hideDescriptionHeader
               onFuelDataChange={({ fuelPrice: fp, fuelType: ft }) => {
                 setFuelPrice(fp);
@@ -1083,6 +1262,10 @@ function ExpensePage() {
                 </div>
               ))}
             </div>
+          </div>
+        )}
+        {(aiError || aiMeta.prompt || aiSuggestions.length > 0 || aiCalAsk || aiPicked) && (
+          <div className="ai-suggest-follow">
             {(aiError || aiMeta.prompt || aiSuggestions.length > 0) && (
               <div className="ai-suggest-panel">
                 {aiError ? <div className="ai-suggest-error">{aiError}</div> : null}
@@ -1094,7 +1277,7 @@ function ExpensePage() {
                         ? aiMeta.tried && aiMeta.tried.length > 1 && aiMeta.tried[0] !== aiMeta.model
                           ? `${aiMeta.model}（備援）`
                           : aiMeta.model
-                        : 'model 未回傳（請求沒到 Gemini）'}
+                        : 'model 未回傳'}
                   </span>
                   {aiMeta.prompt ? (
                     <button type="button" className="ai-suggest-copy" onClick={copyAiPrompt}>
@@ -1109,7 +1292,7 @@ function ExpensePage() {
                 </div>
                 {aiError ? (
                   <div className="ai-suggest-hint">
-                    複製 curl 不含照片。整段貼到 PowerShell 用 curl.exe（單行 -d 仍會 411）。
+                    建議直打 Gemini，8 秒內沒回就改 OpenAI。複製 curl 不含照片。
                   </div>
                 ) : null}
                 {aiMeta.prompt ? (
@@ -1130,6 +1313,16 @@ function ExpensePage() {
                           onClick={() => pickAiSuggestion(s)}
                         >
                           {suggestionSummary(s)}
+                          {Array.isArray(s.items) && s.items.length ? (
+                            <div className="ai-suggest-items">
+                              {s.items
+                                .slice(0, 4)
+                                .map((it) => it.name)
+                                .filter(Boolean)
+                                .join('、')}
+                              {s.items.length > 4 ? '…' : ''}
+                            </div>
+                          ) : null}
                         </button>
                       ))}
                     </div>
@@ -1137,6 +1330,23 @@ function ExpensePage() {
                 ) : null}
               </div>
             )}
+            {aiCalAsk ? (
+              <div className="ai-suggest-ask">
+                <div>
+                  {aiCalAsk.inferredEnd
+                    ? `掃描到開始 ${formatWhen(aiCalAsk.start)}，用現在當結束並寫入行事曆？`
+                    : `掃描到 ${formatWhen(aiCalAsk.start)} → ${formatWhen(aiCalAsk.end)}，寫入行事曆？`}
+                </div>
+                <div className="ai-suggest-ask-actions">
+                  <button type="button" className="ai-suggest-copy" onClick={() => confirmAiCalendar(true)}>
+                    寫入
+                  </button>
+                  <button type="button" className="ai-suggest-copy" onClick={() => confirmAiCalendar(false)}>
+                    不用
+                  </button>
+                </div>
+              </div>
+            ) : null}
             {aiPicked && aiSuggestions.length === 0 && !aiError ? (
               <div className="ai-suggest-picked">
                 已套用{aiPicked.label ? ` · ${aiPicked.label}` : ''}
@@ -1152,6 +1362,11 @@ function ExpensePage() {
             <button type="button" className="expense-editing-cancel" onClick={resetData}>
               取消編輯
             </button>
+          </div>
+        )}
+        {hasUnsavedInput && editingId == null && (
+          <div className="expense-draft-banner">
+            本機暫存 · 關掉或切頁後可繼續 · 全部清空才會丟
           </div>
         )}
 

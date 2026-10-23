@@ -602,10 +602,6 @@ export function rememberNamedPoint({ lat, lng, name, source = 'local' } = {}) {
     upsertLandmarkRegionLocal(next);
     return next;
   }
-  const coveringSameName = all.find(
-    (r) => inferShape(r) !== SHAPE_POINT && namesMatch(r.name, trimmed) && regionContains(r, center)
-  );
-  if (coveringSameName) return coveringSameName;
   const created = {
     id: `pt_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
     name: trimmed,
@@ -839,6 +835,46 @@ export function deleteLandmarkRegionLocal(id) {
   saveLandmarkRegions(loadLandmarkRegions().filter((r) => r.id !== id));
 }
 
+export function renameLandmarkRegionLocal(id, name) {
+  const trimmed = String(name || '').trim();
+  if (!id || !trimmed) return null;
+  const all = loadLandmarkRegions();
+  const prev = all.find((r) => r.id === id);
+  if (!prev) return null;
+  return upsertLandmarkRegionLocal({ ...prev, name: trimmed });
+}
+
+export function isNamedPoint(region) {
+  return Boolean(region) && inferShape(region) === SHAPE_POINT;
+}
+
+export function isSheetPlace(region) {
+  return region?.source === 'sheet' || region?.source === 'legacy';
+}
+
+/**
+ * Keep one 地標; delete other checked 地標 locally (sheet rows are deleted by caller).
+ * @returns {{ keep: LandmarkRegion, dropped: LandmarkRegion[] } | null}
+ */
+export function mergeNamedPointsLocal(items, { keepId, checkedIds } = {}) {
+  const list = (items || []).filter(isNamedPoint);
+  const keep = list.find((r) => r.id === keepId);
+  if (!keep) return null;
+  const dropSet = new Set((checkedIds || []).map((id) => String(id)));
+  const dropped = list.filter((r) => r.id !== keep.id && dropSet.has(r.id));
+  if (dropped.length < 1) return null;
+  dropped.forEach((r) => {
+    if (!isSheetPlace(r)) deleteLandmarkRegionLocal(r.id);
+  });
+  return { keep, dropped };
+}
+
+/** Name of the nearest named pin covering this point — never a 區域. */
+export function labelFromLandmarks(point) {
+  const hits = matchLandmarksAt(point).filter(isNamedPoint);
+  return hits[0]?.name || '';
+}
+
 export function markLandmarkRegionsFetched(at = Date.now()) {
   localStorage.setItem(LANDMARK_FETCH_AT_KEY, String(at));
 }
@@ -1006,6 +1042,25 @@ export async function deleteLandmarkRegionRemote(id) {
   return data;
 }
 
+export function savedLocationToPoint(loc) {
+  const lat = Number(loc.lat ?? loc.latitude);
+  const lng = Number(loc.lng ?? loc.longitude);
+  const name = String(loc.name || '').trim();
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || !name) return null;
+  const created = loc.createdTime || loc.updatedAt;
+  return {
+    id: `loc_${lat.toFixed(5)}_${lng.toFixed(5)}_${name}`,
+    name,
+    center: { lat, lng },
+    radiusM: Number(loc.radiusM) || DEFAULT_POINT_NEARBY_M,
+    vertices: [],
+    shape: SHAPE_POINT,
+    updatedAt: created ? Date.parse(created) || 0 : 0,
+    source: 'sheet',
+    usageCount: Number(loc.usageCount) || 0,
+  };
+}
+
 /** Nearby legacy Location points from GAS */
 export async function fetchNearbyLegacyLocations(lat, lng, radiusKm = 1.2) {
   const url = `${API_ENDPOINTS.LOCATION}?action=getNearbyLocations&latitude=${lat}&longitude=${lng}&radius=${radiusKm}`;
@@ -1018,5 +1073,57 @@ export async function fetchNearbyLegacyLocations(lat, lng, radiusKm = 1.2) {
     lng: loc.longitude,
     name: loc.name,
     radiusM: Number(loc.radiusM) || DEFAULT_POINT_NEARBY_M,
+    createdTime: loc.createdTime,
+    usageCount: loc.usageCount,
   }));
+}
+
+/** All named pins from Location sheet (GPS 地標). */
+export async function fetchSavedLocations() {
+  const url = `${API_ENDPOINTS.LOCATION}?action=listLocations`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json();
+  if (!data?.success) return [];
+  return (data.locations || []).map(savedLocationToPoint).filter(Boolean);
+}
+
+export async function saveSavedLocationRemote(place) {
+  const lat = Number(place?.center?.lat ?? place?.lat);
+  const lng = Number(place?.center?.lng ?? place?.lng);
+  const name = String(place?.name || '').trim();
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || !name) return null;
+  const res = await fetch(API_ENDPOINTS.LOCATION, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      action: 'saveLocation',
+      latitude: lat,
+      longitude: lng,
+      name,
+    }),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json().catch(() => null);
+}
+
+export async function deleteSavedLocationRemote(place) {
+  const lat = Number(place?.center?.lat ?? place?.lat);
+  const lng = Number(place?.center?.lng ?? place?.lng);
+  const name = String(place?.name || '').trim();
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  const res = await fetch(API_ENDPOINTS.LOCATION, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      action: 'deleteLocation',
+      latitude: lat,
+      longitude: lng,
+      name,
+    }),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json();
+  if (!data?.success) throw new Error(data?.error || 'deleteLocation failed');
+  return data;
 }

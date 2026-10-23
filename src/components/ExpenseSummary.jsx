@@ -23,6 +23,7 @@ import {
 import { displayFxCodes, fromMyr } from '../utils/fxRates';
 import { getMergedQueryParams } from '../utils/expenseQuickUrl';
 import ExpenseHeatMap, { heatGeoCount } from './ExpenseHeatMap';
+import Holdable from './Holdable';
 
 const FX_PREF_KEY = 'expenseSummary.displayFx';
 
@@ -66,7 +67,7 @@ function donutPath(cx, cy, r0, r1, a0, a1) {
   return `M ${x0} ${y0} A ${r1} ${r1} 0 ${large} 1 ${x1} ${y1} L ${x2} ${y2} A ${r0} ${r0} 0 ${large} 0 ${x3} ${y3} Z`;
 }
 
-function Donut({ slices, total, pickedTags, labelMode, onPick }) {
+function Donut({ slices, total, pickedTags, labelMode, onPick, onEnableMulti }) {
   const cx = 50;
   const cy = 50;
   const r0 = 29;
@@ -93,12 +94,14 @@ function Donut({ slices, total, pickedTags, labelMode, onPick }) {
         const label = labelMode === 'amount' ? compactAmount(s.displayAmount) : `${Math.round(frac * 100)}%`;
         return (
           <g key={s.tag}>
-            <path
+            <Holdable
+              as="path"
               d={donutPath(cx, cy, r0, r1, a0, a1)}
               fill={s.color}
               opacity={dim ? 0.32 : 1}
               style={{ cursor: 'pointer' }}
               onClick={() => onPick(s.tag)}
+              onHold={() => onEnableMulti?.(s.tag)}
             />
             {showLabel ? (
               <text
@@ -201,7 +204,7 @@ function YearStrip({ ym, totals, statuses, onPickMonth, fx, multi, pickedYms, on
   );
 }
 
-function CategoryBars({ slices, total, pickedTags, onPick, fx }) {
+function CategoryBars({ slices, total, pickedTags, onPick, onEnableMulti, multi, fx }) {
   const max = Math.max(1, ...slices.map((s) => s.amount));
   if (!slices.length) return null;
   return (
@@ -213,16 +216,17 @@ function CategoryBars({ slices, total, pickedTags, onPick, fx }) {
         <span>金額</span>
         <span>％</span>
       </div>
-      <ul className={`expense-bars${pickedTags.length ? ' has-pick' : ''}`}>
+      <ul className={`expense-bars${pickedTags.length ? ' has-pick' : ''}${multi ? ' is-multi' : ''}`}>
         {slices.map((s) => {
           const on = pickedTags.includes(s.tag);
           const pct = total ? Math.round((s.amount / total) * 100) : 0;
           return (
             <li key={s.tag}>
-              <button
-                type="button"
+              <Holdable
                 className={`expense-bar-btn${on ? ' is-on' : ''}`}
+                title={multi ? `${s.tag} · 長按可開關多項` : `${s.tag} · 長按多選`}
                 onClick={() => onPick(s.tag)}
+                onHold={() => onEnableMulti?.(s.tag)}
               >
                 <span className="expense-bar-name">{s.tag}</span>
                 <span className="expense-bar-count">{Number(s.count) || 0}</span>
@@ -236,7 +240,7 @@ function CategoryBars({ slices, total, pickedTags, onPick, fx }) {
                   })}
                 </span>
                 <span className="expense-bar-pct">{pct}%</span>
-              </button>
+              </Holdable>
             </li>
           );
         })}
@@ -273,35 +277,51 @@ function DescCell({ id, text, openId, onToggle }) {
   );
 }
 
-function RecordsTable({ rows, currency, focusId, tags, pickedTags, onToggle, sort, onSort, onHide }) {
+function RecordsTable({
+  rows,
+  currency,
+  focusId,
+  tags,
+  pickedTags,
+  multi,
+  onToggle,
+  onEnableMulti,
+  onSelectAll,
+  sort,
+  onSort,
+  onHide,
+}) {
   const [openDesc, setOpenDesc] = useState('');
   const allCount = tags.reduce((n, t) => n + (Number(t.count) || 0), 0);
   const picked = pickedTags || [];
+  const allOn = tags.length > 0 && picked.length === tags.length;
   const chipCount = picked.length
     ? picked.reduce((n, tag) => n + (Number(tags.find((t) => t.tag === tag)?.count) || 0), 0)
     : allCount;
   return (
     <div className="expense-records">
       <div className="expense-records-toolbar">
-        <div className="expense-records-filters">
-          <button
-            type="button"
-            className={`expense-chip${picked.length === 0 ? ' is-on' : ''}`}
+        <div className={`expense-records-filters${multi ? ' is-multi' : ''}`}>
+          <Holdable
+            className={`expense-chip${picked.length === 0 || allOn ? ' is-on' : ''}`}
+            title="單擊全部 · 長按全選多項"
             onClick={() => onToggle('')}
+            onHold={() => onSelectAll?.()}
           >
             全部
             <em>{allCount}</em>
-          </button>
+          </Holdable>
           {tags.map((t) => (
-            <button
+            <Holdable
               key={t.tag}
-              type="button"
               className={`expense-chip${picked.includes(t.tag) ? ' is-on' : ''}`}
+              title={multi ? `${t.tag} · 長按可開關多項` : `${t.tag} · 長按多選`}
               onClick={() => onToggle(t.tag)}
+              onHold={() => onEnableMulti?.(t.tag)}
             >
               {t.tag}
               <em>{t.count}</em>
-            </button>
+            </Holdable>
           ))}
         </div>
         <button type="button" className="expense-records-hide" onClick={onHide}>
@@ -378,6 +398,7 @@ function ExpenseSummary() {
   const [err, setErr] = useState('');
   const [loading, setLoading] = useState(true);
   const [pickedTags, setPickedTags] = useState([]);
+  const [multiTags, setMultiTags] = useState(false);
   const [showTable, setShowTable] = useState(false);
   const [labelMode, setLabelMode] = useState('pct');
   const [fx, setFx] = useState(readFxPref);
@@ -433,6 +454,7 @@ function ExpenseSummary() {
 
   useEffect(() => {
     setPickedTags([]);
+    setMultiTags(false);
     setShowTable(false);
     setHeatOpen(false);
     const year = String(ym).slice(0, 4);
@@ -591,8 +613,36 @@ function ExpenseSummary() {
         : `${pickedTags.length} 項`;
 
   const pickTag = (tag) => {
-    setPickedTags((prev) => toggleTag(prev, tag));
+    const s = String(tag || '').trim();
+    if (!s) {
+      setPickedTags([]);
+      setMultiTags(false);
+      return;
+    }
     setShowTable(true);
+    if (multiTags) {
+      setPickedTags((prev) => toggleTag(prev, s));
+      return;
+    }
+    setPickedTags([s]);
+  };
+
+  const enableMultiTags = (seed) => {
+    const s = String(seed || '').trim();
+    setMultiTags(true);
+    setShowTable(true);
+    setPickedTags((prev) => {
+      if (!s) return prev;
+      if (prev.includes(s)) return prev.length ? prev : [s];
+      return [...prev, s];
+    });
+  };
+
+  const selectAllTags = () => {
+    const all = slices.map((s) => s.tag).filter(Boolean);
+    setMultiTags(true);
+    setShowTable(true);
+    setPickedTags(all);
   };
 
   const onSort = (key) => {
@@ -706,6 +756,7 @@ function ExpenseSummary() {
               pickedTags={monthReady ? pickedTags : []}
               labelMode={labelMode}
               onPick={monthReady ? pickTag : () => {}}
+              onEnableMulti={monthReady ? enableMultiTags : () => {}}
             />
             <div className="expense-summary-total">
               {monthReady && pickedTags.length ? (
@@ -796,7 +847,33 @@ function ExpenseSummary() {
       </div>
       {monthReady ? (
         <>
-          <CategoryBars slices={slices} total={total} pickedTags={pickedTags} onPick={pickTag} fx={fx} />
+          <CategoryBars
+            slices={slices}
+            total={total}
+            pickedTags={pickedTags}
+            onPick={pickTag}
+            onEnableMulti={enableMultiTags}
+            multi={multiTags}
+            fx={fx}
+          />
+          {multiTags ? (
+            <div className="expense-year-multi expense-cat-multi">
+              <span>多項 {pickedTags.length}</span>
+              <button type="button" className="expense-chip" onClick={selectAllTags}>
+                全選
+              </button>
+              <button
+                type="button"
+                className="expense-chip"
+                onClick={() => {
+                  setMultiTags(false);
+                  setPickedTags([]);
+                }}
+              >
+                結束
+              </button>
+            </div>
+          ) : null}
           <ExpenseHeatMap
             records={records}
             slices={slices}
@@ -812,13 +889,10 @@ function ExpenseSummary() {
               focusId={focusId}
               tags={slices.map((s) => ({ tag: s.tag, count: Number(s.count) || 0 }))}
               pickedTags={pickedTags}
-              onToggle={(tag) => {
-                if (!tag) setPickedTags([]);
-                else {
-                  setPickedTags((prev) => toggleTag(prev, tag));
-                  setShowTable(true);
-                }
-              }}
+              multi={multiTags}
+              onToggle={pickTag}
+              onEnableMulti={enableMultiTags}
+              onSelectAll={selectAllTags}
               sort={sort}
               onSort={onSort}
               onHide={() => setShowTable(false)}

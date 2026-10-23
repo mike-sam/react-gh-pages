@@ -6,7 +6,7 @@ import { API_ENDPOINTS } from './config';
 import { getKeyValue } from './utils/keyValueCache';
 import { loadVehicleRoster, vehicleNeedsOdo } from './utils/vehicles';
 
-function Remark({ remark, setRemark, setCarPlate, carPlate, selectedTag, input, amount, onItemizedTotalChange, mileage, setMileage, tripInfo, setTripInfo, simpleDescription, setSimpleDescription, onFuelDataChange, onPhotoAdd, hideDescriptionHeader}) {
+function Remark({ remark, setRemark, setCarPlate, carPlate, selectedTag, input, amount, onItemizedTotalChange, mileage, setMileage, tripInfo, setTripInfo, simpleDescription, setSimpleDescription, onFuelDataChange, onPhotoAdd, hideDescriptionHeader, itemizedImport = null}) {
     const [fuelPrice, setFuelPrice] = useState('2.05');
     const [fuelType, setFuelType] = useState('ron95');
     const [averagePrice, setAveragePrice] = useState(0);
@@ -594,6 +594,7 @@ function Remark({ remark, setRemark, setCarPlate, carPlate, selectedTag, input, 
                         setSimpleDescription={setSimpleDescription}
                         onPhotoAdd={onPhotoAdd}
                         hideHeader={hideDescriptionHeader}
+                        importedItems={itemizedImport}
                     />
                 </div>
             );
@@ -610,6 +611,7 @@ function Remark({ remark, setRemark, setCarPlate, carPlate, selectedTag, input, 
                 setSimpleDescription={setSimpleDescription}
                 onPhotoAdd={onPhotoAdd}
                 hideHeader={hideDescriptionHeader}
+                importedItems={itemizedImport}
             />
         )
 

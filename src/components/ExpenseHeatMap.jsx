@@ -8,6 +8,7 @@ import { DEFAULT_MAP_CENTER } from '../utils/mapDefaults';
 import { colorForTag, formatMoney, parseRecordCoords, recordTag } from '../utils/expenseSummary';
 import { fromMyr } from '../utils/fxRates';
 import { useHistoryOverlay } from '../hooks/useHistoryOverlay';
+import Holdable from './Holdable';
 
 function FitPoints({ points, token }) {
   const map = useMap();
@@ -119,6 +120,7 @@ export function heatGeoCount(records) {
 export default function ExpenseHeatMap({ records, slices, initialTags, fx, open, onClose }) {
   useHistoryOverlay(open, onClose);
   const [cats, setCats] = useState([]);
+  const [multiCats, setMultiCats] = useState(false);
   const [sub, setSub] = useState('');
 
   const geoCount = useMemo(() => heatGeoCount(records), [records]);
@@ -141,6 +143,7 @@ export default function ExpenseHeatMap({ records, slices, initialTags, fx, open,
   useEffect(() => {
     if (!open) return undefined;
     setCats(Array.isArray(initialTags) ? initialTags.filter(Boolean) : initialTags ? [initialTags] : []);
+    setMultiCats(Array.isArray(initialTags) ? initialTags.filter(Boolean).length > 1 : false);
     setSub('');
     const prev = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
@@ -165,31 +168,46 @@ export default function ExpenseHeatMap({ records, slices, initialTags, fx, open,
             ✕
           </button>
         </div>
-        <div className="expense-records-filters">
-          <button
-            type="button"
-            className={`expense-chip${cats.length === 0 ? ' is-on' : ''}`}
+        <div className={`expense-records-filters${multiCats ? ' is-multi' : ''}`}>
+          <Holdable
+            className={`expense-chip${cats.length === 0 || (slices || []).length === cats.length ? ' is-on' : ''}`}
+            title="單擊全部 · 長按全選多項"
             onClick={() => {
               setCats([]);
+              setMultiCats(false);
               setSub('');
+            }}
+            onHold={() => {
+              setMultiCats(true);
+              setSub('');
+              setCats((slices || []).map((s) => s.tag).filter(Boolean));
             }}
           >
             全部
-          </button>
+          </Holdable>
           {(slices || []).map((s) => (
-            <button
+            <Holdable
               key={s.tag}
-              type="button"
               className={`expense-chip${cats.includes(s.tag) ? ' is-on' : ''}`}
+              title={multiCats ? `${s.tag} · 長按可開關多項` : `${s.tag} · 長按多選`}
               onClick={() => {
-                setCats((prev) =>
-                  prev.includes(s.tag) ? prev.filter((t) => t !== s.tag) : [...prev, s.tag]
-                );
                 setSub('');
+                if (multiCats) {
+                  setCats((prev) =>
+                    prev.includes(s.tag) ? prev.filter((t) => t !== s.tag) : [...prev, s.tag]
+                  );
+                  return;
+                }
+                setCats([s.tag]);
+              }}
+              onHold={() => {
+                setMultiCats(true);
+                setSub('');
+                setCats((prev) => (prev.includes(s.tag) ? (prev.length ? prev : [s.tag]) : [...prev, s.tag]));
               }}
             >
               {s.tag}
-            </button>
+            </Holdable>
           ))}
         </div>
         {subcats.length ? (

@@ -23,6 +23,7 @@ import './App.css';
 function App() {
   const path = useHashRoute();
   useEffect(() => {
+    document.title = '自理';
     ensureAppBootstrap();
   }, []);
 

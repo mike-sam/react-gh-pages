@@ -132,9 +132,12 @@ export function calendarActionPayload({
   days,
   silent = true,
   id,
+  timestampEnd,
+  timestampEndMs,
+  description,
 }) {
   const resolvedDays = Number(days ?? lookbackDays) || CALENDAR_LOOKBACK_DAYS_DEFAULT;
-  return {
+  const body = {
     id: id ?? Date.now(),
     action: 'trackCalendar',
     op,
@@ -152,6 +155,29 @@ export function calendarActionPayload({
     days: resolvedDays,
     lookbackDays: resolvedDays,
   };
+  if (timestampEnd) body.timestampEnd = timestampEnd;
+  if (timestampEndMs != null) body.timestampEndMs = timestampEndMs;
+  if (description) body.description = description;
+  return body;
+}
+
+/** Timed calendar block from start to end. Not a trail start/end marker. */
+export function calendarBlockPayload({ title, start, end, lat = null, lng = null, description = '' }) {
+  const s = start instanceof Date ? start : new Date();
+  const e = end instanceof Date ? end : new Date();
+  return calendarActionPayload({
+    op: 'block',
+    title: title || 'Trip',
+    when: s,
+    lat,
+    lng,
+    endExisting: false,
+    endAny: false,
+    silent: true,
+    timestampEnd: stampCalendarTimestamp(e),
+    timestampEndMs: e.getTime(),
+    description: String(description || '').slice(0, 800),
+  });
 }
 
 /** Compact relative gap: (47m), (1h47m), (1d2h47m33s). */
@@ -225,6 +251,9 @@ export function buildCalendarTrackUrlFromPayload(payload, base = calendarTrackEn
       prefix: p.prefix,
       timestamp: p.timestamp,
       timestampMs: p.timestampMs ?? p.timestamp_ms,
+      timestampEnd: p.timestampEnd ?? p.event_end,
+      timestampEndMs: p.timestampEndMs ?? p.timestamp_end_ms,
+      description: p.description,
       lat: p.lat ?? p.latitude,
       lng: p.lng ?? p.longitude,
       latlong: p.latlong ?? p.latlng,
@@ -254,6 +283,9 @@ export function buildCalendarTrackUrl(params, base = calendarTrackEndpoint()) {
     'prefix',
     'timestamp',
     'timestampMs',
+    'timestampEnd',
+    'timestampEndMs',
+    'description',
     'lat',
     'lng',
     'latlong',

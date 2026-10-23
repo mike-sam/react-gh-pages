@@ -3,12 +3,13 @@
  * - Hashed static assets: Cache-First
  * Private Safari often has no SW — that is why Private can look "fine" while normal Safari blanks.
  */
-const CACHE_NAME = 'selfmanage-static-v1';
+const CACHE_NAME = 'selfmanage-static-v2';
 const PRECACHE_URLS = [
   './',
   './index.html',
   './manifest.json',
   './favicon.ico',
+  './favicon-32.png',
   './favicon.svg',
   './logo.svg',
   './logo192.png',
