@@ -1,7 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { SHORTCUTS } from '../config';
 import { useSmartLocation } from '../hooks/useSmartLocation';
 import { useOfflineQueue } from '../context/QueueContext';
+import { useHistoryOverlay } from '../hooks/useHistoryOverlay';
 import { isIOS, openShortcut, stringifyCalendarTrackInput } from '../utils/platform';
 import CalendarUrlExamples from './CalendarUrlExamples';
 import MobileFriendlyDateTime from './MobileFriendlyDateTime';
@@ -22,6 +24,66 @@ import {
   formatCalendarClock,
   loadCalendarStatus,
 } from '../utils/calendarStatusCache';
+
+function CalendarEndPromptModal({ label, lookbackDays, onPickDays, onCancel, onConfirm }) {
+  useHistoryOverlay(true, onCancel);
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, []);
+
+  const node = (
+    <div
+      className="picker-modal-overlay picker-modal-overlay--center"
+      onClick={onCancel}
+      role="presentation"
+    >
+      <div
+        className="calendar-end-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="calendar-end-modal-title"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="picker-modal-header">
+          <h4 id="calendar-end-modal-title">尚未送出 · {label}</h4>
+          <button type="button" className="picker-modal-close" onClick={onCancel} aria-label="關閉">
+            ✕
+          </button>
+        </div>
+        <p className="calendar-end-prompt-hint">
+          搜尋過去 {lookbackDays} 天內尚未結束的行程（不含未來）
+        </p>
+        <div className="entry-chip-row">
+          {CALENDAR_LOOKBACK_DAY_CHOICES.map((n) => (
+            <button
+              key={n}
+              type="button"
+              className={`entry-chip${lookbackDays === n ? ' active' : ''}`}
+              onClick={() => onPickDays(n)}
+            >
+              {n} 天
+            </button>
+          ))}
+        </div>
+        <div className="calendar-end-prompt-actions">
+          <button type="button" className="cancel-btn" onClick={onCancel}>
+            取消
+          </button>
+          <button type="button" className="confirm-btn" onClick={onConfirm}>
+            確認 {label}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
+  if (typeof document === 'undefined') return node;
+  return createPortal(node, document.body);
+}
 
 function CalendarTracker() {
   const { location, hasLocation, locationMode, setLocationMode, refreshLocation } =
@@ -406,35 +468,13 @@ function CalendarTracker() {
       </div>
 
       {endPrompt ? (
-        <div className="calendar-end-prompt">
-          <p className="calendar-end-prompt-hint">
-            {endPrompt.flags.uiLabel} 會搜尋過去 {lookbackDays} 天內尚未結束的行程（不含未來）
-          </p>
-          <div className="entry-chip-row">
-            {CALENDAR_LOOKBACK_DAY_CHOICES.map((n) => (
-              <button
-                key={n}
-                type="button"
-                className={`entry-chip${lookbackDays === n ? ' active' : ''}`}
-                onClick={() => pickLookbackDays(n)}
-              >
-                {n} 天
-              </button>
-            ))}
-          </div>
-          <div className="calendar-end-prompt-actions">
-            <button type="button" className="cancel-btn" onClick={() => setEndPrompt(null)}>
-              取消
-            </button>
-            <button
-              type="button"
-              className="confirm-btn"
-              onClick={() => handleOp(endPrompt.op, endPrompt.flags, lookbackDays)}
-            >
-              確認 {endPrompt.flags.uiLabel}
-            </button>
-          </div>
-        </div>
+        <CalendarEndPromptModal
+          label={endPrompt.flags.uiLabel}
+          lookbackDays={lookbackDays}
+          onPickDays={pickLookbackDays}
+          onCancel={() => setEndPrompt(null)}
+          onConfirm={() => handleOp(endPrompt.op, endPrompt.flags, lookbackDays)}
+        />
       ) : null}
 
       <div className="entry-btn-row">
