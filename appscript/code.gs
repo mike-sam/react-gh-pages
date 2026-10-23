@@ -135,6 +135,8 @@ const doPost = (request = {}) => {
         return handleParkLocation(data);
       case 'analyzeReceipt':
         return handleAnalyzeReceipt(data);
+      case 'recordAiSuggestion':
+        return handleRecordAiSuggestion(data);
       case 'upsertExpense':
         return handleUpsertExpense(data);
       default:
@@ -453,6 +455,362 @@ function upsertRowById(obj, sheetName) {
   return { row: targetRow, updated: existingRow > 0, id: id };
 }
 
+var FX_CODES = ['USD', 'SGD', 'TWD', 'CNY', 'EUR'];
+var FX_HEADERS = ['DATE', 'MYR', 'USD', 'SGD', 'TWD', 'CNY', 'EUR', 'SOURCE', 'UPDATED_AT'];
+var FX_DEFAULT_KEY = 'DEFAULT';
+
+function isFxDefaultDate(ymd) {
+  return String(ymd || '').trim().toUpperCase() === FX_DEFAULT_KEY;
+}
+
+function fxCellYmd(cell) {
+  if (cell instanceof Date && !isNaN(cell.getTime())) return ymdFromDate(cell);
+  return String(cell == null ? '' : cell).trim();
+}
+
+function ensureFxRateSheet() {
+  var doc = SpreadsheetApp.openById(sheetId);
+  var sheet = doc.getSheetByName('FxRate');
+  if (!sheet) {
+    sheet = doc.insertSheet('FxRate');
+    sheet.getRange(1, 1, 1, FX_HEADERS.length).setValues([FX_HEADERS]);
+    sheet.getRange(1, 1, 1, FX_HEADERS.length).setFontWeight('bold');
+    sheet.setFrozenRows(1);
+  } else if (sheet.getLastColumn() < 1) {
+    sheet.getRange(1, 1, 1, FX_HEADERS.length).setValues([FX_HEADERS]);
+    sheet.getRange(1, 1, 1, FX_HEADERS.length).setFontWeight('bold');
+    sheet.setFrozenRows(1);
+  }
+  var lastRow = sheet.getLastRow();
+  var hasDefault = false;
+  if (lastRow >= 2) {
+    var dates = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+    for (var i = 0; i < dates.length; i++) {
+      if (isFxDefaultDate(fxCellYmd(dates[i][0]))) {
+        hasDefault = true;
+        break;
+      }
+    }
+  }
+  if (!hasDefault) {
+    sheet.appendRow([FX_DEFAULT_KEY, 1, '', '', '', '', '', 'sheet-default', '']);
+  }
+  return sheet;
+}
+
+function ymdFromDate(d) {
+  if (!d || isNaN(d.getTime())) d = new Date();
+  return Utilities.formatDate(d, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+}
+
+function ymdFromExpense(obj) {
+  obj = obj || {};
+  var d =
+    parseExpenseWhen(obj.timestamp) ||
+    parseExpenseWhen(obj.event_start) ||
+    (obj.timestamp_ms ? new Date(Number(obj.timestamp_ms)) : null);
+  return ymdFromDate(d);
+}
+
+function invertMyrRates(myrPerForeign) {
+  var out = { MYR: 1 };
+  var src = myrPerForeign || {};
+  for (var i = 0; i < FX_CODES.length; i++) {
+    var code = FX_CODES[i];
+    var perMyr = Number(src[code] != null ? src[code] : src[code.toLowerCase()]);
+    if (perMyr > 0) out[code] = Math.round((1 / perMyr) * 1000000) / 1000000;
+  }
+  return out;
+}
+
+function fetchLiveFxRates() {
+  var tries = [
+    'https://open.er-api.com/v6/latest/MYR',
+    'https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/myr.json'
+  ];
+  for (var t = 0; t < tries.length; t++) {
+    try {
+      var res = UrlFetchApp.fetch(tries[t], { muteHttpExceptions: true, followRedirects: true });
+      if (res.getResponseCode() >= 400) continue;
+      var body = JSON.parse(res.getContentText());
+      var raw = body.rates || body.myr || {};
+      var rates = invertMyrRates(raw);
+      rates.MYR = 1;
+      if (Object.keys(rates).length < 2) continue;
+      return {
+        date: ymdFromDate(new Date()),
+        rates: rates,
+        source: tries[t]
+      };
+    } catch (e) {
+      appendLog(['fetchLiveFxRates', tries[t], e.toString()]);
+    }
+  }
+  return null;
+}
+
+function parseFxRateCell(v) {
+  if (v === '' || v == null) return 0;
+  var n = Number(v);
+  return n > 0 ? n : 0;
+}
+
+function ratesFromFxRow(row) {
+  row = row || [];
+  return {
+    MYR: 1,
+    USD: parseFxRateCell(row[2]),
+    SGD: parseFxRateCell(row[3]),
+    TWD: parseFxRateCell(row[4]),
+    CNY: parseFxRateCell(row[5]),
+    EUR: parseFxRateCell(row[6])
+  };
+}
+
+function pickFxRate(existing, fallback, live) {
+  if (existing > 0) return existing;
+  if (fallback > 0) return fallback;
+  if (live > 0) return live;
+  return '';
+}
+
+function findFxRowIndex(sheet, dateKey) {
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return -1;
+  var dates = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+  var want = String(dateKey || '').trim().toUpperCase();
+  for (var i = 0; i < dates.length; i++) {
+    var ymd = fxCellYmd(dates[i][0]);
+    if (String(ymd).trim().toUpperCase() === want) return i + 2;
+  }
+  return -1;
+}
+
+function readFxRowValues(sheet, rowIndex) {
+  if (!(rowIndex > 0)) return [];
+  return sheet.getRange(rowIndex, 1, 1, FX_HEADERS.length).getValues()[0] || [];
+}
+
+function writeFxRateRow(pack) {
+  if (!pack || !pack.rates) return null;
+  var sheet = ensureFxRateSheet();
+  var date = pack.date || ymdFromDate(new Date());
+  var live = pack.rates || {};
+  var defaultIndex = findFxRowIndex(sheet, FX_DEFAULT_KEY);
+  var defaultRow = readFxRowValues(sheet, defaultIndex);
+  var defaultRates = ratesFromFxRow(defaultRow);
+
+  var filledDefault = false;
+  var defaultOut = [
+    FX_DEFAULT_KEY,
+    1,
+    pickFxRate(defaultRates.USD, 0, live.USD),
+    pickFxRate(defaultRates.SGD, 0, live.SGD),
+    pickFxRate(defaultRates.TWD, 0, live.TWD),
+    pickFxRate(defaultRates.CNY, 0, live.CNY),
+    pickFxRate(defaultRates.EUR, 0, live.EUR),
+    defaultRow[7] || 'sheet-default',
+    defaultRow[8] || ''
+  ];
+  if (defaultIndex > 0) {
+    var changedDefault = false;
+    for (var d = 2; d <= 6; d++) {
+      if (parseFxRateCell(defaultRow[d]) <= 0 && parseFxRateCell(defaultOut[d]) > 0) {
+        changedDefault = true;
+        break;
+      }
+    }
+    if (changedDefault) {
+      defaultOut[8] = formatRfc2822(new Date());
+      sheet.getRange(defaultIndex, 1, 1, FX_HEADERS.length).setValues([defaultOut]);
+      filledDefault = true;
+    }
+  } else {
+    defaultOut[8] = formatRfc2822(new Date());
+    sheet.appendRow(defaultOut);
+    filledDefault = true;
+    defaultIndex = sheet.getLastRow();
+  }
+  if (filledDefault) defaultRates = ratesFromFxRow(defaultOut);
+
+  var rowIndex = findFxRowIndex(sheet, date);
+  var existing = ratesFromFxRow(readFxRowValues(sheet, rowIndex));
+  var merged = {
+    MYR: 1,
+    USD: pickFxRate(existing.USD, defaultRates.USD, live.USD),
+    SGD: pickFxRate(existing.SGD, defaultRates.SGD, live.SGD),
+    TWD: pickFxRate(existing.TWD, defaultRates.TWD, live.TWD),
+    CNY: pickFxRate(existing.CNY, defaultRates.CNY, live.CNY),
+    EUR: pickFxRate(existing.EUR, defaultRates.EUR, live.EUR)
+  };
+  var row = [
+    date,
+    1,
+    merged.USD || '',
+    merged.SGD || '',
+    merged.TWD || '',
+    merged.CNY || '',
+    merged.EUR || '',
+    pack.source || '',
+    formatRfc2822(new Date())
+  ];
+  if (rowIndex > 0) {
+    var prev = readFxRowValues(sheet, rowIndex);
+    row[7] = prev[7] || pack.source || '';
+    sheet.getRange(rowIndex, 1, 1, FX_HEADERS.length).setValues([row]);
+  } else {
+    sheet.appendRow(row);
+  }
+  loadFxTable._cache = null;
+  return { date: date, rates: merged, source: pack.source || '' };
+}
+
+function refreshFxRates() {
+  var live = fetchLiveFxRates();
+  if (!live) return { success: false, error: 'fx fetch failed' };
+  var stored = writeFxRateRow(live);
+  return { success: true, date: stored.date, rates: stored.rates, source: stored.source };
+}
+
+function loadFxTable() {
+  if (loadFxTable._cache) return loadFxTable._cache;
+  var out = [];
+  var defaults = { MYR: 1 };
+  try {
+    var sheet = ensureFxRateSheet();
+    var lastRow = sheet.getLastRow();
+    if (lastRow >= 2) {
+      var values = sheet.getRange(2, 1, lastRow - 1, FX_HEADERS.length).getValues();
+      for (var i = 0; i < values.length; i++) {
+        var row = values[i];
+        var ymd = fxCellYmd(row[0]);
+        if (!ymd) continue;
+        var rates = ratesFromFxRow(row);
+        if (isFxDefaultDate(ymd)) {
+          defaults = rates;
+          continue;
+        }
+        out.push({
+          date: String(ymd).slice(0, 10),
+          rates: rates,
+          source: String(row[7] || '')
+        });
+      }
+    }
+  } catch (e) {
+    appendLog(['loadFxTable', e.toString()]);
+  }
+  out.sort(function (a, b) {
+    return String(a.date).localeCompare(String(b.date));
+  });
+  loadFxTable._cache = out;
+  loadFxTable._defaults = defaults;
+  return out;
+}
+
+function fxDefaultRates() {
+  loadFxTable();
+  return loadFxTable._defaults || { MYR: 1 };
+}
+
+function withFxDefaults(rates) {
+  var base = fxDefaultRates();
+  var src = rates || {};
+  var out = { MYR: 1 };
+  for (var i = 0; i < FX_CODES.length; i++) {
+    var code = FX_CODES[i];
+    var n = Number(src[code]);
+    var d = Number(base[code]);
+    out[code] = n > 0 ? n : d > 0 ? d : 0;
+  }
+  return out;
+}
+
+function fxRatesOnOrBefore(ymd) {
+  var rows = loadFxTable();
+  var hit = null;
+  for (var i = 0; i < rows.length; i++) {
+    if (rows[i].date <= ymd) hit = rows[i];
+    else break;
+  }
+  if (hit) {
+    return { date: hit.date, rates: withFxDefaults(hit.rates), source: hit.source };
+  }
+  var fallback = withFxDefaults({});
+  var hasDefault = false;
+  for (var j = 0; j < FX_CODES.length; j++) {
+    if (fallback[FX_CODES[j]] > 0) {
+      hasDefault = true;
+      break;
+    }
+  }
+  if (hasDefault) return { date: FX_DEFAULT_KEY, rates: fallback, source: 'sheet-default' };
+  var live = fetchLiveFxRates();
+  if (live) {
+    var stored = writeFxRateRow(live);
+    return stored || live;
+  }
+  return { date: ymd, rates: { MYR: 1 }, source: '' };
+}
+
+function fxMyrPerUnit(code, ymd) {
+  var cur = String(code || 'MYR').trim().toUpperCase();
+  if (!cur || cur === 'MYR') return 1;
+  var pack = fxRatesOnOrBefore(ymd || ymdFromDate(new Date()));
+  var rate = pack && pack.rates ? Number(pack.rates[cur]) : 0;
+  return rate > 0 ? rate : 0;
+}
+
+function latestFxPayload() {
+  var rows = loadFxTable();
+  if (!rows.length) {
+    var live = refreshFxRates();
+    if (live && live.success) return { date: live.date, rates: live.rates, source: live.source };
+    return { date: ymdFromDate(new Date()), rates: withFxDefaults({}), source: 'sheet-default' };
+  }
+  var last = rows[rows.length - 1];
+  return { date: last.date, rates: withFxDefaults(last.rates), source: last.source };
+}
+
+function settlementAmountMyr(rec) {
+  rec = rec || {};
+  var cur = String(rec.currency || 'MYR').trim().toUpperCase();
+  var amt = Number(rec.amount) || 0;
+  var orig = rec.amount_original;
+  var hasOrig = orig !== '' && orig != null && !isNaN(Number(orig));
+  if (hasOrig) return Math.round(amt * 100) / 100;
+  if (cur && cur !== 'MYR') {
+    var rate = fxMyrPerUnit(cur, ymdFromExpense(rec));
+    if (rate > 0) return Math.round(amt * rate * 100) / 100;
+  }
+  return Math.round(amt * 100) / 100;
+}
+
+function normalizeExpenseAmountToMyr(obj) {
+  obj = obj || {};
+  var cur = String(obj.currency || 'MYR').trim().toUpperCase() || 'MYR';
+  var orig = parseFloat(obj.amount);
+  if (isNaN(orig)) orig = 0;
+  obj.currency = cur;
+  obj.amount_original = orig;
+  if (cur === 'MYR') {
+    obj.fx_rate = 1;
+    obj.fx_date = ymdFromExpense(obj);
+    obj.amount = Math.round(orig * 100) / 100;
+    return obj;
+  }
+  var ymd = ymdFromExpense(obj);
+  var rate = fxMyrPerUnit(cur, ymd);
+  if (!(rate > 0)) {
+    loadFxTable._cache = null;
+    rate = fxMyrPerUnit(cur, ymd);
+  }
+  obj.fx_date = ymd;
+  obj.fx_rate = rate > 0 ? rate : '';
+  obj.amount = rate > 0 ? Math.round(orig * rate * 100) / 100 : orig;
+  return obj;
+}
+
 /**
  * 費用寫入：Replace Into + 附帶 Location / Mileage / Photo 副作用
  */
@@ -472,6 +830,7 @@ function handleUpsertExpense(data) {
       recordsData.description = recordsData.simpleDescription;
     }
     delete recordsData.simpleDescription;
+    normalizeExpenseAmountToMyr(recordsData);
 
     var upsert = upsertRowById(recordsData, 'Records');
 
@@ -586,35 +945,243 @@ function handleUpsertExpense(data) {
   }
 }
 
+function lookupKeyValue_(key, group) {
+  var searchGroup = String(group || 'KeyValue').trim().toUpperCase();
+  var searchKey = String(key || '').trim().toUpperCase();
+  if (!searchKey) return null;
+  var sheet = getKeyValueSheet();
+  var data = sheet.getDataRange().getValues();
+  for (var i = 1; i < data.length; i++) {
+    var groupStr = data[i][0] ? String(data[i][0]).trim().toUpperCase() : '';
+    var keyStr = data[i][1] ? String(data[i][1]).trim().toUpperCase() : '';
+    if (groupStr === searchGroup && keyStr === searchKey) return data[i][2];
+  }
+  return null;
+}
+
+function lookupGroupMap_(group) {
+  var searchGroup = String(group || '').trim().toUpperCase();
+  var sheet = getKeyValueSheet();
+  var data = sheet.getDataRange().getValues();
+  var out = {};
+  for (var i = 1; i < data.length; i++) {
+    var groupStr = data[i][0] ? String(data[i][0]).trim().toUpperCase() : '';
+    if (groupStr !== searchGroup) continue;
+    var keyStr = data[i][1] ? String(data[i][1]).trim().toUpperCase() : '';
+    if (keyStr) out[keyStr] = data[i][2];
+  }
+  return out;
+}
+
+function stripBase64_(s) {
+  s = String(s || '');
+  var i = s.indexOf(',');
+  if (s.indexOf('data:') === 0 && i > -1) return s.slice(i + 1);
+  return s.replace(/\s+/g, '');
+}
+
+function photoHash_(b64) {
+  try {
+    var raw = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, b64);
+    var hex = '';
+    for (var i = 0; i < raw.length && i < 8; i++) {
+      var b = raw[i];
+      if (b < 0) b += 256;
+      hex += ('0' + b.toString(16)).slice(-2);
+    }
+    return hex;
+  } catch (e) {
+    return '';
+  }
+}
+
+function sanitizeGeminiError_(text) {
+  return String(text || '')
+    .replace(/key=[^&\s"']+/gi, 'key=REDACTED')
+    .replace(/AIza[0-9A-Za-z_\-]{20,}/g, 'REDACTED')
+    .slice(0, 480);
+}
+
+function resolveGeminiModel_(name) {
+  var n = String(name || '').trim();
+  if (!n) return 'gemini-2.0-flash';
+  var slug = n.toLowerCase().replace(/\s+/g, '-');
+  if (/^gemini[-._]/.test(slug)) return n.replace(/\s+/g, '-');
+  if (/flash-lite/.test(slug)) return 'gemini-2.0-flash-lite';
+  if (/flash/.test(slug)) return 'gemini-2.0-flash';
+  return 'gemini-2.0-flash';
+}
+
+function buildReceiptPrompt_(data) {
+  var fields = Array.isArray(data.fields) ? data.fields : [];
+  var fieldLines = fields.map(function (f) {
+    if (!f) return '';
+    var key = f.key || '';
+    var label = f.label || key;
+    var hint = f.hint ? ' — ' + f.hint : '';
+    return '- ' + key + ' (' + label + ')' + hint;
+  }).filter(Boolean);
+  if (!fieldLines.length) {
+    fieldLines = [
+      '- amount (金額) — 數字，不含幣符',
+      '- currency (幣別) — ISO，如 MYR/SGD/USD',
+      '- merchant (商家)',
+      '- description (說明)',
+      '- tag (分類)',
+      '- title (子分類)'
+    ];
+  }
+  var cats = Array.isArray(data.allowedTags) ? data.allowedTags.join('、') : '';
+  var subMap = data.allowedSubcats && typeof data.allowedSubcats === 'object' ? data.allowedSubcats : {};
+  var subLines = Object.keys(subMap).map(function (k) {
+    var arr = Array.isArray(subMap[k]) ? subMap[k] : [];
+    return k + ': ' + arr.join('、');
+  });
+  return [
+    '你是記帳助理。根據收據／發票照片填欄位。',
+    '目前分類: ' + (data.tag || '未選'),
+    '目前子分類: ' + (data.title || '未選'),
+    cats ? ('允許分類: ' + cats) : '',
+    subLines.length ? ('允許子分類:\n' + subLines.join('\n')) : '',
+    '需要欄位:',
+    fieldLines.join('\n'),
+    '規則:',
+    '1. 回傳 JSON：{"suggestions":[{...}]}，1～4 筆。金額有含稅/未稅/折扣時可給多筆。',
+    '2. 每筆含短 label（如「含稅總額」）。數字用 number。未知欄位省略。',
+    '3. currency 用 ISO（MYR/SGD/USD/CNY/TWD/HKD）。fuelType 僅 ron95 或 ron97。',
+    '4. tag/title 必須是允許清單內的值；已選分類優先沿用，除非收據明顯不符。',
+    '5. 只根據照片，不要編造商家名以外的長文。'
+  ].filter(Boolean).join('\n');
+}
+
+function parseGeminiSuggestions_(text) {
+  var raw = String(text || '').trim();
+  raw = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+  var obj = JSON.parse(raw);
+  var list = [];
+  if (Array.isArray(obj)) list = obj;
+  else if (obj && Array.isArray(obj.suggestions)) list = obj.suggestions;
+  else if (obj && Array.isArray(obj.items)) list = obj.items;
+  else if (obj && typeof obj === 'object') list = [obj];
+  return list.filter(function (s) { return s && typeof s === 'object'; }).slice(0, 8);
+}
+
+function callGeminiVision_(apiKey, model, mimeType, base64, prompt) {
+  var url = 'https://generativelanguage.googleapis.com/v1beta/models/' +
+    encodeURIComponent(model) + ':generateContent?key=' + encodeURIComponent(apiKey);
+  var body = {
+    contents: [{
+      parts: [
+        { text: prompt },
+        { inlineData: { mimeType: mimeType || 'image/jpeg', data: base64 } }
+      ]
+    }],
+    generationConfig: {
+      temperature: 0.2,
+      responseMimeType: 'application/json'
+    }
+  };
+  var res = UrlFetchApp.fetch(url, {
+    method: 'post',
+    contentType: 'application/json',
+    payload: JSON.stringify(body),
+    muteHttpExceptions: true
+  });
+  var code = res.getResponseCode();
+  var text = res.getContentText() || '';
+  if (code < 200 || code >= 300) {
+    throw new Error('Gemini HTTP ' + code + ' ' + sanitizeGeminiError_(text));
+  }
+  var parsed = JSON.parse(text);
+  var parts = ((((parsed || {}).candidates || [])[0] || {}).content || {}).parts || [];
+  var out = '';
+  for (var i = 0; i < parts.length; i++) {
+    if (parts[i] && parts[i].text) out += parts[i].text;
+  }
+  if (!out) {
+    var block = parsed && parsed.promptFeedback && parsed.promptFeedback.blockReason;
+    throw new Error(block ? ('Gemini blocked: ' + block) : 'Gemini 無內容');
+  }
+  return out;
+}
+
+function ensureAiSuggestSheet() {
+  var doc = SpreadsheetApp.openById(sheetId);
+  var sheet = doc.getSheetByName('AiSuggest');
+  var headers = ['Timestamp', 'Tag', 'Title', 'Chosen', 'Count', 'Model', 'PhotoHash', 'Info'];
+  if (!sheet) {
+    sheet = doc.insertSheet('AiSuggest');
+    sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+    sheet.getRange(1, 1, 1, headers.length).setFontWeight('bold');
+    sheet.setFrozenRows(1);
+  }
+  return sheet;
+}
+
 /**
- * 收據 AI 辨識 stub：請在 Script Properties 設定 GEMINI_API_KEY 後擴充。
- * 目前先存圖並回傳空欄位，保持 thin-client 契約。
+ * 收據 AI：KeyValueConfig group=AI 的 APIKey / Name。
+ * 不把圖存進 Drive（提交記帳時才上傳）。
  */
 function handleAnalyzeReceipt(data) {
   try {
-    var uploaded = null;
-    if (data.photo) {
-      var fileName = 'receipt_' + (data.id || new Date().getTime()) + '.jpg';
-      uploaded = uploadFileToDrive(data.photo, fileName, 'ExpensePhotos');
+    data = data || {};
+    var b64 = stripBase64_(data.photo || data.base64 || '');
+    if (!b64) {
+      return jsonOut({ success: false, error: '沒有圖片' });
     }
-    // TODO: UrlFetchApp → Gemini；回填 amount/title/merchant
-    return ContentService.createTextOutput(JSON.stringify({
+    if (b64.length > 900000) {
+      return jsonOut({ success: false, error: '圖片仍太大，請再壓縮' });
+    }
+    var ai = lookupGroupMap_('AI');
+    var apiKey = String(ai.APIKEY || lookupKeyValue_('APIKey', 'AI') || '').trim();
+    if (!apiKey) {
+      return jsonOut({ success: false, error: 'KeyValueConfig group AI 未設定 APIKey' });
+    }
+    var model = resolveGeminiModel_(ai.NAME || lookupKeyValue_('Name', 'AI'));
+    var mime = data.mimeType || data.type || 'image/jpeg';
+    if (String(mime).indexOf('image/') !== 0) mime = 'image/jpeg';
+    var prompt = buildReceiptPrompt_(data);
+    var rawText = callGeminiVision_(apiKey, model, mime, b64, prompt);
+    var suggestions = parseGeminiSuggestions_(rawText);
+    var hash = photoHash_(b64);
+    appendLog(['analyzeReceipt', data.tag || '', data.title || '', suggestions.length, model, hash]);
+    return jsonOut({
       success: true,
       action: 'analyzeReceipt',
-      photoUrl: uploaded && uploaded.success ? (uploaded.previewUrl || uploaded.fileUrl) : null,
-      extracted: {
-        amount: null,
-        title: null,
-        currency: null,
-        remark: null
-      },
-      note: 'Set GEMINI_API_KEY in Script Properties to enable AI extraction'
-    })).setMimeType(ContentService.MimeType.JSON);
+      model: model,
+      photoHash: hash,
+      suggestions: suggestions
+    });
   } catch (error) {
-    return ContentService.createTextOutput(JSON.stringify({
+    appendLog(['analyzeReceipt error', sanitizeGeminiError_(error.toString())]);
+    return jsonOut({
       success: false,
-      error: error.toString()
-    })).setMimeType(ContentService.MimeType.JSON);
+      error: sanitizeGeminiError_(error.toString())
+    });
+  }
+}
+
+function handleRecordAiSuggestion(data) {
+  try {
+    data = data || {};
+    var sheet = ensureAiSuggestSheet();
+    var chosen = data.chosen;
+    var chosenStr = typeof chosen === 'string' ? chosen : JSON.stringify(chosen || {});
+    if (chosenStr.length > 4000) chosenStr = chosenStr.slice(0, 4000);
+    sheet.appendRow([
+      datetimetoYMDHIS(new Date()),
+      data.tag || '',
+      data.title || '',
+      chosenStr,
+      data.count != null ? data.count : '',
+      data.model || '',
+      data.photoHash || '',
+      data.info || data.label || ''
+    ]);
+    appendLog(['recordAiSuggestion', data.tag || '', data.title || '', data.label || '']);
+    return jsonOut({ success: true, action: 'recordAiSuggestion' });
+  } catch (error) {
+    return jsonOut({ success: false, error: error.toString() });
   }
 }
 
@@ -765,6 +1332,12 @@ function getBootstrap() {
     out.landmarks = collectLandmarkRegions();
   } catch (e) {
     out.landmarksError = e.toString();
+  }
+  try {
+    out.fx = latestFxPayload();
+  } catch (e) {
+    out.fxError = e.toString();
+    out.fx = { date: '', rates: { MYR: 1 }, source: '' };
   }
   try {
     ensureAccessHashRow();
@@ -3638,6 +4211,12 @@ function recordFromSheetRow(row, col, yearmonth) {
     tag: String(col.tag != null && row[col.tag] != null ? row[col.tag] : '').trim() || '其他',
     title: String(col.title != null && row[col.title] != null ? row[col.title] : '').trim(),
     amount: Number(col.amount != null ? row[col.amount] : 0) || 0,
+    amount_original:
+      col.amount_original != null && row[col.amount_original] !== ''
+        ? Number(row[col.amount_original])
+        : '',
+    fx_rate: col.fx_rate != null && row[col.fx_rate] !== '' ? Number(row[col.fx_rate]) : '',
+    fx_date: sheetText(col.fx_date != null ? row[col.fx_date] : ''),
     currency: String(col.currency != null && row[col.currency] != null ? row[col.currency] : 'MYR') || 'MYR',
     remark: sheetText(col.remark != null ? row[col.remark] : ''),
     description: sheetText(col.description != null ? row[col.description] : ''),
@@ -3647,8 +4226,28 @@ function recordFromSheetRow(row, col, yearmonth) {
     calendar_event_id: sheetText(
       col.calendar_event_id != null ? row[col.calendar_event_id] : ''
     ),
+    geolocation: sheetText(col.geolocation != null ? row[col.geolocation] : ''),
+    latitude: col.latitude != null ? row[col.latitude] : '',
+    longitude: col.longitude != null ? row[col.longitude] : '',
     yearmonth: yearmonth
   };
+}
+
+function coordsFromExpenseRow(rec) {
+  rec = rec || {};
+  var lat = Number(rec.latitude);
+  var lng = Number(rec.longitude);
+  if (!(lat && lng) || isNaN(lat) || isNaN(lng)) {
+    var geo = String(rec.geolocation || '');
+    var m = geo.match(/[?&]q=(-?\d+\.?\d*),(-?\d+\.?\d*)/) || geo.match(/(-?\d+\.?\d*)\s*,\s*(-?\d+\.?\d*)/);
+    if (m) {
+      lat = Number(m[1]);
+      lng = Number(m[2]);
+    }
+  }
+  if (!isFinite(lat) || !isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return null;
+  if (lat === 0 && lng === 0) return null;
+  return { lat: lat, lng: lng };
 }
 
 /** Records: header row 2, data from row 3. Duplicate headers on the right are ignored. */
@@ -3717,7 +4316,10 @@ function listRecentYearMonths(count) {
 function expenseSummaryFingerprint(rows) {
   rows = rows || [];
   var total = 0;
-  for (var i = 0; i < rows.length; i++) total += Number(rows[i].amount) || 0;
+  for (var i = 0; i < rows.length; i++) {
+    var rec = rows[i];
+    total += Number(rec.amount_myr != null ? rec.amount_myr : rec.amount) || 0;
+  }
   return rows.length + '|' + Math.round(total * 100);
 }
 
@@ -3727,9 +4329,10 @@ function buildExpenseSummaryFromRows(ym, rows) {
   var byTagMap = {};
   for (var i = 0; i < rows.length; i++) {
     var rec = rows[i];
-    total += rec.amount;
+    rec.amount_myr = settlementAmountMyr(rec);
+    total += rec.amount_myr;
     if (!byTagMap[rec.tag]) byTagMap[rec.tag] = { tag: rec.tag, amount: 0, count: 0 };
-    byTagMap[rec.tag].amount += rec.amount;
+    byTagMap[rec.tag].amount += rec.amount_myr;
     byTagMap[rec.tag].count += 1;
   }
   var byTag = [];
@@ -3745,15 +4348,20 @@ function buildExpenseSummaryFromRows(ym, rows) {
   rows.sort(function (a, c) {
     return String(c.id).localeCompare(String(a.id));
   });
-  var recent = rows.slice(0, 24).map(function (r) {
+  var compact = rows.map(function (r) {
+    var xy = coordsFromExpenseRow(r);
     return {
       id: r.id,
       tag: r.tag,
       title: r.title,
-      amount: r.amount,
+      amount: r.amount_myr != null ? r.amount_myr : r.amount,
+      amount_original: r.amount_original,
+      fx_rate: r.fx_rate,
       currency: r.currency,
       timestamp: r.timestamp,
-      description: r.description || r.remark
+      description: r.description || r.remark,
+      lat: xy ? xy.lat : '',
+      lng: xy ? xy.lng : ''
     };
   });
   return {
@@ -3762,8 +4370,26 @@ function buildExpenseSummaryFromRows(ym, rows) {
     total: Math.round(total * 100) / 100,
     count: rows.length,
     byTag: byTag,
-    recent: recent
+    recent: compact,
+    records: compact
   };
+}
+
+function yearTotalsFromGrouped(year, grouped) {
+  var out = [];
+  grouped = grouped || {};
+  for (var m = 1; m <= 12; m++) {
+    var mm = ('0' + m).slice(-2);
+    var rows = grouped[year + '-' + mm] || grouped[year + mm] || [];
+    var t = 0;
+    for (var i = 0; i < rows.length; i++) {
+      t += Number(
+        rows[i].amount_myr != null ? rows[i].amount_myr : settlementAmountMyr(rows[i])
+      ) || 0;
+    }
+    out.push(Math.round(t * 100) / 100);
+  }
+  return out;
 }
 
 function computeExpenseSummary(ym) {
@@ -3775,53 +4401,47 @@ function getExpenseSummary(parameter) {
     parameter = parameter || {};
     var ym = normalizeYearMonth(parameter.yearmonth);
     if (!ym) ym = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM');
-    var force = /^(1|true|yes)$/i.test(String(parameter.force || ''));
     var props = PropertiesService.getScriptProperties();
     var cacheKey = EXPENSE_SUMMARY_PREFIX + ym;
-    var live = null;
-    var fromCache = false;
-    if (!force) {
-      var cachedRaw = props.getProperty(cacheKey);
-      if (cachedRaw) {
-        try {
-          var cached = JSON.parse(cachedRaw);
-          if (cached && Array.isArray(cached.byTag) && Number(cached.count) > 0) {
-            live = cached;
-            fromCache = true;
-          }
-        } catch (parseErr) {
-          live = null;
-        }
-      }
+    var year = String(ym).slice(0, 4);
+    var allow = {};
+    var m;
+    for (m = 1; m <= 12; m++) {
+      var mm = ('0' + m).slice(-2);
+      allow[year + '-' + mm] = true;
+      allow[year + mm] = true;
     }
-    if (!live) {
-      live = computeExpenseSummary(ym);
-      live.updatedAt = formatRfc2822(new Date());
-      try {
-        props.setProperty(cacheKey, JSON.stringify(live));
-      } catch (writeErr) {
-        appendLog(['getExpenseSummary cache write', ym, writeErr.toString()]);
-      }
+    var grouped = recordsGroupedByMonth(allow);
+    var monthRows = grouped[ym] || grouped[String(ym).replace('-', '')] || [];
+    var live = buildExpenseSummaryFromRows(ym, monthRows);
+    live.yearTotals = yearTotalsFromGrouped(year, grouped);
+    live.updatedAt = formatRfc2822(new Date());
+    live.yearmonth = ym;
+    live.cached = false;
+    live.source = 'live';
+    try {
+      var stash = {
+        yearmonth: live.yearmonth,
+        fingerprint: live.fingerprint,
+        total: live.total,
+        count: live.count,
+        byTag: live.byTag,
+        recent: live.recent,
+        yearTotals: live.yearTotals,
+        updatedAt: live.updatedAt
+      };
+      props.setProperty(cacheKey, JSON.stringify(stash));
+    } catch (writeErr) {
+      appendLog(['getExpenseSummary cache write', ym, writeErr.toString()]);
     }
-    live.yearmonth = live.yearmonth || ym;
-    live.cached = fromCache;
-    live.source = fromCache ? 'cache' : 'live';
     var wantId = String(parameter.id || '').trim();
     if (wantId) {
       var hit = null;
-      for (var i = 0; i < (live.recent || []).length; i++) {
-        if (String(live.recent[i].id) === wantId) {
-          hit = live.recent[i];
+      var pool = live.records || live.recent || [];
+      for (var i = 0; i < pool.length; i++) {
+        if (String(pool[i].id) === wantId) {
+          hit = pool[i];
           break;
-        }
-      }
-      if (!hit) {
-        var all = recordsForYearMonth(ym);
-        for (var j = 0; j < all.length; j++) {
-          if (String(all[j].id) === wantId) {
-            hit = all[j];
-            break;
-          }
         }
       }
       live.record = hit;
@@ -3929,6 +4549,11 @@ function backfillExpenseCalendarEvents() {
 
 function runDailyJobs() {
   var results = {};
+  try {
+    results.fx = refreshFxRates();
+  } catch (e0) {
+    results.fx = { success: false, error: e0.toString() };
+  }
   try {
     var c = processCommitments();
     results.commitments = c && c.getContent ? JSON.parse(c.getContent()) : c;
