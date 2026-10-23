@@ -1,7 +1,8 @@
-import React from 'react';
+import React, { useState } from 'react';
 import HeaderActions from '../components/HeaderActions';
 import EntryUrlExamples from '../components/EntryUrlExamples';
 import SelfmanageMark from '../brand/SelfmanageMark';
+import EatWhatModal from '../components/EatWhatModal';
 import { forceReload } from '../utils/forceReload';
 import { hrefFor, ROUTES } from '../utils/routing';
 import '../App.css';
@@ -38,6 +39,7 @@ const ACTIONS = [
 ];
 
 function EntryPage() {
+  const [eatOpen, setEatOpen] = useState(false);
   const handleForceReload = async () => {
     if (!window.confirm('將清空快取、註銷 Service Worker 並強制拉取最新版本，確定？')) {
       return;
@@ -64,6 +66,13 @@ function EntryPage() {
       </div>
 
       <div className="entry-action-grid">
+        <button type="button" className="entry-action-card" onClick={() => setEatOpen(true)}>
+          <div className="entry-action-icon">🍜</div>
+          <div className="entry-action-body">
+            <div className="entry-action-title">吃什麼</div>
+            <div className="entry-action-desc">附近過去一年吃過的，轉一下。不進報表。</div>
+          </div>
+        </button>
         {ACTIONS.map((action) => (
           <a key={action.path} className="entry-action-card" href={hrefFor(action.path)}>
             <div className="entry-action-icon">{action.icon}</div>
@@ -91,6 +100,7 @@ function EntryPage() {
       </div>
 
       <EntryUrlExamples />
+      {eatOpen ? <EatWhatModal open onClose={() => setEatOpen(false)} /> : null}
     </div>
   );
 }

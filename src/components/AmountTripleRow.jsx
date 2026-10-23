@@ -5,6 +5,7 @@ import PickerModal from './PickerModal';
 import QuickPlateSelect from './QuickPlateSelect';
 import { useHistoryOverlay } from '../hooks/useHistoryOverlay';
 import { categorizePayments, paymentSectionsFromCats } from '../utils/paymentCategory';
+import { toMyr } from '../utils/fxRates';
 
 const CURRENCIES = ['MYR', 'TWD', 'USD', 'SGD', 'CNY', 'EUR'];
 
@@ -152,6 +153,10 @@ function AmountTripleRow({
     if (amount && parseFloat(amount) > 0) onAmountComplete?.();
   };
 
+  const typed = parseFloat(amount);
+  const myrHint =
+    currency && currency !== 'MYR' && Number.isFinite(typed) && typed > 0 ? toMyr(typed, currency) : 0;
+
   return (
     <div className="amount-triple-row">
       <WheelPicker
@@ -172,7 +177,8 @@ function AmountTripleRow({
         }`}
         onClick={openPad}
       >
-        {amount || '0.00'}
+        <span>{amount || '0.00'}</span>
+        {myrHint > 0 ? <small>≈ {myrHint.toFixed(2)} MYR</small> : null}
       </button>
 
       <PaymentWheel
@@ -215,7 +221,10 @@ function AmountTripleRow({
             onClick={(e) => e.stopPropagation()}
             onTouchMove={(e) => e.stopPropagation()}
           >
-            <div className="amount-pad-display">{amount || '0'}</div>
+            <div className="amount-pad-display">
+              {amount || '0'}
+              {myrHint > 0 ? <small>≈ {myrHint.toFixed(2)} MYR</small> : null}
+            </div>
 
             <QuickPlateSelect
               selectedTag={selectedTag}

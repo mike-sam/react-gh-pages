@@ -2,6 +2,7 @@ import { API_ENDPOINTS } from '../config';
 import { detectPaymentCategory, detectPaymentRegion } from './paymentCategory';
 import { applyParkedByCar, DEFAULT_CAR_PLATES, isParkedFetchFresh } from './locationStorage';
 import { isLandmarkFetchFresh, mergeLandmarkRegionsFromCloud } from './landmarkRegions';
+import { writeFxRates } from './fxRates';
 
 export const BOOTSTRAP_FETCH_AT_KEY = 'appBootstrapFetchedAt';
 export const BOOTSTRAP_ATTEMPT_AT_KEY = 'appBootstrapAttemptAt';
@@ -145,6 +146,10 @@ function applyBootstrapPayload(data) {
     : data.landmarks?.regions;
   if (Array.isArray(regions)) {
     mergeLandmarkRegionsFromCloud(regions);
+    applied = true;
+  }
+  if (data.fx && data.fx.rates && typeof data.fx.rates === 'object') {
+    writeFxRates(data.fx);
     applied = true;
   }
   if (applied) markBootstrapFetched(Number(data.fetchedAt) || Date.now());

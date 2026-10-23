@@ -194,6 +194,19 @@ export function toMapsUrl(lat, lng, name = '') {
   return `${base}&name=${encodeURIComponent(name)}`;
 }
 
+export function toMapsDirUrl(lat, lng, origin) {
+  const dest = `${lat},${lng}`;
+  if (origin && Number.isFinite(Number(origin.lat)) && Number.isFinite(Number(origin.lng))) {
+    return `https://www.google.com/maps/dir/?api=1&origin=${origin.lat},${origin.lng}&destination=${dest}&travelmode=driving`;
+  }
+  return `https://www.google.com/maps/dir/?api=1&destination=${dest}&travelmode=driving`;
+}
+
+/** Directions from the device's current location (no origin). */
+export function toMapsDriveUrl(lat, lng) {
+  return `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&travelmode=driving`;
+}
+
 export function parseLatLngFromMapsUrl(url) {
   if (!url || typeof url !== 'string') return null;
   const match = url.match(/q=(-?\d+\.?\d*),(-?\d+\.?\d*)/);

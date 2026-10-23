@@ -12,6 +12,12 @@ import AmountTripleRow from '../components/AmountTripleRow';
 import TaxAddonStrip, { computeFinalAmount, formatTaxAddonTags } from '../components/TaxAddonStrip';
 import CameraAICapture from '../components/CameraAICapture';
 import { useOfflineQueue } from '../context/QueueContext';
+import {
+  analyzeReceiptPhoto,
+  applyAiSuggestion,
+  recordAiSuggestion,
+  suggestionSummary,
+} from '../utils/aiSuggest';
 import { useSmartLocation } from '../hooks/useSmartLocation';
 import { toMapsUrl } from '../utils/locationStorage';
 import { rememberNamedPoint } from '../utils/landmarkRegions';
@@ -38,6 +44,7 @@ import {
 import { ObligationsPanel } from './ObligationsPage';
 import ExpenseSummary from '../components/ExpenseSummary';
 import { invalidateExpenseSummaryCache } from '../utils/expenseSummary';
+import { invalidateEatPlacesCache } from '../utils/eatPlaces';
 
 function ledgerFromLocation() {
   if (getHashPath() === ROUTES.OBLIGATIONS) return 'scheduled';
@@ -88,6 +95,11 @@ function ExpensePage() {
   const [itemizedTotal, setItemizedTotal] = useState(0);
   const [fuelPrice, setFuelPrice] = useState('');
   const [fuelType, setFuelType] = useState('');
+  const [aiBusyIndex, setAiBusyIndex] = useState(-1);
+  const [aiError, setAiError] = useState('');
+  const [aiSuggestions, setAiSuggestions] = useState([]);
+  const [aiMeta, setAiMeta] = useState({ model: '', photoHash: '', photoIndex: -1 });
+  const [aiPicked, setAiPicked] = useState(null);
 
   /** Guard reload only for cat / subcat / amount / 備註 — ignore payment, date, plate, etc. */
   const hasUnsavedInput = useMemo(() => {
@@ -104,7 +116,31 @@ function ExpensePage() {
 
   useUnsavedGuard(hasUnsavedInput, { whenPath: ROUTES.EXPENSE });
 
-  const handlePhotoChange = (photosData) => setPhotos(photosData);
+  const askAiForPhoto = async (index) => {
+    const photo = photos[index];
+    if (!photo?.base64 || aiBusyIndex >= 0) return;
+    setAiBusyIndex(index);
+    setAiError('');
+    setAiSuggestions([]);
+    setAiMeta({ model: '', photoHash: '', photoIndex: index });
+    try {
+      const result = await analyzeReceiptPhoto(photo, { tag: selectedTag, title: input });
+      setAiSuggestions(result.suggestions);
+      setAiMeta({ model: result.model, photoHash: result.photoHash, photoIndex: index });
+      if (!result.suggestions.length) setAiError('沒有建議');
+    } catch (err) {
+      setAiError(
+        err?.name === 'AbortError'
+          ? '逾時'
+          : String(err.message || 'AI 失敗')
+              .split('\n')[0]
+              .slice(0, 160)
+      );
+    } finally {
+      setAiBusyIndex(-1);
+    }
+  };
+
   /** Leaving 交通出行: wipe auto fuel/ODO remark before ItemizedDescription remounts */
   const handleSetSelectedTag = useCallback(
     (next) => {
@@ -117,6 +153,39 @@ function ExpensePage() {
     },
     [selectedTag]
   );
+
+  const pickAiSuggestion = (s) => {
+    applyAiSuggestion(s, {
+      selectedTag,
+      setSelectedTag: handleSetSelectedTag,
+      setInput,
+      setAmount,
+      setIsAmountManuallySet,
+      setCurrency,
+      setSimpleDescription,
+      setRemark,
+      setMileage,
+      setTripInfo,
+      setFuelType,
+      setFuelPrice,
+      setCarPlate,
+      setPaymentMethod,
+      paymentOptions,
+    });
+    setAiPicked(s);
+    recordAiSuggestion({
+      tag: s.tag || selectedTag || '',
+      title: s.title || input || '',
+      chosen: s,
+      count: aiSuggestions.length,
+      model: aiMeta.model,
+      photoHash: aiMeta.photoHash,
+      label: s.label || '',
+    });
+    setAiSuggestions([]);
+    setAiError('');
+  };
+
   const handleCurrencyConversion = (conversion) => {
     setCurrencyConversions((prev) => [...prev, conversion]);
   };
@@ -234,13 +303,22 @@ function ExpensePage() {
     setEventStart(null);
     setEventEnd(null);
     setTaxAddons([]);
+    setAiBusyIndex(-1);
+    setAiError('');
+    setAiSuggestions([]);
+    setAiMeta({ model: '', photoHash: '', photoIndex: -1 });
+    setAiPicked(null);
   };
 
   const fillFromHistory = (entry) => {
     if (!entry) return;
     setEditingId(entry.id ?? entry.timestamp_ms ?? null);
     setInput(entry.title || '');
-    setAmount(entry.amount != null ? String(entry.amount) : '');
+    const orig =
+      entry.amount_original != null && entry.amount_original !== ''
+        ? entry.amount_original
+        : entry.amount;
+    setAmount(orig != null ? String(orig) : '');
     setSelectedTag(entry.tag || '');
     setRemark(entry.remark || '');
     setSimpleDescription(entry.description || entry.remark || '');
@@ -343,6 +421,7 @@ function ExpensePage() {
       fuelType,
       photos: photos.map((photo) => photo.uploadedUrl || photo.base64).filter(Boolean),
       photo_urls: photos.map((photo) => photo.uploadedUrl || photo.previewUrl).filter(Boolean),
+      ai_suggestion: aiPicked ? JSON.stringify(aiPicked) : '',
     };
 
     const historyEntry = {
@@ -389,6 +468,7 @@ function ExpensePage() {
         resetData();
       }
       invalidateExpenseSummaryCache(formatDateTime(dt, 'YM'));
+      if (selectedTag === '餐饮美食') invalidateEatPlacesCache();
       setOutput(
         result.sent
           ? hasCalendarRange
@@ -425,6 +505,7 @@ function ExpensePage() {
     fuelPrice,
     fuelType,
     photos,
+    aiPicked,
     enqueueAndSend,
     mapsUrl,
     resolveForAction,
@@ -702,9 +783,7 @@ function ExpensePage() {
                 <CameraAICapture
                   onPhotoReady={(photoData) => {
                     setPhotos((prev) => [...prev, photoData]);
-                    handlePhotoChange([...photos, photoData]);
                   }}
-                  onExtracted={() => {}}
                 />
               }
             />
@@ -749,19 +828,39 @@ function ExpensePage() {
           <div className="photos-display-row">
             <div className="photos-grid">
               {photos.map((photo, index) => (
-                <div key={index} className="photo-display-item">
+                <div
+                  key={index}
+                  className={`photo-display-item${aiBusyIndex === index ? ' is-ai-busy' : ''}${aiPicked && aiMeta.photoIndex === index ? ' is-ai-picked' : ''}`}
+                >
                   <img src={photo.preview} alt={`照片 ${index + 1}`} className="photo-display-img" />
                   <div className="photo-display-info">
                     <span className="photo-display-name">{photo.filename}</span>
-                    <span className="photo-display-size">{formatFileSize(photo.originalSize)}</span>
+                    <span className="photo-display-size">
+                      {formatFileSize(photo.compressedSize || photo.originalSize)}
+                      {photo.compressedSize && photo.originalSize
+                        ? ` / ${formatFileSize(photo.originalSize)}`
+                        : ''}
+                    </span>
                   </div>
+                  <button
+                    type="button"
+                    className="photo-ai-btn"
+                    disabled={aiBusyIndex >= 0}
+                    onClick={() => askAiForPhoto(index)}
+                  >
+                    {aiBusyIndex === index ? '辨識中…' : '建議'}
+                  </button>
                   <button
                     type="button"
                     className="photo-display-remove"
                     onClick={() => {
-                      const newPhotos = photos.filter((_, i) => i !== index);
-                      setPhotos(newPhotos);
-                      handlePhotoChange(newPhotos);
+                      const next = photos.filter((_, i) => i !== index);
+                      setPhotos(next);
+                      if (aiMeta.photoIndex === index) {
+                        setAiSuggestions([]);
+                        setAiError('');
+                        setAiMeta({ model: '', photoHash: '', photoIndex: -1 });
+                      }
                     }}
                   >
                     ✕
@@ -769,6 +868,27 @@ function ExpensePage() {
                 </div>
               ))}
             </div>
+            {aiError ? <div className="ai-suggest-error">{aiError}</div> : null}
+            {aiSuggestions.length > 0 && (
+              <div className="ai-suggest-panel">
+                <div className="ai-suggest-head">選一筆填入欄位</div>
+                <div className="ai-suggest-list">
+                  {aiSuggestions.map((s, i) => (
+                    <button
+                      key={i}
+                      type="button"
+                      className="ai-suggest-card"
+                      onClick={() => pickAiSuggestion(s)}
+                    >
+                      {suggestionSummary(s)}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {aiPicked && aiSuggestions.length === 0 && !aiError ? (
+              <div className="ai-suggest-picked">已套用{aiPicked.label ? ` · ${aiPicked.label}` : ''}</div>
+            ) : null}
           </div>
         )}
 

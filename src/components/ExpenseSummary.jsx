@@ -1,53 +1,336 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  catSubcat,
   colorForTag,
+  compactAmount,
   currentYearMonth,
+  emptyExpenseSummary,
+  pendingExpenseSummary,
   fetchExpenseSummary,
+  formatMoney,
+  formatTimestamp,
+  isYearMonthFuture,
   normalizeYearMonth,
+  readExpenseSummaryCache,
+  readYearTotals,
+  recordTag,
   shiftYearMonth,
+  summaryRecords,
+  timestampMs,
+  yearMonthStatuses,
 } from '../utils/expenseSummary';
+import { displayFxCodes, fromMyr } from '../utils/fxRates';
 import { getMergedQueryParams } from '../utils/expenseQuickUrl';
+import ExpenseHeatMap from './ExpenseHeatMap';
 
-function Donut({ slices, total, activeTag, onPick }) {
-  const r = 38;
-  const c = 2 * Math.PI * r;
-  let acc = 0;
+const FX_PREF_KEY = 'expenseSummary.displayFx';
+
+function readFxPref() {
+  try {
+    const v = String(localStorage.getItem(FX_PREF_KEY) || 'MYR').toUpperCase();
+    return v || 'MYR';
+  } catch {
+    return 'MYR';
+  }
+}
+
+function polar(cx, cy, r, deg) {
+  const rad = ((deg - 90) * Math.PI) / 180;
+  return [cx + r * Math.cos(rad), cy + r * Math.sin(rad)];
+}
+
+function toggleTag(list, tag) {
+  const s = String(tag || '').trim();
+  if (!s) return [];
+  return list.includes(s) ? list.filter((t) => t !== s) : [...list, s];
+}
+
+function donutPath(cx, cy, r0, r1, a0, a1) {
+  const sweep = Math.max(0, a1 - a0);
+  if (sweep <= 0) return '';
+  if (sweep >= 359.9) {
+    return [
+      `M ${cx} ${cy - r1}`,
+      `A ${r1} ${r1} 0 1 1 ${cx + 0.01} ${cy - r1}`,
+      `L ${cx + 0.01} ${cy - r0}`,
+      `A ${r0} ${r0} 0 1 0 ${cx} ${cy - r0}`,
+      'Z',
+    ].join(' ');
+  }
+  const large = sweep > 180 ? 1 : 0;
+  const [x0, y0] = polar(cx, cy, r1, a0);
+  const [x1, y1] = polar(cx, cy, r1, a1);
+  const [x2, y2] = polar(cx, cy, r0, a1);
+  const [x3, y3] = polar(cx, cy, r0, a0);
+  return `M ${x0} ${y0} A ${r1} ${r1} 0 ${large} 1 ${x1} ${y1} L ${x2} ${y2} A ${r0} ${r0} 0 ${large} 0 ${x3} ${y3} Z`;
+}
+
+function Donut({ slices, total, pickedTags, labelMode, onPick }) {
+  const cx = 50;
+  const cy = 50;
+  const r0 = 29;
+  const r1 = 48;
   if (!slices.length || !total) {
     return (
       <svg className="expense-donut" viewBox="0 0 100 100" aria-hidden>
-        <circle cx="50" cy="50" r={r} fill="none" stroke="var(--border, #333945)" strokeWidth="14" />
+        <circle cx={cx} cy={cy} r={(r0 + r1) / 2} fill="none" stroke="var(--border, #333945)" strokeWidth="14" />
       </svg>
     );
   }
+  let acc = 0;
   return (
     <svg className="expense-donut" viewBox="0 0 100 100" role="img" aria-label="分類占比">
-      <circle cx="50" cy="50" r={r} fill="none" stroke="var(--border, #333945)" strokeWidth="14" />
       {slices.map((s) => {
         const frac = s.amount / total;
-        const dash = frac * c;
-        const gap = c - dash;
-        const rot = acc * 360 - 90;
+        const a0 = acc * 360;
+        const a1 = (acc + frac) * 360;
         acc += frac;
-        const dim = activeTag && activeTag !== s.tag;
+        const dim = pickedTags.length > 0 && !pickedTags.includes(s.tag);
+        const mid = (a0 + a1) / 2;
+        const [lx, ly] = polar(cx, cy, (r0 + r1) / 2, mid);
+        const showLabel = frac >= 0.07;
+        const label = labelMode === 'amount' ? compactAmount(s.displayAmount) : `${Math.round(frac * 100)}%`;
         return (
-          <circle
-            key={s.tag}
-            cx="50"
-            cy="50"
-            r={r}
-            fill="none"
-            stroke={s.color}
-            strokeWidth={dim ? 10 : 16}
-            strokeDasharray={`${dash} ${gap}`}
-            strokeLinecap="butt"
-            transform={`rotate(${rot} 50 50)`}
-            opacity={dim ? 0.35 : 1}
-            style={{ cursor: 'pointer' }}
-            onClick={() => onPick(s.tag === activeTag ? '' : s.tag)}
-          />
+          <g key={s.tag}>
+            <path
+              d={donutPath(cx, cy, r0, r1, a0, a1)}
+              fill={s.color}
+              opacity={dim ? 0.32 : 1}
+              style={{ cursor: 'pointer' }}
+              onClick={() => onPick(s.tag)}
+            />
+            {showLabel ? (
+              <text
+                x={lx}
+                y={ly}
+                textAnchor="middle"
+                dominantBaseline="middle"
+                className="expense-donut-label"
+                pointerEvents="none"
+              >
+                {label}
+              </text>
+            ) : null}
+          </g>
         );
       })}
     </svg>
+  );
+}
+
+function YearStrip({ ym, totals, statuses, onPickMonth, fx }) {
+  const year = String(ym).slice(0, 4);
+  const cur = Number(String(ym).slice(5, 7)) || 1;
+  const bars = Array.from({ length: 12 }, (_, i) => Number(totals[i]) || 0);
+  const max = Math.max(1, ...bars);
+  const [showAmt, setShowAmt] = useState(false);
+  return (
+    <div
+      className={`expense-year-strip${showAmt ? ' is-labeled' : ''}`}
+      role="list"
+      aria-label={`${year} 月支出`}
+    >
+      {bars.map((n, i) => {
+        const month = i + 1;
+        const on = month === cur;
+        const status = statuses[i] || 'uncached';
+        const pending = status === 'uncached';
+        const h = n > 0 ? Math.max(10, Math.round((n / max) * (showAmt ? 28 : 34))) : 4;
+        const nextYm = `${year}-${String(month).padStart(2, '0')}`;
+        return (
+          <button
+            key={month}
+            type="button"
+            className={`expense-year-bar${on ? ' is-on' : ''} ${status}${n <= 0 ? ' is-zero' : ''}`}
+            style={{ '--h': `${h}px` }}
+            aria-label={`${nextYm}${showAmt ? ` ${formatMoney(fromMyr(n, fx))}` : ''}${pending ? ' 未載入' : ''}`}
+            title={
+              status === 'future'
+                ? `${nextYm} · 未發生`
+                : `${nextYm} · ${fx} ${formatMoney(fromMyr(n, fx))}${pending ? ' · 未載入' : ''}`
+            }
+            onClick={() => {
+              if (on) setShowAmt((v) => !v);
+              else onPickMonth(nextYm);
+            }}
+          >
+            {pending ? <b>?</b> : <b className="is-spacer" />}
+            {showAmt ? <em>{n > 0 ? compactAmount(fromMyr(n, fx)) : '0'}</em> : null}
+            <i />
+            <span>{month}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function CategoryBars({ slices, total, pickedTags, onPick, fx }) {
+  const max = Math.max(1, ...slices.map((s) => s.amount));
+  if (!slices.length) return null;
+  return (
+    <div className="expense-bars-wrap">
+      <div className="expense-bars-head">
+        <span>分類</span>
+        <span>筆</span>
+        <span />
+        <span>金額</span>
+        <span>％</span>
+      </div>
+      <ul className={`expense-bars${pickedTags.length ? ' has-pick' : ''}`}>
+        {slices.map((s) => {
+          const on = pickedTags.includes(s.tag);
+          const pct = total ? Math.round((s.amount / total) * 100) : 0;
+          return (
+            <li key={s.tag}>
+              <button
+                type="button"
+                className={`expense-bar-btn${on ? ' is-on' : ''}`}
+                onClick={() => onPick(s.tag)}
+              >
+                <span className="expense-bar-name">{s.tag}</span>
+                <span className="expense-bar-count">{Number(s.count) || 0}</span>
+                <span className="expense-bar-track">
+                  <i style={{ width: `${Math.max(4, (s.amount / max) * 100)}%`, background: s.color }} />
+                </span>
+                <span className="expense-bar-amt">
+                  {fromMyr(s.amount, fx).toLocaleString(undefined, {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                  })}
+                </span>
+                <span className="expense-bar-pct">{pct}%</span>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+const SORT_KEYS = [
+  { id: 'timestamp', label: '時間' },
+  { id: 'cat', label: '分類' },
+  { id: 'description', label: '說明' },
+  { id: 'amount', label: '金額' },
+];
+
+function sortValue(row, key) {
+  if (key === 'amount') return Number(row.amount) || 0;
+  if (key === 'timestamp') return timestampMs(row.timestamp) || Number(row.id) || 0;
+  if (key === 'cat') return catSubcat(row).toLowerCase();
+  return String(row.description || '').toLowerCase();
+}
+
+function DescCell({ id, text, openId, onToggle }) {
+  const full = String(text || '').trim() || '—';
+  const long = full.length > 28;
+  const open = Boolean(id) && openId === id;
+  if (!long) return <td>{full}</td>;
+  return (
+    <td className={open ? 'is-open' : 'is-clip'}>
+      <button type="button" onClick={() => onToggle(id)}>
+        {full}
+      </button>
+    </td>
+  );
+}
+
+function RecordsTable({ rows, currency, focusId, tags, pickedTags, onToggle, sort, onSort, onHide }) {
+  const [openDesc, setOpenDesc] = useState('');
+  const allCount = tags.reduce((n, t) => n + (Number(t.count) || 0), 0);
+  const picked = pickedTags || [];
+  const chipCount = picked.length
+    ? picked.reduce((n, tag) => n + (Number(tags.find((t) => t.tag === tag)?.count) || 0), 0)
+    : allCount;
+  return (
+    <div className="expense-records">
+      <div className="expense-records-toolbar">
+        <div className="expense-records-filters">
+          <button
+            type="button"
+            className={`expense-chip${picked.length === 0 ? ' is-on' : ''}`}
+            onClick={() => onToggle('')}
+          >
+            全部
+            <em>{allCount}</em>
+          </button>
+          {tags.map((t) => (
+            <button
+              key={t.tag}
+              type="button"
+              className={`expense-chip${picked.includes(t.tag) ? ' is-on' : ''}`}
+              onClick={() => onToggle(t.tag)}
+            >
+              {t.tag}
+              <em>{t.count}</em>
+            </button>
+          ))}
+        </div>
+        <button type="button" className="expense-records-hide" onClick={onHide}>
+          隱藏
+        </button>
+      </div>
+      <div className="expense-records-scroller">
+        <table className="expense-records-table">
+          <thead>
+            <tr>
+              {SORT_KEYS.map((col) => {
+                const on = sort.key === col.id;
+                return (
+                  <th key={col.id}>
+                    <button type="button" onClick={() => onSort(col.id)}>
+                      {col.label}
+                      {on ? (sort.dir === 'asc' ? ' ↑' : ' ↓') : ''}
+                    </button>
+                  </th>
+                );
+              })}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.length === 0 ? (
+              <tr>
+                <td colSpan={4} className="expense-summary-empty">
+                  {chipCount > 0 ? '紀錄未載入' : '沒有紀錄'}
+                </td>
+              </tr>
+            ) : (
+              rows.map((row, i) => {
+                const rid = String(row.id || `${row.timestamp || 'row'}-${i}`);
+                return (
+                <tr
+                  key={rid}
+                  className={focusId && String(row.id) === String(focusId) ? 'is-focus' : ''}
+                >
+                  <td>{formatTimestamp(row.timestamp)}</td>
+                  <td>{catSubcat(row)}</td>
+                  <DescCell
+                    id={rid}
+                    text={row.description}
+                    openId={openDesc}
+                    onToggle={(next) => setOpenDesc((cur) => (cur === next ? '' : next))}
+                  />
+                  <td className="is-num">
+                    {formatMoney(fromMyr(row.amount, currency))}
+                    {row.currency &&
+                    row.amount_original !== '' &&
+                    row.amount_original != null &&
+                    String(row.currency).toUpperCase() !== String(currency).toUpperCase() ? (
+                      <small>
+                        {row.currency} {formatMoney(row.amount_original)}
+                      </small>
+                    ) : null}
+                  </td>
+                </tr>
+                );
+              })
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }
 
@@ -58,15 +341,32 @@ function ExpenseSummary() {
   const [data, setData] = useState(null);
   const [err, setErr] = useState('');
   const [loading, setLoading] = useState(true);
-  const [activeTag, setActiveTag] = useState('');
+  const [pickedTags, setPickedTags] = useState([]);
+  const [showTable, setShowTable] = useState(false);
+  const [labelMode, setLabelMode] = useState('pct');
+  const [fx, setFx] = useState(readFxPref);
+  const [sort, setSort] = useState({ key: 'timestamp', dir: 'desc' });
   const seqRef = useRef(0);
 
   const load = useCallback(
     ({ force = false } = {}) => {
       const seq = ++seqRef.current;
-      setLoading(true);
       setErr('');
-      if (!force) setData(null);
+      if (!force && !focusId) {
+        if (isYearMonthFuture(ym)) {
+          setData(emptyExpenseSummary(ym));
+          setLoading(false);
+          return;
+        }
+        const cached = readExpenseSummaryCache(ym);
+        if (cached) {
+          setData(cached);
+          setLoading(false);
+          return;
+        }
+        setData(pendingExpenseSummary(ym));
+      }
+      setLoading(true);
       fetchExpenseSummary({ yearmonth: ym, id: focusId || undefined, force })
         .then((next) => {
           if (seq !== seqRef.current) return;
@@ -87,22 +387,89 @@ function ExpenseSummary() {
     load({ force: false });
   }, [load]);
 
+  useEffect(() => {
+    setPickedTags([]);
+    setShowTable(false);
+  }, [ym]);
+
+  const fxCodes = displayFxCodes();
+
+  useEffect(() => {
+    if (fx !== 'MYR' && !fxCodes.includes(fx)) setFx('MYR');
+    try {
+      localStorage.setItem(FX_PREF_KEY, fx);
+    } catch {
+      /* ignore */
+    }
+  }, [fx, fxCodes]);
+
   const slices = useMemo(() => {
     const rows = data?.byTag || [];
     return rows.map((row, i) => ({
       ...row,
       color: colorForTag(row.tag, i),
+      displayAmount: fromMyr(row.amount, fx),
     }));
-  }, [data]);
+  }, [data, fx]);
 
-  const recent = useMemo(() => {
-    const rows = data?.recent || [];
-    if (!activeTag) return rows;
-    return rows.filter((r) => r.tag === activeTag);
-  }, [data, activeTag]);
+  const records = useMemo(() => summaryRecords(data), [data]);
+
+  const visibleRows = useMemo(() => {
+    const want = pickedTags;
+    const filtered = want.length ? records.filter((r) => want.includes(recordTag(r))) : records;
+    const dir = sort.dir === 'asc' ? 1 : -1;
+    return filtered.slice().sort((a, b) => {
+      const va = sortValue(a, sort.key);
+      const vb = sortValue(b, sort.key);
+      if (va < vb) return -1 * dir;
+      if (va > vb) return 1 * dir;
+      return 0;
+    });
+  }, [records, pickedTags, sort]);
+
+  const dataYm = normalizeYearMonth(data?.yearmonth);
+  const monthReady = Boolean(data) && dataYm === ym && data.source !== 'pending';
+
+  const monthStatuses = yearMonthStatuses(String(ym).slice(0, 4));
+  const yearTotals = useMemo(() => {
+    const y = String(ym).slice(0, 4);
+    const stored = readYearTotals(y);
+    const incoming = Array.isArray(data?.yearTotals) ? data.yearTotals : [];
+    const merged = stored.map((n, i) => {
+      const a = Number(incoming[i]) || 0;
+      return a > 0 ? a : Number(n) || 0;
+    });
+    const mi = Number(String(ym).slice(5, 7)) - 1;
+    if (data && mi >= 0 && mi < 12 && Number.isFinite(Number(data.total))) {
+      merged[mi] = Number(data.total) || 0;
+    }
+    return merged;
+  }, [ym, data]);
 
   const total = Number(data?.total) || 0;
-  const currency = recent[0]?.currency || 'MYR';
+  const currency = fx;
+  const pickedSlices = pickedTags.length ? slices.filter((s) => pickedTags.includes(s.tag)) : [];
+  const shownTotal = pickedTags.length
+    ? pickedSlices.reduce((n, s) => n + (Number(s.amount) || 0), 0)
+    : total;
+  const shownCount = pickedTags.length
+    ? pickedSlices.reduce((n, s) => n + (Number(s.count) || 0), 0)
+    : data?.count || 0;
+  const shownPct = total ? Math.round((shownTotal / total) * 1000) / 10 : 0;
+  const shownPctLabel = Number.isInteger(shownPct) ? `${shownPct}` : shownPct.toFixed(1);
+  const pickLabel =
+    !pickedTags.length ? '本月' : pickedTags.length === 1 ? pickedTags[0] : `${pickedTags.length} 項`;
+
+  const pickTag = (tag) => {
+    setPickedTags((prev) => toggleTag(prev, tag));
+    setShowTable(true);
+  };
+
+  const onSort = (key) => {
+    setSort((prev) =>
+      prev.key === key ? { key, dir: prev.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: key === 'amount' || key === 'timestamp' ? 'desc' : 'asc' }
+    );
+  };
 
   return (
     <div className="expense-summary">
@@ -116,76 +483,163 @@ function ExpenseSummary() {
         </button>
         <button
           type="button"
-          className="calendar-status-refresh"
-          onClick={() => load({ force: true })}
+          className="calendar-status-refresh expense-summary-refresh"
+          aria-label="重抓本月報表"
+          onClick={() => {
+            if (loading) return;
+            if (
+              !window.confirm(
+                '會重抓本月 Sheets 並重算報表。每日仍會自動更新，還要現在重抓嗎？'
+              )
+            ) {
+              return;
+            }
+            load({ force: true });
+          }}
           disabled={loading}
         >
-          {loading ? '更新中…' : '重新整理'}
+          <svg
+            className={`expense-summary-refresh-icon${loading ? ' is-spin' : ''}`}
+            viewBox="0 0 24 24"
+            width="14"
+            height="14"
+            aria-hidden
+          >
+            <path
+              fill="currentColor"
+              d="M17.65 6.35A7.95 7.95 0 0 0 12 4V1L7 6l5 5V7a5 5 0 0 1 5 5 5 5 0 0 1-8.9 3.1L6.7 16.5A7 7 0 1 0 19 12c0-2.04-.76-3.9-2.02-5.35z"
+            />
+          </svg>
+          {loading ? '重抓中…' : '重抓'}
         </button>
       </div>
-      {data?.updatedAt ? (
-        <p className="expense-summary-updated">
-          {data.updatedAt}
-          {data.source === 'live' ? ' · 即時' : ''}
-        </p>
+      {data ? (
+        <YearStrip
+          ym={ym}
+          totals={yearTotals}
+          statuses={monthStatuses}
+          onPickMonth={setYm}
+          fx={fx}
+        />
       ) : null}
 
-      {loading && !data ? <p className="expense-summary-status">讀取中…</p> : null}
       {err ? <p className="expense-summary-status is-error">{err}</p> : null}
 
-      {data ? (
-        <>
-          <div className="expense-summary-hero">
-            <Donut slices={slices} total={total} activeTag={activeTag} onPick={setActiveTag} />
-            <div className="expense-summary-total">
-              <span className="expense-summary-total-label">{activeTag || '本月'}</span>
-              <strong>
-                {currency}{' '}
-                {(activeTag
-                  ? slices.find((s) => s.tag === activeTag)?.amount || 0
-                  : total
-                ).toLocaleString(undefined, { maximumFractionDigits: 2 })}
-              </strong>
-              <span className="expense-summary-total-count">{data.count || 0} 筆</span>
-            </div>
+      <div className={`expense-summary-hero${loading && monthReady ? ' is-refreshing' : ''}`}>
+        <div className={`expense-donut-wrap${pickedTags.length && monthReady ? ' is-picked' : ''}`}>
+          <Donut
+            slices={monthReady ? slices : []}
+            total={monthReady ? total : 0}
+            pickedTags={monthReady ? pickedTags : []}
+            labelMode={labelMode}
+            onPick={monthReady ? pickTag : () => {}}
+          />
+          <div className="expense-summary-total">
+            {monthReady && pickedTags.length ? (
+              <button
+                type="button"
+                className="expense-summary-total-label is-clear"
+                onClick={() => setPickedTags([])}
+              >
+                {pickLabel}
+              </button>
+            ) : (
+              <span className="expense-summary-total-label">
+                {loading && !monthReady ? '讀取中…' : '本月'}
+              </span>
+            )}
+            {monthReady && pickedTags.length ? (
+              <span className="expense-summary-total-share">
+                {shownPctLabel}% of 100%
+              </span>
+            ) : null}
+            <button
+              type="button"
+              className="expense-summary-total-fx"
+              onClick={() => {
+                if (!monthReady) return;
+                const i = Math.max(0, fxCodes.indexOf(fx));
+                setFx(fxCodes[(i + 1) % fxCodes.length] || 'MYR');
+              }}
+            >
+              {monthReady ? `${currency} ${formatMoney(fromMyr(shownTotal, fx))}` : '—'}
+            </button>
+            {monthReady && pickedTags.length ? (
+              <span className="expense-summary-total-share">
+                of {currency} {formatMoney(fromMyr(total, fx))}
+              </span>
+            ) : null}
+            <span className="expense-summary-total-count">
+              {monthReady ? `${shownCount} 筆` : loading ? '…' : '0 筆'}
+            </span>
           </div>
-          <ul className="expense-summary-legend">
-            {slices.map((s) => (
-              <li key={s.tag}>
+        </div>
+        {monthReady ? (
+          <>
+            <div className="expense-display-toggles">
+              <div className="expense-label-toggle" role="group" aria-label="圖上數字">
                 <button
                   type="button"
-                  className={`expense-summary-legend-btn${activeTag === s.tag ? ' is-on' : ''}`}
-                  onClick={() => setActiveTag(activeTag === s.tag ? '' : s.tag)}
+                  className={labelMode === 'pct' ? 'is-on' : ''}
+                  onClick={() => setLabelMode('pct')}
                 >
-                  <i style={{ background: s.color }} />
-                  <span>{s.tag}</span>
-                  <em>{Number(s.amount).toLocaleString(undefined, { maximumFractionDigits: 0 })}</em>
+                  ％
                 </button>
-              </li>
-            ))}
-          </ul>
-          <p className="expense-summary-recent-label">近期</p>
-          <ul className="expense-summary-list">
-            {recent.length === 0 ? (
-              <li className="expense-summary-empty">這個月還沒有紀錄</li>
-            ) : (
-              recent.map((row) => (
-                <li
-                  key={row.id}
-                  className={`expense-summary-item${focusId && String(row.id) === String(focusId) ? ' is-focus' : ''}`}
+                <button
+                  type="button"
+                  className={labelMode === 'amount' ? 'is-on' : ''}
+                  onClick={() => setLabelMode('amount')}
                 >
-                  <span className="expense-summary-item-amount">
-                    {row.currency || currency} {Number(row.amount).toLocaleString(undefined, { maximumFractionDigits: 2 })}
-                  </span>
-                  <span className="expense-summary-item-meta">
-                    {row.tag}
-                    {row.title ? ` · ${row.title}` : ''}
-                    {row.description ? ` · ${String(row.description).slice(0, 24)}` : ''}
-                  </span>
-                </li>
-              ))
-            )}
-          </ul>
+                  金額
+                </button>
+              </div>
+              {fxCodes.length > 1 ? (
+                <div className="expense-label-toggle" role="group" aria-label="顯示幣別">
+                  {fxCodes.map((code) => (
+                    <button
+                      key={code}
+                      type="button"
+                      className={fx === code ? 'is-on' : ''}
+                      onClick={() => setFx(code)}
+                    >
+                      {code}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+            {data.updatedAt ? (
+              <p className="expense-summary-updated">
+                {data.updatedAt}
+                {loading ? ' · 重抓中' : data.source === 'live' ? ' · 即時' : ''}
+              </p>
+            ) : null}
+          </>
+        ) : null}
+      </div>
+      {monthReady ? (
+        <>
+          <CategoryBars slices={slices} total={total} pickedTags={pickedTags} onPick={pickTag} fx={fx} />
+          <ExpenseHeatMap records={records} slices={slices} initialTags={pickedTags} fx={fx} />
+          {showTable ? (
+            <RecordsTable
+              rows={visibleRows}
+              currency={currency}
+              focusId={focusId}
+              tags={slices.map((s) => ({ tag: s.tag, count: Number(s.count) || 0 }))}
+              pickedTags={pickedTags}
+              onToggle={(tag) => {
+                if (!tag) setPickedTags([]);
+                else {
+                  setPickedTags((prev) => toggleTag(prev, tag));
+                  setShowTable(true);
+                }
+              }}
+              sort={sort}
+              onSort={onSort}
+              onHide={() => setShowTable(false)}
+            />
+          ) : null}
         </>
       ) : null}
     </div>

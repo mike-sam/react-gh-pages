@@ -1,54 +1,22 @@
 import React, { useRef, useState } from 'react';
-import { useOfflineQueue } from '../context/QueueContext';
+import { compressReceiptFile } from '../utils/aiSuggest';
 
-/**
- * 📷 拍照（相機）+ 🖼️ 相冊 → Base64 → GAS analyzeReceipt。
- * 不依賴本機 OCR 函式庫。
- */
-function CameraAICapture({ onExtracted, onPhotoReady }) {
+/** 📷 拍照 / 🖼️ 相冊 → 壓縮後交給記帳表單。AI 建議在照片上另按。 */
+function CameraAICapture({ onPhotoReady }) {
   const cameraRef = useRef(null);
   const albumRef = useRef(null);
-  const { enqueueAndSend } = useOfflineQueue();
   const [busy, setBusy] = useState(false);
   const [hint, setHint] = useState('');
 
-  const fileToBase64 = (file) =>
-    new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => {
-        const result = String(reader.result || '');
-        const base64 = result.includes(',') ? result.split(',')[1] : result;
-        resolve({ preview: result, base64 });
-      };
-      reader.onerror = reject;
-      reader.readAsDataURL(file);
-    });
-
   const processFile = async (file) => {
     if (!file) return;
-
     setBusy(true);
-    setHint('處理照片中…');
+    setHint('壓縮中…');
     try {
-      const { preview, base64 } = await fileToBase64(file);
-      onPhotoReady?.({
-        preview,
-        base64,
-        filename: file.name,
-        originalSize: file.size,
-        type: file.type,
-      });
-
-      const id = Date.now();
-      await enqueueAndSend({
-        id,
-        action: 'analyzeReceipt',
-        photo: base64,
-        mimeType: file.type || 'image/jpeg',
-      });
-
-      setHint('已送出辨識（後端 AI）');
-      onExtracted?.({ raw: true });
+      const photo = await compressReceiptFile(file);
+      onPhotoReady?.(photo);
+      const kb = Math.max(1, Math.round((photo.compressedSize || 0) / 1024));
+      setHint(`${kb} KB`);
     } catch (err) {
       setHint(err.message || '處理失敗');
     } finally {
