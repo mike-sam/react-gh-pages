@@ -38,6 +38,8 @@ const doGet = (event = {}) => {
       return getBootstrap();
     case 'getExpenseSummary':
       return getExpenseSummary(parameter || {});
+    case 'getEatPlaces':
+      return getEatPlaces();
     case 'runDailyJobs':
       return runDailyJobs();
     case 'saveLocation':
@@ -1003,13 +1005,13 @@ function sanitizeGeminiError_(text) {
 }
 
 function resolveGeminiModel_(name) {
-  var n = String(name || '').trim();
-  if (!n) return 'gemini-2.0-flash';
-  var slug = n.toLowerCase().replace(/\s+/g, '-');
-  if (/^gemini[-._]/.test(slug)) return n.replace(/\s+/g, '-');
-  if (/flash-lite/.test(slug)) return 'gemini-2.0-flash-lite';
-  if (/flash/.test(slug)) return 'gemini-2.0-flash';
-  return 'gemini-2.0-flash';
+  var n = String(name || '').trim().replace(/[\r\n]/g, '');
+  n = n.replace(/^models\//i, '');
+  var slug = n.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9._-]/g, '');
+  if (/^gemini-[a-z0-9._-]+$/.test(slug)) return slug;
+  if (/flash-lite/.test(slug)) return 'gemini-2.5-flash-lite';
+  if (/flash/.test(slug) || /^gemini/.test(slug)) return 'gemini-2.5-flash';
+  return 'gemini-2.5-flash';
 }
 
 function buildReceiptPrompt_(data) {
@@ -1068,7 +1070,7 @@ function parseGeminiSuggestions_(text) {
 
 function callGeminiVision_(apiKey, model, mimeType, base64, prompt) {
   var url = 'https://generativelanguage.googleapis.com/v1beta/models/' +
-    encodeURIComponent(model) + ':generateContent?key=' + encodeURIComponent(apiKey);
+    model + ':generateContent?key=' + encodeURIComponent(apiKey);
   var body = {
     contents: [{
       parts: [
@@ -4302,6 +4304,87 @@ function recordsForYearMonth(ym) {
   return out;
 }
 
+var EAT_PLACES_CACHE_KEY = 'eatPlaces.v1';
+var EAT_TAG_FOOD = '餐饮美食';
+
+function collectEatPlaces() {
+  var months = listRecentYearMonths(12);
+  var allow = {};
+  var i;
+  for (i = 0; i < months.length; i++) {
+    allow[months[i]] = true;
+    allow[String(months[i]).replace('-', '')] = true;
+  }
+  var grouped = recordsGroupedByMonth(allow);
+  var byPlace = {};
+  var ym;
+  for (ym in grouped) {
+    if (!grouped.hasOwnProperty(ym)) continue;
+    var rows = grouped[ym] || [];
+    var r;
+    for (r = 0; r < rows.length; r++) {
+      var rec = rows[r];
+      if (String(rec.tag || '').trim() !== EAT_TAG_FOOD) continue;
+      var xy = coordsFromExpenseRow(rec);
+      if (!xy) continue;
+      var key = xy.lat.toFixed(4) + ',' + xy.lng.toFixed(4);
+      var ts = rec.timestamp || '';
+      var desc = rec.description || rec.remark || '';
+      var cur = byPlace[key];
+      if (!cur) {
+        byPlace[key] = {
+          lat: xy.lat,
+          lng: xy.lng,
+          title: rec.title || '',
+          description: desc,
+          lastAt: ts,
+          n: 1
+        };
+      } else {
+        cur.n += 1;
+        if (String(ts) > String(cur.lastAt || '')) {
+          cur.lastAt = ts;
+          if (rec.title) cur.title = rec.title;
+          if (desc) cur.description = desc;
+        }
+      }
+    }
+  }
+  var out = [];
+  var k;
+  for (k in byPlace) {
+    if (byPlace.hasOwnProperty(k)) out.push(byPlace[k]);
+  }
+  return out;
+}
+
+function getEatPlaces() {
+  try {
+    var cache = CacheService.getScriptCache();
+    var hit = cache.get(EAT_PLACES_CACHE_KEY);
+    if (hit) {
+      var parsed = JSON.parse(hit);
+      parsed.cached = true;
+      parsed.success = true;
+      return jsonOut(parsed);
+    }
+    var places = collectEatPlaces();
+    var payload = {
+      success: true,
+      places: places,
+      count: places.length,
+      updatedAt: formatRfc2822(new Date()),
+      cached: false
+    };
+    try {
+      cache.put(EAT_PLACES_CACHE_KEY, JSON.stringify(payload), 21600);
+    } catch (cacheErr) {}
+    return jsonOut(payload);
+  } catch (error) {
+    return jsonOut({ success: false, error: error.toString() });
+  }
+}
+
 function listRecentYearMonths(count) {
   var tz = Session.getScriptTimeZone();
   var now = new Date();
@@ -4575,6 +4658,12 @@ function runDailyJobs() {
     results.calendar = backfillExpenseCalendarEvents();
   } catch (e4) {
     results.calendar = { success: false, error: e4.toString() };
+  }
+  try {
+    CacheService.getScriptCache().remove(EAT_PLACES_CACHE_KEY);
+    results.eat = JSON.parse(getEatPlaces().getContent());
+  } catch (e5) {
+    results.eat = { success: false, error: e5.toString() };
   }
   appendLog(['runDailyJobs', JSON.stringify(results)]);
   return jsonOut({ success: true, results: results });
