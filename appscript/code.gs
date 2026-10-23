@@ -40,6 +40,8 @@ const doGet = (event = {}) => {
       return getExpenseSummary(parameter || {});
     case 'getEatPlaces':
       return getEatPlaces();
+    case 'getAiPrompt':
+      return handleGetAiPrompt();
     case 'runDailyJobs':
       return runDailyJobs();
     case 'saveLocation':
@@ -137,6 +139,10 @@ const doPost = (request = {}) => {
         return handleParkLocation(data);
       case 'analyzeReceipt':
         return handleAnalyzeReceipt(data);
+      case 'getAiPrompt':
+        return handleGetAiPrompt();
+      case 'setAiPrompt':
+        return handleSetAiPrompt(data);
       case 'recordAiSuggestion':
         return handleRecordAiSuggestion(data);
       case 'upsertExpense':
@@ -1025,7 +1031,54 @@ function geminiHttpError_(code, text) {
   return 'Gemini HTTP ' + code + (msg ? ': ' + msg : '');
 }
 
-function buildReceiptPrompt_(data) {
+function defaultReceiptPromptTemplate_() {
+  return [
+    '你是記帳助理。根據收據／發票照片填欄位。',
+    '目前分類: {{tag}}',
+    '目前子分類: {{title}}',
+    '允許分類: {{cats}}',
+    '允許子分類:',
+    '{{subcats}}',
+    '需要欄位:',
+    '{{fields}}',
+    '{{hints}}',
+    '規則:',
+    '1. 回傳 JSON：{"suggestions":[{...}]}，1～4 筆。金額有含稅/未稅/折扣時可給多筆。',
+    '2. 每筆含短 label（如「含稅總額」）。數字用 number。未知欄位省略。',
+    '3. currency 用 ISO（MYR/SGD/USD/CNY/TWD/HKD）。fuelType 僅 ron95 或 ron97。',
+    '4. tag/title 必須是允許清單內的值；已選分類優先沿用，除非收據明顯不符。',
+    '5. 只根據照片，不要編造商家名以外的長文。'
+  ].join('\n');
+}
+
+function mealTitleForHour_(hour) {
+  var h = Number(hour);
+  if (isNaN(h)) return '';
+  if (h >= 5 && h <= 10) return '早餐';
+  if (h >= 11 && h <= 15) return '午餐';
+  return '晚餐';
+}
+
+function receiptHints_(data) {
+  data = data || {};
+  var whenStr = String(data.when || '').trim();
+  var hm = whenStr.match(/\b(\d{1,2}):(\d{2})\b/);
+  var meal = hm ? mealTitleForHour_(Number(hm[1])) : '';
+  var lines = [];
+  if (whenStr) lines.push('記帳時間: ' + whenStr);
+  lines.push('有品項列則 OCR 到 items:[{name,amount}] 填入明細；沒有列就省略 items。');
+  lines.push('照片若印有日期/時間，填 receipt_time（yyyy-MM-dd HH:mm）；看不清就省略，不要猜。');
+  lines.push('商家名填 merchant；有分店/地址才填 merchant_address。不要填經緯度。');
+  if (!data.tag || data.tag === '餐饮美食') {
+    var foodSubs = '早餐、午餐、晚餐、零食、饮料、外卖、聚餐';
+    var suggest = meal ? ('依時間建議 ' + meal) : '依時間選早/午/晚餐';
+    lines.push('餐饮美食 title 只能是：' + foodSubs + '。' + suggest + '（05–10 早餐、11–15 午餐、16–04 晚餐）；外帶/外送用外卖，明顯多人用聚餐。');
+  }
+  return lines.join('\n');
+}
+
+function receiptPromptVars_(data) {
+  data = data || {};
   var fields = Array.isArray(data.fields) ? data.fields : [];
   var fieldLines = fields.map(function (f) {
     if (!f) return '';
@@ -1050,21 +1103,45 @@ function buildReceiptPrompt_(data) {
     var arr = Array.isArray(subMap[k]) ? subMap[k] : [];
     return k + ': ' + arr.join('、');
   });
-  return [
-    '你是記帳助理。根據收據／發票照片填欄位。',
-    '目前分類: ' + (data.tag || '未選'),
-    '目前子分類: ' + (data.title || '未選'),
-    cats ? ('允許分類: ' + cats) : '',
-    subLines.length ? ('允許子分類:\n' + subLines.join('\n')) : '',
-    '需要欄位:',
-    fieldLines.join('\n'),
-    '規則:',
-    '1. 回傳 JSON：{"suggestions":[{...}]}，1～4 筆。金額有含稅/未稅/折扣時可給多筆。',
-    '2. 每筆含短 label（如「含稅總額」）。數字用 number。未知欄位省略。',
-    '3. currency 用 ISO（MYR/SGD/USD/CNY/TWD/HKD）。fuelType 僅 ron95 或 ron97。',
-    '4. tag/title 必須是允許清單內的值；已選分類優先沿用，除非收據明顯不符。',
-    '5. 只根據照片，不要編造商家名以外的長文。'
-  ].filter(Boolean).join('\n');
+  return {
+    tag: data.tag || '未選',
+    title: data.title || '未選',
+    cats: cats,
+    subcats: subLines.join('\n'),
+    fields: fieldLines.join('\n'),
+    when: String(data.when || '').trim(),
+    hints: receiptHints_(data)
+  };
+}
+
+function fillReceiptPrompt_(tpl, data) {
+  var vars = receiptPromptVars_(data);
+  var src = String(tpl || '').trim();
+  if (!src) src = defaultReceiptPromptTemplate_();
+  if (src.length > 8000) src = src.slice(0, 8000);
+  var hasPh = /\{\{\s*[a-z]+\s*\}\}/i.test(src);
+  var hadHints = /\{\{\s*hints\s*\}\}/i.test(src);
+  var out = src
+    .replace(/\{\{\s*tag\s*\}\}/gi, vars.tag)
+    .replace(/\{\{\s*title\s*\}\}/gi, vars.title)
+    .replace(/\{\{\s*cats\s*\}\}/gi, vars.cats)
+    .replace(/\{\{\s*subcats\s*\}\}/gi, vars.subcats)
+    .replace(/\{\{\s*fields\s*\}\}/gi, vars.fields)
+    .replace(/\{\{\s*when\s*\}\}/gi, vars.when)
+    .replace(/\{\{\s*hints\s*\}\}/gi, vars.hints);
+  if (!hasPh) {
+    out += '\n\n目前分類: ' + vars.tag +
+      '\n目前子分類: ' + vars.title +
+      (vars.cats ? '\n允許分類: ' + vars.cats : '') +
+      (vars.subcats ? '\n允許子分類:\n' + vars.subcats : '') +
+      '\n需要欄位:\n' + vars.fields;
+  }
+  if (!hadHints && vars.hints) out += '\n' + vars.hints;
+  return out;
+}
+
+function looksLikeSuggestion_(s) {
+  return !!(s && (s.tag || s.title || s.label || s.merchant || s.currency || s.receipt_time));
 }
 
 function parseGeminiSuggestions_(text) {
@@ -1074,7 +1151,7 @@ function parseGeminiSuggestions_(text) {
   var list = [];
   if (Array.isArray(obj)) list = obj;
   else if (obj && Array.isArray(obj.suggestions)) list = obj.suggestions;
-  else if (obj && Array.isArray(obj.items)) list = obj.items;
+  else if (obj && Array.isArray(obj.items) && obj.items.some(looksLikeSuggestion_)) list = obj.items;
   else if (obj && typeof obj === 'object') list = [obj];
   return list.filter(function (s) { return s && typeof s === 'object'; }).slice(0, 8);
 }
@@ -1156,9 +1233,12 @@ function handleAnalyzeReceipt(data) {
   var model = '';
   var prompt = '';
   try {
-    prompt = buildReceiptPrompt_(data);
     var ai = lookupGroupMap_('AI');
     model = resolveGeminiModel_(ai.NAME || lookupKeyValue_('Name', 'AI'));
+    var fromClient = String(data.promptTemplate || '').trim();
+    if (fromClient.length > 8000) fromClient = fromClient.slice(0, 8000);
+    var stored = String(ai.PROMPT || lookupKeyValue_('Prompt', 'AI') || '').trim();
+    prompt = fillReceiptPrompt_(fromClient || stored, data);
     var b64 = stripBase64_(data.photo || data.base64 || '');
     if (!b64) {
       return jsonOut({ success: false, error: '沒有圖片', model: model, prompt: prompt });
@@ -1193,6 +1273,38 @@ function handleAnalyzeReceipt(data) {
       model: model,
       prompt: prompt
     });
+  }
+}
+
+function handleGetAiPrompt() {
+  try {
+    var ai = lookupGroupMap_('AI');
+    var stored = String(ai.PROMPT || lookupKeyValue_('Prompt', 'AI') || '').trim();
+    return jsonOut({
+      success: true,
+      action: 'getAiPrompt',
+      template: stored,
+      defaultTemplate: defaultReceiptPromptTemplate_(),
+      model: resolveGeminiModel_(ai.NAME || lookupKeyValue_('Name', 'AI'))
+    });
+  } catch (error) {
+    return jsonOut({ success: false, error: error.toString() });
+  }
+}
+
+function handleSetAiPrompt(data) {
+  try {
+    data = data || {};
+    var text = String(data.template || data.value || data.prompt || '').trim();
+    if (text.length > 8000) text = text.slice(0, 8000);
+    if (!text) text = defaultReceiptPromptTemplate_();
+    return setKeyValue({
+      key: 'Prompt',
+      value: text,
+      group: 'AI'
+    });
+  } catch (error) {
+    return jsonOut({ success: false, error: error.toString() });
   }
 }
 
@@ -1320,14 +1432,209 @@ function datetimetoYMDHIS(inputDateTime = new Date()){
 /**
  * 获取支付选项
  */
-function getPaymentOptionsMap() {
+function defaultPaymentOptionsMap_() {
   return {
-    'Cash': { key: 'Cash', card_num: 'Cash', bank: 'Cash' },
-    'TnG_eWallet': { key: 'eWallet', card_num: 'TnG', bank: 'TnG' },
-    'GrabPay_eWallet': { key: 'eWallet', card_num: 'GrabPay', bank: 'GrabPay' },
-    'Setel_eWallet': { key: 'eWallet', card_num: 'Setel', bank: 'Setel' },
-    'ShopeePay_eWallet': { key: 'eWallet', card_num: 'ShopeePay', bank: 'ShopeePay' }
+    Cash: { key: 'Cash', card_num: 'Cash', bank: 'Cash' },
+    TnG_eWallet: { key: 'eWallet', card_num: 'TnG', bank: 'TnG' },
+    GrabPay_eWallet: { key: 'eWallet', card_num: 'GrabPay', bank: 'GrabPay' },
+    Setel_eWallet: { key: 'eWallet', card_num: 'Setel', bank: 'Setel' },
+    ShopeePay_eWallet: { key: 'eWallet', card_num: 'ShopeePay', bank: 'ShopeePay' }
   };
+}
+
+function isWalletOrCashName_(s) {
+  var n = String(s || '').trim().toLowerCase().replace(/\s+/g, '');
+  if (!n) return true;
+  if (n === 'cash' || n === 'auto') return true;
+  return /^(tng|tngewallet|grabpay|setel|shopeepay|paylah|paynow)/.test(n);
+}
+
+function addPaymentOption_(out, opt) {
+  if (!out || !opt) return;
+  var num = String(opt.card_num || '').trim();
+  if (!num) return;
+  var keys = Object.keys(out);
+  var i;
+  for (i = 0; i < keys.length; i++) {
+    if (String(out[keys[i]].card_num) === num) return;
+  }
+  var cat = String(opt.key || 'Card');
+  var id = cat + '_' + num;
+  out[id] = {
+    key: cat,
+    card_num: num,
+    bank: opt.bank || opt.shortname || '',
+    shortname: opt.shortname || opt.bank || ''
+  };
+}
+
+function mergeKvPaymentGroup_(out, groupName, defaultKey) {
+  var map = lookupGroupMap_(groupName);
+  var keys = Object.keys(map);
+  var i;
+  for (i = 0; i < keys.length; i++) {
+    var k = keys[i];
+    var raw = map[k];
+    var s = String(raw == null ? '' : raw).trim();
+    var cardNum = k;
+    var bank = '';
+    var shortname = '';
+    if (s.charAt(0) === '{') {
+      try {
+        var j = JSON.parse(s);
+        cardNum = String(j.card_num || j.CARD_NUM || k);
+        bank = String(j.bank || j.BANK || j.shortname || '');
+        shortname = String(j.shortname || j.SHORTNAME || j.bank || '');
+      } catch (e) {
+        bank = s;
+        shortname = s;
+      }
+    } else if (s) {
+      bank = s;
+      shortname = s;
+    }
+    if (defaultKey !== 'eWallet' && isWalletOrCashName_(cardNum)) continue;
+    addPaymentOption_(out, {
+      key: defaultKey,
+      card_num: cardNum,
+      bank: bank,
+      shortname: shortname
+    });
+  }
+}
+
+function paymentSheetHeaderRow_(data) {
+  var max = Math.min(2, data.length);
+  var i;
+  for (i = 0; i < max; i++) {
+    var joined = data[i].map(function (c) { return String(c || '').toLowerCase(); }).join(' ');
+    if (/card_num|\bcard\b|\bkey\b|\bbank\b|shortname|payment/.test(joined)) return i;
+  }
+  return 0;
+}
+
+function mergePaymentOptionsSheet_(out) {
+  var doc = SpreadsheetApp.openById(sheetId);
+  var names = ['PaymentOptions', 'Payment', 'Payments', 'Cards', '信用卡', '银行卡'];
+  var si;
+  for (si = 0; si < names.length; si++) {
+    var sheet = doc.getSheetByName(names[si]);
+    if (!sheet) continue;
+    var data = sheet.getDataRange().getValues();
+    if (!data || data.length < 2) continue;
+    var headerRow = paymentSheetHeaderRow_(data);
+    var headers = data[headerRow];
+    var keyCol = findHeaderIndex(headers, 'key');
+    var numCol = findHeaderIndex(headers, 'card_num');
+    if (numCol < 0) numCol = findHeaderIndex(headers, 'card');
+    if (numCol < 0) numCol = 1;
+    var bankCol = findHeaderIndex(headers, 'bank');
+    var shortCol = findHeaderIndex(headers, 'shortname');
+    if (shortCol < 0) shortCol = findHeaderIndex(headers, 'name');
+    var r;
+    for (r = headerRow + 1; r < data.length; r++) {
+      var row = data[r];
+      var num = String(row[numCol] || '').trim();
+      var cat = keyCol >= 0 ? String(row[keyCol] || '').trim() : '';
+      if (!num) continue;
+      if (!cat) cat = isWalletOrCashName_(num) ? (num.toLowerCase() === 'cash' ? 'Cash' : 'eWallet') : 'Card';
+      addPaymentOption_(out, {
+        key: cat,
+        card_num: num,
+        bank: bankCol >= 0 ? String(row[bankCol] || '') : '',
+        shortname: shortCol >= 0 ? String(row[shortCol] || '') : ''
+      });
+    }
+  }
+}
+
+function mergeCardsFromKeyValue_(out) {
+  var sheet = getKeyValueSheet();
+  var data = sheet.getDataRange().getValues();
+  var skip = {
+    AI: 1, CAR: 1, CARS: 1, CARPLATE: 1, PLATE: 1, LOCATION: 1,
+    LANDMARK: 1, FX: 1, OBLIGATION: 1, CALENDAR: 1, PROMPT: 1,
+    PARKED: 1, ACCESS: 1, PARKEDLOCATION: 1
+  };
+  var i;
+  for (i = 1; i < data.length; i++) {
+    var group = String(data[i][0] || '').trim();
+    var key = String(data[i][1] || '').trim();
+    var val = String(data[i][2] == null ? '' : data[i][2]).trim();
+    var gUp = group.toUpperCase();
+    if (skip[gUp]) continue;
+    var cardNum = '';
+    var bank = '';
+    var shortname = '';
+    var cat = 'Card';
+    if (val.charAt(0) === '{') {
+      try {
+        var j = JSON.parse(val);
+        if (j.card_num || j.CARD_NUM) {
+          cardNum = String(j.card_num || j.CARD_NUM);
+          bank = String(j.bank || j.BANK || '');
+          shortname = String(j.shortname || j.SHORTNAME || '');
+          cat = String(j.key || 'Card');
+        }
+      } catch (eJson) {}
+    }
+    if (!cardNum && /card|payment|bank|信用卡|银行卡/i.test(group + ' ' + key)) {
+      cardNum = key;
+      bank = val;
+    }
+    if (!cardNum && /^\d{4,19}$/.test(key.replace(/[\s-]/g, ''))) {
+      cardNum = key;
+      bank = val || group;
+    }
+    if (!cardNum || isWalletOrCashName_(cardNum)) continue;
+    if (cat !== 'eWallet' && cat !== 'Cash') cat = 'Card';
+    addPaymentOption_(out, { key: cat, card_num: cardNum, bank: bank, shortname: shortname });
+  }
+}
+
+function mergeCardsFromRecords_(out) {
+  var doc = SpreadsheetApp.openById(sheetId);
+  var sheet = doc.getSheetByName('Records');
+  if (!sheet) return;
+  var headers = readSheetHeaders(sheet);
+  var col = findHeaderIndex(headers, 'payment_method');
+  if (col < 0) col = findHeaderIndex(headers, 'payment');
+  if (col < 0) return;
+  var layout = sheetLayout(sheet);
+  var last = sheet.getLastRow();
+  if (last < layout.dataStart) return;
+  var start = Math.max(layout.dataStart, last - 7999);
+  var n = last - start + 1;
+  var vals = sheet.getRange(start, col + 1, n, 1).getValues();
+  var i;
+  for (i = 0; i < vals.length; i++) {
+    var num = String(vals[i][0] || '').trim();
+    if (!num || isWalletOrCashName_(num)) continue;
+    if (!/\d{4}/.test(num.replace(/\s/g, ''))) continue;
+    addPaymentOption_(out, { key: 'Card', card_num: num, bank: '', shortname: '' });
+  }
+}
+
+function getPaymentOptionsMap() {
+  var out = defaultPaymentOptionsMap_();
+  try {
+    mergeKvPaymentGroup_(out, 'Card', 'Card');
+    mergeKvPaymentGroup_(out, 'Cards', 'Card');
+    mergeKvPaymentGroup_(out, 'Payment', 'Card');
+    mergeKvPaymentGroup_(out, 'CreditCard', 'Card');
+    mergeKvPaymentGroup_(out, '信用卡', 'Card');
+    mergeKvPaymentGroup_(out, '银行卡', 'Card');
+  } catch (e1) {}
+  try {
+    mergeCardsFromKeyValue_(out);
+  } catch (e1b) {}
+  try {
+    mergePaymentOptionsSheet_(out);
+  } catch (e2) {}
+  try {
+    mergeCardsFromRecords_(out);
+  } catch (e3) {}
+  return out;
 }
 
 function getPaymentOptions() {
