@@ -4304,11 +4304,12 @@ function recordsForYearMonth(ym) {
   return out;
 }
 
-var EAT_PLACES_CACHE_KEY = 'eatPlaces.v1';
+var EAT_PLACES_CACHE_KEY = 'eatPlaces.v2';
 var EAT_TAG_FOOD = '餐饮美食';
+var EAT_PLACES_MONTHS = 24;
 
 function collectEatPlaces() {
-  var months = listRecentYearMonths(12);
+  var months = listRecentYearMonths(EAT_PLACES_MONTHS);
   var allow = {};
   var i;
   for (i = 0; i < months.length; i++) {
