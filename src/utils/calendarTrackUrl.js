@@ -215,6 +215,31 @@ export function calendarTrackEndpoint() {
   return API_ENDPOINTS.CALENDAR_TRACK || API_ENDPOINTS.GSHEET_SUBMIT || '';
 }
 
+/** GET URL from a trackCalendar POST/queue payload (lat/lng aliases included). */
+export function buildCalendarTrackUrlFromPayload(payload, base = calendarTrackEndpoint()) {
+  const p = payload || {};
+  return buildCalendarTrackUrl(
+    {
+      op: p.op,
+      title: p.title,
+      prefix: p.prefix,
+      timestamp: p.timestamp,
+      timestampMs: p.timestampMs ?? p.timestamp_ms,
+      lat: p.lat ?? p.latitude,
+      lng: p.lng ?? p.longitude,
+      latlong: p.latlong ?? p.latlng,
+      endExisting: p.endExisting,
+      startHome: p.startHome,
+      all: p.all,
+      endAny: p.endAny,
+      silent: p.silent,
+      days: p.days,
+      lookbackDays: p.lookbackDays,
+    },
+    base
+  );
+}
+
 /**
  * GAS URL for Shortcuts Get Contents of URL (GET or POST, same query).
  * Booleans become 1/0. Empty values are omitted.
@@ -301,10 +326,11 @@ export function calendarTrackUrlExamples() {
     },
     {
       title: 'End All',
-      note: '結束所有進行中。days 可省略（預設 3）',
+      note: '結束所有進行中。op=end all 即可，不必另帶 all=1。days 可省略（預設 3）',
       params: {
-        op: 'end',
+        op: 'end all',
         all: true,
+        endAny: true,
         days: 3,
         timestamp: ts,
       },

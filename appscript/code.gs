@@ -1088,15 +1088,49 @@ function sanitizeGeminiError_(text) {
     .slice(0, 480);
 }
 
+function canonicalizeGeminiModel_(slug) {
+  var m = String(slug || '').trim().replace(/^models\//i, '');
+  if (m === 'gemini-2.5-flash-lite' || m === 'gemini-2.0-flash-lite') return 'gemini-3.5-flash-lite';
+  if (m === 'gemini-2.5-flash' || m === 'gemini-2.0-flash') return 'gemini-3.8-flash';
+  return m;
+}
+
 function resolveGeminiModel_(name) {
   var n = String(name || '').trim().replace(/[\r\n]/g, '');
   n = n.replace(/^models\//i, '');
   var slug = n.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9._-]/g, '');
   // gemini-3-8-flash (hyphen) is not a model; id is gemini-3.8-flash (dot).
   slug = slug.replace(/^(gemini)-(\d+)-(\d+)/, '$1-$2.$3');
-  if (/^gemini-2/.test(slug)) return 'gemini-3.8-flash';
-  if (/^gemini-3\.\d+[a-z0-9._-]*$/.test(slug)) return slug;
+  slug = canonicalizeGeminiModel_(slug);
+  if (/^gemini-[\w.-]+$/.test(slug)) return slug;
   return 'gemini-3.8-flash';
+}
+
+function splitGeminiModels_(raw) {
+  return String(raw || '').split(/[,;\s]+/).map(function (s) {
+    return canonicalizeGeminiModel_(String(s || '').trim().replace(/^models\//i, ''));
+  }).filter(Boolean);
+}
+
+function geminiFallbackModels_(preferred, extra) {
+  var chain = [preferred]
+    .concat(splitGeminiModels_(extra))
+    .concat(['gemini-3.8-flash', 'gemini-3.5-flash-lite']);
+  var out = [];
+  var i;
+  for (i = 0; i < chain.length; i++) {
+    var m = canonicalizeGeminiModel_(String(chain[i] || '').trim());
+    if (!m || out.indexOf(m) !== -1) continue;
+    out.push(m);
+  }
+  return out;
+}
+
+function geminiShouldTryNext_(code) {
+  if (code === 401 || code === 402 || code === 403) return false;
+  if (code === 400 || code === 404) return true;
+  if (code === 408 || code === 429) return true;
+  return code >= 500;
 }
 
 function geminiHttpError_(code, text) {
@@ -1249,14 +1283,13 @@ function extractGeminiText_(httpBody) {
   return out;
 }
 
-function callGeminiVision_(apiKey, model, mimeType, base64, prompt) {
+function callGeminiVision_(apiKey, model, mimeType, base64, prompt, extraFallbacks) {
+  var models = geminiFallbackModels_(model, extraFallbacks);
   var tried = [];
-  var models = [model, 'gemini-3.8-flash'];
   var lastErr = '';
   var i;
   for (i = 0; i < models.length; i++) {
-    var m = String(models[i] || '').trim();
-    if (!m || tried.indexOf(m) !== -1) continue;
+    var m = models[i];
     tried.push(m);
     var url = 'https://generativelanguage.googleapis.com/v1beta/models/' +
       m + ':generateContent?key=' + encodeURIComponent(apiKey);
@@ -1281,12 +1314,17 @@ function callGeminiVision_(apiKey, model, mimeType, base64, prompt) {
     var code = res.getResponseCode();
     var text = res.getContentText() || '';
     if (code >= 200 && code < 300) {
-      return { text: extractGeminiText_(text), model: m };
+      return { text: extractGeminiText_(text), model: m, tried: tried };
     }
     lastErr = geminiHttpError_(code, text);
-    if (code !== 404 && code !== 400) break;
+    if (!geminiShouldTryNext_(code)) break;
+    if (i < models.length - 1 && (code === 429 || code >= 500)) {
+      Utilities.sleep(400);
+    }
   }
-  throw new Error(sanitizeGeminiError_(lastErr || 'Gemini 失敗'));
+  var e = new Error(sanitizeGeminiError_(lastErr || 'Gemini 失敗') + ' · tried ' + tried.join(', '));
+  e.tried = tried;
+  throw e;
 }
 
 function ensureAiSuggestSheet() {
@@ -1330,7 +1368,14 @@ function handleAnalyzeReceipt(data) {
     }
     var mime = data.mimeType || data.type || 'image/jpeg';
     if (String(mime).indexOf('image/') !== 0) mime = 'image/jpeg';
-    var vision = callGeminiVision_(apiKey, model, mime, b64, prompt);
+    var vision = callGeminiVision_(
+      apiKey,
+      model,
+      mime,
+      b64,
+      prompt,
+      ai.FALLBACK || ai.FALLBACKS || lookupKeyValue_('Fallback', 'AI')
+    );
     var suggestions = parseGeminiSuggestions_(vision.text);
     var usedModel = vision.model || model;
     var hash = photoHash_(b64);
@@ -1339,6 +1384,7 @@ function handleAnalyzeReceipt(data) {
       success: true,
       action: 'analyzeReceipt',
       model: usedModel,
+      tried: vision.tried || [usedModel],
       prompt: prompt,
       photoHash: hash,
       suggestions: suggestions
@@ -1349,6 +1395,7 @@ function handleAnalyzeReceipt(data) {
       success: false,
       error: sanitizeGeminiError_(error.toString()),
       model: model,
+      tried: error.tried || [],
       prompt: prompt
     });
   }

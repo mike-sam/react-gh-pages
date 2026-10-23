@@ -90,19 +90,67 @@ export function stripAccessFromUrl() {
   if (next !== cur) window.history.replaceState(window.history.state, '', next);
 }
 
+function decodeHtmlEntities(s) {
+  return String(s || '')
+    .replace(/&#39;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&');
+}
+
+export function parseGasResponseText(text) {
+  const raw = String(text || '').trim();
+  if (!raw) return { data: null, error: '空回應' };
+  if (raw[0] === '{' || raw[0] === '[') {
+    try {
+      return { data: JSON.parse(raw) };
+    } catch {
+      return { data: null, error: 'JSON 解析失敗' };
+    }
+  }
+  const syn = raw.match(/SyntaxError:\s*([^<\n]+)/i);
+  if (syn) {
+    const detail = decodeHtmlEntities(syn[1]).trim();
+    if (/already been declared/i.test(detail)) {
+      return { data: null, error: `GAS 腳本壞了：${detail}。請整份覆蓋現有 .gs（不要另開檔）再部署` };
+    }
+    return { data: null, error: `GAS：${detail}` };
+  }
+  if (/<html/i.test(raw)) {
+    return { data: null, error: 'GAS 回了錯誤頁。請整份覆蓋 code.gs 後部署新版本' };
+  }
+  return { data: null, error: '無法讀取驗證結果' };
+}
+
 export async function verifyAccessHash(hash) {
   const submitted = String(hash || '').trim();
   if (!submitted) return { ok: false, error: '請輸入驗證碼' };
   const url = new URL(API_ENDPOINTS.GSHEET_SUBMIT || API_ENDPOINTS.KEY_VALUE);
   url.searchParams.set('action', 'verifyAccess');
   url.searchParams.set('hash', submitted);
-  const res = await fetch(url.toString());
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const data = await res.json();
+  let res;
+  try {
+    res = await fetch(url.toString(), { credentials: 'omit', cache: 'no-cache', redirect: 'follow' });
+  } catch (e) {
+    const msg = e && e.message ? String(e.message) : String(e);
+    if (/failed to fetch|networkerror|load failed/i.test(msg)) {
+      return { ok: false, error: '驗證服務連不上。GAS 多半掛了：請整份覆蓋 code.gs 後部署（Anyone）' };
+    }
+    return { ok: false, error: msg };
+  }
+  const text = await res.text();
+  const parsed = parseGasResponseText(text);
+  const data = parsed.data;
   if (data && data.ok) {
     writeAccessSession(ACCESS_TTL_MS, submitted);
     return { ok: true };
   }
+  if (data && data.success === true && data.ok === false) {
+    return { ok: false, error: '驗證失敗' };
+  }
+  if (parsed.error) return { ok: false, error: parsed.error };
+  if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
   return { ok: false, error: '驗證失敗' };
 }
 
@@ -162,18 +210,41 @@ function isVerifyAccessUrl(url) {
   }
 }
 
+function gasDeploymentId(url) {
+  const m = String(url || '').match(/\/macros\/s\/([^/?#]+)/i);
+  return m ? m[1] : '';
+}
+
+function isMainGasUrl(url) {
+  const main = gasDeploymentId(API_ENDPOINTS.GSHEET_SUBMIT || API_ENDPOINTS.CALENDAR_TRACK);
+  return Boolean(main && gasDeploymentId(url) === main);
+}
+
+function isOpenAccessActionUrl(url) {
+  try {
+    const u = new URL(String(url || ''), typeof window !== 'undefined' ? window.location.href : undefined);
+    const action = String(u.searchParams.get('action') || '');
+    return /^(verifyAccess|trackCalendar|calendarPing|check_current)$/.test(action);
+  } catch {
+    return /[?&]action=(verifyAccess|trackCalendar|calendarPing|check_current)\b/.test(String(url || ''));
+  }
+}
+
 function inspectAccessResponse(res, url) {
   if (!res || res.type === 'opaque' || res.status === 0) return;
+  if (!isMainGasUrl(url) || isVerifyAccessUrl(url) || isOpenAccessActionUrl(url)) return;
   res
     .clone()
-    .json()
-    .then((data) => {
-      if (data && data.access === false) {
+    .text()
+    .then((text) => {
+      const parsed = parseGasResponseText(text);
+      const data = parsed.data;
+      if (!data) return;
+      if (data.access === false && data.error === 'Forbidden') {
         noteAccessForbidden();
         return;
       }
-      if (isVerifyAccessUrl(url)) return;
-      if (data && data.success === false) return;
+      if (data.success === false) return;
       clearUnconfirmed();
     })
     .catch(() => {});

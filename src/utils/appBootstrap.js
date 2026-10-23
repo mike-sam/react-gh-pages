@@ -11,7 +11,7 @@ export const BOOTSTRAP_DIRTY_KEY = 'appBootstrapDirty';
 export const BOOTSTRAP_TTL_MS = 60 * 60 * 1000;
 /** F5 / remount without a write: do not hit GAS again inside this window. */
 export const BOOTSTRAP_RETRY_MS = 5 * 60 * 1000;
-export const PAYMENT_OPTIONS_CACHE_VER = 'v4';
+export const PAYMENT_OPTIONS_CACHE_VER = 'v5';
 export const PAYMENT_OPTIONS_TTL_MS = 24 * 60 * 60 * 1000;
 
 export const DEFAULT_PAYMENT_OPTIONS = {
@@ -103,7 +103,7 @@ function mergeLocalCardFallbacks(acc) {
   const hasCard = Object.entries(acc).some(([id, o]) => detectPaymentCategory(o, id) === 'Card');
   if (!hasCard) {
     try {
-      const prev = JSON.parse(localStorage.getItem('paymentOptions') || '{}');
+      const prev = unwrapPaymentMap(JSON.parse(localStorage.getItem('paymentOptions') || '{}')) || {};
       Object.entries(prev).forEach(([id, o]) => {
         if (detectPaymentCategory(o, id) === 'Card') upsertPaymentOption(acc, id, o);
       });
@@ -124,9 +124,18 @@ function mergeLocalCardFallbacks(acc) {
   }
 }
 
+function unwrapPaymentMap(parsed) {
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  if (parsed.data && typeof parsed.data === 'object' && !parsed.data.card_num) {
+    return parsed.data;
+  }
+  return parsed;
+}
+
 export function transformPaymentOptions(raw, defaults = DEFAULT_PAYMENT_OPTIONS) {
   const acc = {};
-  const source = raw && typeof raw === 'object' && Object.keys(raw).length ? raw : defaults;
+  const unwrapped = unwrapPaymentMap(raw);
+  const source = unwrapped && Object.keys(unwrapped).length ? unwrapped : defaults;
   Object.entries(source).forEach(([id, value]) => upsertPaymentOption(acc, id, value));
   Object.entries(defaults).forEach(([id, value]) => upsertPaymentOption(acc, id, value));
   mergeLocalCardFallbacks(acc);
@@ -146,7 +155,7 @@ export function readPaymentOptionsCache({ allowStale = false } = {}) {
     ) {
       return null;
     }
-    return JSON.parse(cached);
+    return unwrapPaymentMap(JSON.parse(cached));
   } catch {
     return null;
   }
@@ -156,14 +165,81 @@ export function writePaymentOptionsCache(transformed, at = Date.now()) {
   localStorage.setItem('paymentOptions', JSON.stringify(transformed));
   localStorage.setItem('paymentOptionsTimestamp', String(at));
   localStorage.setItem('paymentOptionsVer', PAYMENT_OPTIONS_CACHE_VER);
+  try {
+    window.dispatchEvent(new Event('paymentOptionsUpdated'));
+  } catch {
+    /* ignore */
+  }
   return transformed;
+}
+
+function paymentMapHasCards(map) {
+  return Object.entries(map || {}).some(([id, o]) => detectPaymentCategory(o, id) === 'Card');
+}
+
+function parsePaymentOptionsPayload(data) {
+  if (!data || typeof data !== 'object') return null;
+  const src =
+    data.paymentOptions && typeof data.paymentOptions === 'object' && !data.paymentOptions.card_num
+      ? data.paymentOptions
+      : data;
+  const raw = {};
+  Object.entries(src).forEach(([id, value]) => {
+    if (!value || typeof value !== 'object' || !value.card_num) return;
+    if (id === 'success' || id === 'error' || id === 'ok') return;
+    raw[id] = {
+      key: value.key || (String(value.card_num) === 'Cash' ? 'Cash' : 'Card'),
+      card_num: value.card_num,
+      bank: value.bank || '',
+      shortname: value.shortname || value.bank || id,
+    };
+  });
+  return Object.keys(raw).length ? raw : null;
+}
+
+let paymentsInflight = null;
+
+/** Cards live on a dedicated web app; bootstrap GAS only has cash/wallets. */
+export async function ensurePaymentOptions({ force = false } = {}) {
+  const cached = readPaymentOptionsCache({ allowStale: true }) || {};
+  if (paymentMapHasCards(cached) && !force) return cached;
+  if (paymentsInflight) return paymentsInflight;
+  paymentsInflight = (async () => {
+    try {
+      const url = API_ENDPOINTS.PAYMENT_OPTIONS;
+      const res = await fetch(url);
+      const text = await res.text();
+      let data = null;
+      try {
+        data = JSON.parse(text);
+      } catch {
+        data = null;
+      }
+      const raw = parsePaymentOptionsPayload(data);
+      if (!raw) return cached;
+      const merged = transformPaymentOptions({ ...cached, ...raw });
+      writePaymentOptionsCache(merged);
+      notifyBootstrap('payments');
+      return merged;
+    } catch (err) {
+      console.warn('payment options fetch failed', err);
+      return cached;
+    } finally {
+      paymentsInflight = null;
+    }
+  })();
+  return paymentsInflight;
 }
 
 function applyBootstrapPayload(data) {
   if (!data || data.success !== true) return false;
   let applied = false;
   if (data.paymentOptions && typeof data.paymentOptions === 'object') {
-    writePaymentOptionsCache(transformPaymentOptions(data.paymentOptions));
+    const prev = readPaymentOptionsCache({ allowStale: true }) || {};
+    const incoming = transformPaymentOptions(data.paymentOptions);
+    writePaymentOptionsCache(
+      paymentMapHasCards(incoming) ? incoming : transformPaymentOptions({ ...prev, ...incoming })
+    );
     applied = true;
   }
   const byCar = data.parked?.byCar;
@@ -233,18 +309,22 @@ export function ensureAppBootstrap({ force = false } = {}) {
       const url = `${API_ENDPOINTS.GSHEET_SUBMIT}?action=getBootstrap`;
       const res = await fetch(url);
       if (!res.ok) {
+        await ensurePaymentOptions({ force: true });
         notifyBootstrap('http');
         return 'http';
       }
       const data = await res.json();
       if (!applyBootstrapPayload(data)) {
         notifyBootstrap('unsupported');
+        await ensurePaymentOptions({ force: true });
         return 'unsupported';
       }
+      await ensurePaymentOptions();
       notifyBootstrap('ok');
       return 'ok';
     } catch (err) {
       console.warn('app bootstrap failed', err);
+      await ensurePaymentOptions({ force: true });
       notifyBootstrap('error');
       return 'error';
     } finally {

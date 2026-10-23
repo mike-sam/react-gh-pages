@@ -146,6 +146,16 @@ export async function compressReceiptFile(file) {
   };
 }
 
+function fetchErrorMessage(err) {
+  const name = err && err.name;
+  const msg = String(err?.message || err || '');
+  if (name === 'AbortError' || /aborted/i.test(msg)) return '逾時';
+  if (/Failed to fetch|NetworkError|Load failed/i.test(msg)) {
+    return 'Failed to fetch：瀏覽器沒連上 Apps Script（localhost 常見 CORS／302）。用「複製 curl」測 Gemini / GAS（不含照片）。';
+  }
+  return msg || 'AI 建議失敗';
+}
+
 async function postGasJson(payload, timeoutMs = 55000) {
   const controller = new AbortController();
   const t = setTimeout(() => controller.abort(), timeoutMs);
@@ -160,14 +170,25 @@ async function postGasJson(payload, timeoutMs = 55000) {
       credentials: 'omit',
     });
     const text = await res.text();
-    if (!text || !String(text).trim()) throw new Error('伺服器空回應');
+    if (!text || !String(text).trim()) {
+      throw attachAiMeta(new Error('伺服器空回應'), { httpStatus: res.status, responseHead: '' });
+    }
     let data;
     try {
       data = JSON.parse(text);
     } catch {
-      throw new Error('伺服器回傳不是 JSON（請重新部署 Apps Script）');
+      throw attachAiMeta(new Error('伺服器回傳不是 JSON（請重新部署 Apps Script）'), {
+        httpStatus: res.status,
+        responseHead: String(text).slice(0, 240),
+      });
     }
     return data;
+  } catch (err) {
+    if (err?.httpStatus != null || err?.responseHead != null) throw err;
+    throw attachAiMeta(new Error(fetchErrorMessage(err)), {
+      httpStatus: 0,
+      responseHead: '',
+    });
   } finally {
     clearTimeout(t);
   }
@@ -263,14 +284,99 @@ export function receiptPromptFor(tag, title, template, when) {
   });
 }
 
-export function formatAiFallbackCopy({ model, prompt } = {}) {
-  return [`model: ${model || '未回傳'}`, '請根據收據照片填欄位。圖請另外附上。', '', prompt || ''].join('\n').trim();
+export function formatAiFallbackCopy({ model, prompt, error } = {}) {
+  return [
+    `model: ${model || '未回傳'}`,
+    error ? `error: ${error}` : '',
+    '請根據收據照片填欄位。圖請另外附上。',
+    '',
+    prompt || '',
+  ]
+    .filter((line, i, arr) => line !== '' || (i > 0 && arr[i - 1] !== ''))
+    .join('\n')
+    .trim();
+}
+
+function curlJsonHeredoc(json, tag) {
+  const delim = tag || 'JSON';
+  return [`--data-binary @- <<'${delim}'`, json, delim].join('\n');
+}
+
+function pingPrompt(prompt) {
+  const text = String(prompt || '').trim();
+  if (!text) return 'ping';
+  return text.length > 800 ? `${text.slice(0, 800)}\n…(prompt truncated for endpoint ping)` : text;
+}
+
+function stripPhotoFromPayload(payload) {
+  if (!payload || typeof payload !== 'object') return { action: 'analyzeReceipt' };
+  const next = { ...payload };
+  delete next.photo;
+  delete next.base64;
+  delete next.inlineData;
+  delete next.inline_data;
+  return next;
+}
+
+/** Endpoint ping only — no image bytes. Key is never included. */
+export function formatGeminiCurl({ model, prompt } = {}) {
+  const m = String(model || '').trim() || 'gemini-3.8-flash';
+  const body = {
+    contents: [{ parts: [{ text: pingPrompt(prompt) }] }],
+    generationConfig: {
+      temperature: 0.2,
+      responseMimeType: 'application/json',
+    },
+  };
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent?key=\${GEMINI_API_KEY}`;
+  return [
+    `# Gemini generateContent ping（不含照片，測 model / key）`,
+    `# model: ${m}`,
+    `# 先：export GEMINI_API_KEY='KeyValueConfig group AI 的 APIKey'`,
+    `curl -sS -X POST "${url}" \\`,
+    `  -H 'Content-Type: application/json' \\`,
+    curlJsonHeredoc(JSON.stringify(body), 'GEMINI_JSON'),
+  ].join('\n');
+}
+
+export function formatGasAnalyzeCurl({ url, payload } = {}) {
+  const endpoint = String(url || API_ENDPOINTS.GSHEET_SUBMIT);
+  const body = stripPhotoFromPayload(payload);
+  return [
+    `# Apps Script analyzeReceipt ping（不含 base64。Content-Type 必須是 text/plain）`,
+    `curl -sS -L -X POST ${JSON.stringify(endpoint)} \\`,
+    `  -H 'Content-Type: text/plain;charset=utf-8' \\`,
+    curlJsonHeredoc(JSON.stringify(body), 'GAS_JSON'),
+  ].join('\n');
+}
+
+export function formatAiCurlCopy({
+  model,
+  prompt,
+  error,
+  gasUrl,
+  gasPayload,
+} = {}) {
+  const usedModel = String(model || '').trim() || 'gemini-3.8-flash';
+  const bits = [
+    `# model: ${model || '未回傳（curl 用 ' + usedModel + '）'}`,
+    `# 不含照片 base64，只測 endpoint`,
+    error ? `# error: ${error}` : '',
+    '',
+    formatGeminiCurl({ model: usedModel, prompt }),
+    '',
+    formatGasAnalyzeCurl({ url: gasUrl, payload: gasPayload }),
+  ];
+  return bits.filter((line, i, arr) => line !== '' || (i > 0 && arr[i - 1] !== '')).join('\n').trim();
 }
 
 function attachAiMeta(err, extra) {
   const e = err instanceof Error ? err : new Error(String(err?.message || err || 'AI 建議失敗'));
   if (extra?.model != null) e.model = extra.model;
   if (extra?.prompt != null) e.prompt = extra.prompt;
+  if (extra?.tried != null) e.tried = extra.tried;
+  if (extra?.httpStatus != null) e.httpStatus = extra.httpStatus;
+  if (extra?.responseHead != null) e.responseHead = extra.responseHead;
   return e;
 }
 
@@ -313,11 +419,12 @@ export async function analyzeReceiptPhoto(photo, { tag, title, promptTemplate, w
   };
   const prompt = fillReceiptPrompt(payload.promptTemplate, payload);
   try {
-    const data = await postGasJson(payload);
+    const data = await postGasJson(payload, 90000);
     if (!data || data.success !== true) {
       throw attachAiMeta(new Error(data?.error || 'AI 建議失敗'), {
         model: data?.model || '',
         prompt: data?.prompt || prompt,
+        tried: data?.tried || [],
       });
     }
     const suggestions = Array.isArray(data.suggestions)
@@ -326,6 +433,7 @@ export async function analyzeReceiptPhoto(photo, { tag, title, promptTemplate, w
     return {
       suggestions,
       model: data.model || '',
+      tried: data.tried || [],
       prompt: data.prompt || prompt,
       photoHash: data.photoHash || '',
     };
@@ -333,6 +441,7 @@ export async function analyzeReceiptPhoto(photo, { tag, title, promptTemplate, w
     throw attachAiMeta(err, {
       model: err?.model || '',
       prompt: err?.prompt || prompt,
+      tried: err?.tried || [],
     });
   }
 }

@@ -23,6 +23,26 @@ import {
   loadCalendarStatus,
 } from '../utils/calendarStatusCache';
 
+function formatTrackResult(label, data) {
+  if (!data || typeof data !== 'object') return `已送出：${label}`;
+  if (data.ping) return `GAS 通了 · ${data.at || ''}`;
+  if (data.mode === 'ended') {
+    const n = Array.isArray(data.closed) ? data.closed.length : 0;
+    const extra = data.warning ? ` · ${data.warning}` : '';
+    return `已結束 ${n} 筆${extra}`;
+  }
+  if (data.mode === 'noop') {
+    return `沒找到可結束的行程${data.warning ? ` · ${data.warning}` : ''}`;
+  }
+  if (data.mode === 'skipped') {
+    return `${label} 已略過（${data.reason || 'duplicate'}）`;
+  }
+  if (data.mode === 'created' || data.mode === 'appended' || data.mode === 'home' || data.mode === 'home_started') {
+    return `已送出：${label}`;
+  }
+  return `已送出：${label}${data.mode ? ` · ${data.mode}` : ''}`;
+}
+
 function CalendarTracker() {
   const { location, hasLocation, locationMode, setLocationMode, refreshLocation } =
     useSmartLocation();
@@ -179,7 +199,7 @@ function CalendarTracker() {
     const buildPayload = (coords) => ({
       id: Date.now(),
       action: 'trackCalendar',
-      op,
+      op: flags.all ? 'end all' : op,
       title: flags.all ? '' : resolvedTitle || '',
       prefix: prefix.trim(),
       timestamp,
@@ -218,7 +238,7 @@ function CalendarTracker() {
           return;
         }
         if (result.sent) {
-          setMessage(`已送出：${label}`);
+          setMessage(formatTrackResult(label, result.data));
           if (checkTimer.current) clearTimeout(checkTimer.current);
           checkTimer.current = setTimeout(() => refreshStatus({ silent: true, force: true }), 2200);
         } else {

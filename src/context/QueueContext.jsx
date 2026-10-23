@@ -8,18 +8,41 @@ import {
   removeFromQueue,
   restoreUnconfirmedToQueue,
 } from '../utils/offlineQueue';
-import { stampCalendarTimestamp } from '../utils/calendarTrackUrl';
+import { buildCalendarTrackUrlFromPayload, stampCalendarTimestamp } from '../utils/calendarTrackUrl';
 import { markBootstrapDirty } from '../utils/appBootstrap';
 
 const QueueContext = createContext(null);
 
 async function postPayload(payload, signal) {
+  if (payload.action === 'trackCalendar') {
+    const url = buildCalendarTrackUrlFromPayload(payload);
+    if (!url) throw new Error('缺少行事曆端點');
+    const res = await fetch(url, {
+      method: 'GET',
+      cache: 'no-cache',
+      credentials: 'omit',
+      signal,
+    });
+    const text = await res.text();
+    let data = null;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = null;
+    }
+    if (!data) {
+      throw new Error(text.slice(0, 180) || `HTTP ${res.status}`);
+    }
+    if (data.success === false) {
+      throw new Error(data.error || 'trackCalendar 失敗');
+    }
+    return data;
+  }
+
   const endpoint =
-    payload.action === 'trackCalendar'
-      ? API_ENDPOINTS.CALENDAR_TRACK || API_ENDPOINTS.GSHEET_SUBMIT
-      : payload.action === 'parkLocation' || payload.action === 'save_parking'
-        ? API_ENDPOINTS.PARK_LOCATION || API_ENDPOINTS.GSHEET_SUBMIT
-        : API_ENDPOINTS.GSHEET_SUBMIT; // upsertExpense / analyzeReceipt / obligations share this exec
+    payload.action === 'parkLocation' || payload.action === 'save_parking'
+      ? API_ENDPOINTS.PARK_LOCATION || API_ENDPOINTS.GSHEET_SUBMIT
+      : API_ENDPOINTS.GSHEET_SUBMIT; // upsertExpense / analyzeReceipt / obligations share this exec
 
   // no-cors: opaque ok = request left device; only network fail throws
   await fetch(endpoint, {
@@ -30,6 +53,7 @@ async function postPayload(payload, signal) {
     body: JSON.stringify(payload),
     signal,
   });
+  return null;
 }
 
 export function QueueProvider({ children }) {
@@ -110,7 +134,7 @@ export function QueueProvider({ children }) {
         if (typeof navigator !== 'undefined' && navigator.onLine === false) {
           return { queued: true, sent: false };
         }
-        await postPayload(body, signal);
+        const data = await postPayload(body, signal);
         rememberUnconfirmed({
           id,
           action: body.action || 'expense',
@@ -120,7 +144,7 @@ export function QueueProvider({ children }) {
         removeFromQueue(id);
         refreshCount();
         markBootstrapDirty();
-        return { queued: false, sent: true };
+        return { queued: false, sent: true, data };
       } catch (err) {
         const aborted =
           signal?.aborted ||

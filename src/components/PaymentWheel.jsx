@@ -137,7 +137,12 @@ function PaymentWheel({ categorized, paymentMethod, setPaymentMethod, onDoubleSe
   }, []);
 
   return (
-    <div className={`payment-wheel${!paymentMethod ? ' is-incomplete' : ''}`} ref={rootRef}>
+    <div
+      className={`payment-wheel${!paymentMethod ? ' is-incomplete' : ''}`}
+      ref={rootRef}
+      data-pay-cards={(categorized.Card || []).length}
+      data-pay-wallets={(categorized.eWallet || []).length}
+    >
       <div className="payment-wheel-catbar">
         <button type="button" className="payment-wheel-cat-nav" onClick={onNavClick(-1)}>
           ‹

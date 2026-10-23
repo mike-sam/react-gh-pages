@@ -4,7 +4,7 @@ import Remark from '../Remark';
 import Log from '../Log';
 import Output from '../Output';
 import '../App.css';
-import { EXPENSE_TAGS } from '../config';
+import { API_ENDPOINTS, EXPENSE_TAGS, SECONDARY_TAGS } from '../config';
 import ExpenseDateTimeRow from '../components/ExpenseDateTimeRow';
 import { focusElement } from '../utils/keyboardNavigation';
 import PageChrome from '../components/PageChrome';
@@ -16,6 +16,8 @@ import {
   analyzeReceiptPhoto,
   applyAiSuggestion,
   DEFAULT_RECEIPT_PROMPT_TEMPLATE,
+  fieldsForExpense,
+  formatAiCurlCopy,
   formatAiFallbackCopy,
   formatWhen,
   loadAiPrompt,
@@ -25,6 +27,7 @@ import {
   suggestionSummary,
 } from '../utils/aiSuggest';
 import { copyText } from '../utils/platform';
+import { getStoredAccessHash } from '../utils/accessGate';
 import { useSmartLocation } from '../hooks/useSmartLocation';
 import { toMapsUrl } from '../utils/locationStorage';
 import { pinMerchantIfNearHere, rememberNamedPoint } from '../utils/landmarkRegions';
@@ -37,6 +40,7 @@ import {
 import SectionHead from '../components/SectionHead';
 import {
   ensureAppBootstrap,
+  ensurePaymentOptions,
   readPaymentOptionsCache,
   subscribeAppBootstrap,
   transformPaymentOptions,
@@ -192,6 +196,7 @@ function ExpensePage() {
         prompt: result.prompt || localPrompt,
         photoHash: result.photoHash,
         photoIndex: index,
+        tried: result.tried || [],
       });
       if (!result.suggestions.length) setAiError('沒有建議');
     } catch (err) {
@@ -199,25 +204,69 @@ function ExpensePage() {
         ...m,
         model: err?.model || m.model,
         prompt: err?.prompt || m.prompt,
+        tried: err?.tried || m.tried || [],
       }));
       setAiError(
         err?.name === 'AbortError'
           ? '逾時'
           : String(err.message || 'AI 失敗')
               .split('\n')[0]
-              .slice(0, 160)
+              .slice(0, 240)
       );
     } finally {
       setAiBusyIndex(-1);
     }
   };
 
+  const gasAnalyzeUrl = () => {
+    const endpoint = API_ENDPOINTS.GSHEET_SUBMIT;
+    const token = getStoredAccessHash();
+    if (!token) return endpoint;
+    try {
+      const u = new URL(endpoint);
+      if (!u.searchParams.get('access') && !u.searchParams.get('k')) {
+        u.searchParams.set('access', token);
+      }
+      return u.toString();
+    } catch {
+      return endpoint;
+    }
+  };
+
   const copyAiPrompt = async () => {
-    const text = formatAiFallbackCopy(aiMeta);
+    const text = formatAiFallbackCopy({ ...aiMeta, error: aiError });
     if (!text) return;
     const ok = await copyText(text);
-    setAiCopied(ok ? '已複製' : '複製失敗');
+    setAiCopied(ok ? '已複製 prompt' : '複製失敗');
     window.setTimeout(() => setAiCopied(''), 1600);
+  };
+
+  const copyAiCurl = async () => {
+    const photo = photos[aiMeta.photoIndex] || photos[0];
+    const token = getStoredAccessHash();
+    const payload = {
+      action: 'analyzeReceipt',
+      mimeType: photo?.type || 'image/jpeg',
+      tag: selectedTag || '',
+      title: input || '',
+      when: formatWhen(selectedDateTime),
+      fields: fieldsForExpense(selectedTag, input),
+      allowedTags: EXPENSE_TAGS,
+      allowedSubcats: SECONDARY_TAGS,
+      promptTemplate: String(aiTemplate || '').trim().slice(0, 8000),
+    };
+    if (token) payload.access = token;
+    const text = formatAiCurlCopy({
+      model: aiMeta.model,
+      prompt: aiMeta.prompt,
+      error: aiError,
+      gasUrl: gasAnalyzeUrl(),
+      gasPayload: payload,
+    });
+    if (!text) return;
+    const ok = await copyText(text);
+    setAiCopied(ok ? '已複製 curl' : '複製失敗');
+    window.setTimeout(() => setAiCopied(''), 2200);
   };
 
   /** Leaving 交通出行: wipe auto fuel/ODO remark before ItemizedDescription remounts */
@@ -312,10 +361,21 @@ function ExpensePage() {
   };
 
   useEffect(() => {
-    ensureAppBootstrap();
-    return subscribeAppBootstrap(() => {
+    const applyFromCache = () => {
       setPaymentOptions(transformPaymentOptions(readPaymentOptionsCache({ allowStale: true })));
+    };
+    applyFromCache();
+    ensureAppBootstrap();
+    void ensurePaymentOptions({ force: true }).then((map) => {
+      if (map && typeof map === 'object') setPaymentOptions(transformPaymentOptions(map));
+      else applyFromCache();
     });
+    window.addEventListener('paymentOptionsUpdated', applyFromCache);
+    const unsub = subscribeAppBootstrap(applyFromCache);
+    return () => {
+      window.removeEventListener('paymentOptionsUpdated', applyFromCache);
+      unsub();
+    };
   }, []);
 
   // sessionStorage POST bridge (Shortcuts / external)
@@ -935,6 +995,9 @@ function ExpensePage() {
                 >
                   {aiTplBusy ? '…' : '儲存'}
                 </button>
+                <button type="button" className="ai-suggest-copy" onClick={copyAiCurl}>
+                  {aiCopied === '已複製 curl' ? aiCopied : '複製 curl'}
+                </button>
                 {aiTplMsg ? <span className="ai-suggest-hint">{aiTplMsg}</span> : null}
               </div>
             </details>
@@ -987,9 +1050,9 @@ function ExpensePage() {
                   <div className="photo-display-info">
                     <span className="photo-display-name">{photo.filename}</span>
                     <span className="photo-display-size">
-                      {formatFileSize(photo.compressedSize || photo.originalSize)}
+                      {`壓縮後 ${formatFileSize(photo.compressedSize || photo.originalSize)}`}
                       {photo.compressedSize && photo.originalSize
-                        ? ` / ${formatFileSize(photo.originalSize)}`
+                        ? ` / 原圖 ${formatFileSize(photo.originalSize)}`
                         : ''}
                     </span>
                   </div>
@@ -1028,17 +1091,26 @@ function ExpensePage() {
                     {aiBusyIndex >= 0
                       ? 'model 辨識中'
                       : aiMeta.model
-                        ? aiMeta.model
-                        : 'model 未回傳'}
+                        ? aiMeta.tried && aiMeta.tried.length > 1 && aiMeta.tried[0] !== aiMeta.model
+                          ? `${aiMeta.model}（備援）`
+                          : aiMeta.model
+                        : 'model 未回傳（請求沒到 Gemini）'}
                   </span>
                   {aiMeta.prompt ? (
                     <button type="button" className="ai-suggest-copy" onClick={copyAiPrompt}>
-                      {aiCopied || '複製 prompt'}
+                      {aiCopied === '已複製 prompt' ? aiCopied : '複製 prompt'}
+                    </button>
+                  ) : null}
+                  {aiMeta.prompt || (photos[0] && photos[0].base64) ? (
+                    <button type="button" className="ai-suggest-copy" onClick={copyAiCurl}>
+                      {aiCopied === '已複製 curl' ? aiCopied : '複製 curl'}
                     </button>
                   ) : null}
                 </div>
-                {aiError && aiMeta.prompt ? (
-                  <div className="ai-suggest-hint">可貼到其他 AI；圖請另外附上</div>
+                {aiError ? (
+                  <div className="ai-suggest-hint">
+                    複製 curl 不含照片，只測 Gemini / GAS。複製 prompt 可貼到其他 AI，圖另外附上。
+                  </div>
                 ) : null}
                 {aiMeta.prompt ? (
                   <details className="ai-suggest-prompt-wrap">
