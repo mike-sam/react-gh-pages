@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { MapContainer, TileLayer, Marker, ZoomControl, useMap, useMapEvents } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -6,6 +6,23 @@ import { DEFAULT_MAP_CENTER, withMapFallback } from '../utils/mapDefaults';
 
 const MAX_ZOOM = 19;
 const DEFAULT_ZOOM = 16;
+/** Keep pins clear of top chips / bottom attribution / zoom. */
+const MAP_PAD = { top: 56, right: 52, bottom: 28, left: 12 };
+
+function focusLatLng(map, lat, lng, zoom = DEFAULT_ZOOM) {
+  if (!map || typeof lat !== 'number' || typeof lng !== 'number') return;
+  const z = Math.min(MAX_ZOOM, Math.max(Number(zoom) || DEFAULT_ZOOM, 14));
+  const b = L.latLngBounds([
+    [lat, lng],
+    [lat, lng],
+  ]);
+  map.flyToBounds(b, {
+    paddingTopLeft: [MAP_PAD.left, MAP_PAD.top],
+    paddingBottomRight: [MAP_PAD.right, MAP_PAD.bottom],
+    maxZoom: z,
+    duration: 0.45,
+  });
+}
 
 delete L.Icon.Default.prototype._getIconUrl;
 L.Icon.Default.mergeOptions({
@@ -28,6 +45,58 @@ const TILES = {
   },
 };
 
+const CAR_SVG =
+  '<svg class="vehicle-marker-car" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path fill="currentColor" d="M5.2 11.2 6.7 7A1.8 1.8 0 0 1 8.4 5.8h7.2A1.8 1.8 0 0 1 17.3 7l1.5 4.2H20a1 1 0 0 1 1 1V15h-1.2a2.1 2.1 0 0 1-4.2 0H8.4a2.1 2.1 0 0 1-4.2 0H3v-2.8a1 1 0 0 1 1-1h1.2zm2.2-1.6h9.2l-.9-2.5a.4.4 0 0 0-.4-.3H8.7a.4.4 0 0 0-.4.3l-.9 2.5zM7.3 16.1a1.1 1.1 0 1 0 0-2.2 1.1 1.1 0 0 0 0 2.2zm9.4 0a1.1 1.1 0 1 0 0-2.2 1.1 1.1 0 0 0 0 2.2z"/></svg>';
+
+function plateIcon(plate, { active = false } = {}) {
+  const safe = String(plate || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+  return L.divIcon({
+    className: `leaflet-div-icon vehicle-marker${active ? ' is-active' : ''}`,
+    html: `<div class="vehicle-marker-stack"><span class="vehicle-marker-plate">${safe}</span><span class="vehicle-marker-pin">${CAR_SVG}</span></div>`,
+    iconSize: [76, 54],
+    iconAnchor: [38, 54],
+  });
+}
+
+function FitFleet({ points, nonce, enabled = true }) {
+  const map = useMap();
+  const prev = useRef(nonce);
+  const didInit = useRef(false);
+
+  useEffect(() => {
+    const valid = (points || []).filter(
+      (p) => typeof p?.lat === 'number' && typeof p?.lng === 'number'
+    );
+    const bumped = nonce != null && nonce !== prev.current;
+    prev.current = nonce;
+
+    if (valid.length === 0) return;
+    if (!bumped && didInit.current) return;
+    didInit.current = true;
+    if (!enabled) {
+      focusLatLng(map, valid[0].lat, valid[0].lng, DEFAULT_ZOOM);
+      return;
+    }
+    if (valid.length === 1) {
+      focusLatLng(map, valid[0].lat, valid[0].lng, DEFAULT_ZOOM);
+      return;
+    }
+    const b = L.latLngBounds(valid.map((p) => [p.lat, p.lng]));
+    map.flyToBounds(b, {
+      paddingTopLeft: [MAP_PAD.left, MAP_PAD.top],
+      paddingBottomRight: [MAP_PAD.right, MAP_PAD.bottom],
+      maxZoom: 16,
+      duration: 0.45,
+    });
+  }, [points, nonce, enabled, map]);
+
+  return null;
+}
+
 /**
  * Camera control:
  * - focusKey / focusNonce → fly to marker (plate tap / restore)
@@ -36,38 +105,58 @@ const TILES = {
  */
 function Recenter({ lat, lng, focusKey, focusNonce, cameraLat, cameraLng, cameraNonce }) {
   const map = useMap();
-  const prevFocus = useRef({ key: focusKey, nonce: focusNonce });
+  const prevFocus = useRef({ key: null, nonce: null });
   const prevCamera = useRef(cameraNonce);
-  const didInit = useRef(false);
+  const pendingFocus = useRef(true);
 
   useEffect(() => {
-    if (typeof lat !== 'number' || typeof lng !== 'number') return;
-
     const focusChanged =
       (focusKey != null && focusKey !== prevFocus.current.key) ||
       (focusNonce != null && focusNonce !== prevFocus.current.nonce);
+    if (focusChanged) pendingFocus.current = true;
     prevFocus.current = { key: focusKey, nonce: focusNonce };
 
-    if (focusChanged) {
-      map.flyTo([lat, lng], MAX_ZOOM, { duration: 0.55 });
-      didInit.current = true;
-      return;
-    }
-
-    if (!didInit.current) {
-      map.setView([lat, lng], map.getZoom() || DEFAULT_ZOOM);
-      didInit.current = true;
-    }
+    if (!pendingFocus.current) return;
+    if (typeof lat !== 'number' || typeof lng !== 'number') return;
+    pendingFocus.current = false;
+    focusLatLng(map, lat, lng, Math.max(map.getZoom() || DEFAULT_ZOOM, DEFAULT_ZOOM));
   }, [lat, lng, focusKey, focusNonce, map]);
 
   useEffect(() => {
     if (cameraNonce == null || cameraNonce === prevCamera.current) return;
     prevCamera.current = cameraNonce;
     if (typeof cameraLat !== 'number' || typeof cameraLng !== 'number') return;
-    map.flyTo([cameraLat, cameraLng], MAX_ZOOM, { duration: 0.55 });
+    focusLatLng(map, cameraLat, cameraLng, Math.max(map.getZoom() || DEFAULT_ZOOM, DEFAULT_ZOOM));
   }, [cameraNonce, cameraLat, cameraLng, map]);
 
   return null;
+}
+
+function FleetMarker({ plate, lat, lng, active, draggable, onSelect, onMove }) {
+  const markerRef = useRef(null);
+  const icon = useMemo(() => plateIcon(plate, { active }), [plate, active]);
+  return (
+    <Marker
+      draggable={Boolean(draggable)}
+      autoPan={Boolean(draggable)}
+      position={[lat, lng]}
+      icon={icon}
+      zIndexOffset={active ? 800 : 400}
+      ref={markerRef}
+      eventHandlers={{
+        click(e) {
+          L.DomEvent.stopPropagation(e.originalEvent || e);
+          onSelect?.(plate);
+        },
+        dragend() {
+          const marker = markerRef.current;
+          if (!marker) return;
+          const ll = marker.getLatLng();
+          onMove?.(ll.lat, ll.lng);
+        },
+      }}
+    />
+  );
 }
 
 function DraggableMarker({ position, onChange }) {
@@ -152,13 +241,14 @@ function OffMarkerWatcher({ lat, lng, onOffChange }) {
         onOffChange(false);
         return;
       }
-      const bounds = map.getBounds();
-      if (!bounds || typeof bounds.isValid === 'function' && !bounds.isValid()) {
+      const sw = map.containerPointToLatLng(L.point(MAP_PAD.left, size.y - MAP_PAD.bottom));
+      const ne = map.containerPointToLatLng(L.point(size.x - MAP_PAD.right, MAP_PAD.top));
+      const inner = L.latLngBounds(sw, ne);
+      if (!inner || (typeof inner.isValid === 'function' && !inner.isValid())) {
         onOffChange(false);
         return;
       }
-      // Avoid negative pad() — can invalidate bounds on some iOS / zero-size layouts
-      onOffChange(!bounds.contains([lat, lng]));
+      onOffChange(!inner.contains([lat, lng]));
     } catch {
       onOffChange(false);
     }
@@ -184,9 +274,7 @@ function FlyToMarkerOnNonce({ lat, lng, nonce }) {
     if (!nonce || nonce === prev.current) return;
     prev.current = nonce;
     if (typeof lat !== 'number' || typeof lng !== 'number') return;
-    map.flyTo([lat, lng], Math.max(map.getZoom(), DEFAULT_ZOOM), {
-      duration: 0.45,
-    });
+    focusLatLng(map, lat, lng, Math.max(map.getZoom() || DEFAULT_ZOOM, DEFAULT_ZOOM));
   }, [nonce, lat, lng, map]);
   return null;
 }
@@ -220,6 +308,15 @@ function ParkingMapPreview({
   cameraLat,
   cameraLng,
   cameraNonce,
+  /** All vehicles to draw. `{ plate, lat, lng }` */
+  fleet = [],
+  activePlate = '',
+  onSelectPlate,
+  /** Bump to fit all (or the only) located vehicles */
+  fitNonce,
+  /** 'fleet' fits all; 'single' flies to the active pin */
+  viewMode = 'single',
+  fitEnabled = true,
 }) {
   const seed = withMapFallback(lat, lng);
   const wrapRef = useRef(null);
@@ -303,6 +400,17 @@ function ParkingMapPreview({
     typeof originLng === 'number';
   const viewLat = position[0];
   const viewLng = position[1];
+  const locatedFleet = (fleet || []).filter(
+    (m) => typeof m?.lat === 'number' && typeof m?.lng === 'number' && m.plate
+  );
+  const showFleet = locatedFleet.length > 0;
+  const editingSingle = canEdit && Boolean(activePlate) && activePlate !== 'all';
+  const fleetHasActive = locatedFleet.some((m) => m.plate === activePlate);
+  const googleTarget = editingSingle
+    ? { lat: viewLat, lng: viewLng }
+    : locatedFleet[0]
+      ? { lat: locatedFleet[0].lat, lng: locatedFleet[0].lng }
+      : { lat: viewLat, lng: viewLng };
 
   return (
     <div
@@ -344,12 +452,35 @@ function ParkingMapPreview({
         <button
           type="button"
           className="parking-map-action-btn"
-          onClick={() => openInGoogleMaps(viewLat, viewLng)}
-          title="用 Google Maps 開啟目前標記位置"
-          disabled={typeof viewLat !== 'number' || typeof viewLng !== 'number'}
+          onClick={() => openInGoogleMaps(googleTarget.lat, googleTarget.lng)}
+          title="用 Google Maps 開啟"
+          disabled={typeof googleTarget.lat !== 'number' || typeof googleTarget.lng !== 'number'}
         >
           Google Maps
         </button>
+        {interactive && editingSingle && offMarker && (
+          <button
+            ref={returnBtnRef}
+            type="button"
+            className="parking-map-action-btn"
+            title="返回目前標記（不改標記）"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+            }}
+            onPointerDown={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+            }}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setReturnNonce((n) => n + 1);
+            }}
+          >
+            返回坐標
+          </button>
+        )}
       </div>
 
       <MapContainer
@@ -376,8 +507,8 @@ function ParkingMapPreview({
         <MapInteractionGate enabled={interactive} />
         <MapInvalidateOn token={sizeToken} />
         <OffMarkerWatcher
-          lat={position[0]}
-          lng={position[1]}
+          lat={editingSingle ? position[0] : locatedFleet[0]?.lat}
+          lng={editingSingle ? position[1] : locatedFleet[0]?.lng}
           onOffChange={setOffMarker}
         />
         {hasOrigin && (
@@ -387,53 +518,51 @@ function ParkingMapPreview({
             zIndexOffset={-200}
           />
         )}
-        {canEdit ? (
-          <>
-            <DraggableMarker position={position} onChange={handleChange} />
-            <MapClickHandler onChange={handleChange} enabled />
-          </>
+        {showFleet
+          ? locatedFleet.map((m) => (
+              <FleetMarker
+                key={m.plate}
+                plate={m.plate}
+                lat={
+                  m.plate === activePlate && typeof position[0] === 'number'
+                    ? position[0]
+                    : m.lat
+                }
+                lng={
+                  m.plate === activePlate && typeof position[1] === 'number'
+                    ? position[1]
+                    : m.lng
+                }
+                active={m.plate === activePlate}
+                draggable={editingSingle && m.plate === activePlate}
+                onSelect={onSelectPlate}
+                onMove={handleChange}
+              />
+            ))
+          : null}
+        {editingSingle && !fleetHasActive ? (
+          <DraggableMarker position={position} onChange={handleChange} />
+        ) : null}
+        <MapClickHandler onChange={handleChange} enabled={editingSingle} />
+        {viewMode === 'fleet' ? (
+          <FitFleet points={locatedFleet} nonce={fitNonce ?? 0} enabled={fitEnabled} />
         ) : (
-          <Marker position={position} draggable={false} />
+          <Recenter
+            lat={typeof lat === 'number' ? lat : null}
+            lng={typeof lng === 'number' ? lng : null}
+            focusKey={focusKey}
+            focusNonce={focusNonce}
+            cameraLat={cameraLat}
+            cameraLng={cameraLng}
+            cameraNonce={cameraNonce}
+          />
         )}
-        <Recenter
-          lat={position[0]}
-          lng={position[1]}
-          focusKey={focusKey}
-          focusNonce={focusNonce}
-          cameraLat={cameraLat}
-          cameraLng={cameraLng}
-          cameraNonce={cameraNonce}
-        />
         <FlyToMarkerOnNonce
-          lat={position[0]}
-          lng={position[1]}
+          lat={editingSingle ? position[0] : locatedFleet[0]?.lat}
+          lng={editingSingle ? position[1] : locatedFleet[0]?.lng}
           nonce={returnNonce}
         />
       </MapContainer>
-
-      {interactive && offMarker && (
-        <button
-          ref={returnBtnRef}
-          type="button"
-          className="parking-map-return-pin"
-          title="返回目前標記座標（不改標記）"
-          onMouseDown={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-          }}
-          onPointerDown={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-          }}
-          onClick={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            setReturnNonce((n) => n + 1);
-          }}
-        >
-          返回坐標
-        </button>
-      )}
 
       {!interactive && (
         <div className="parking-map-lock" aria-live="polite">
@@ -441,7 +570,7 @@ function ParkingMapPreview({
           <span>{lockReason || '讀取車位中…'}</span>
         </div>
       )}
-      {editable && interactive && !isFullscreen && (
+      {editingSingle && interactive && !isFullscreen && (
         <div className="parking-map-hint">
           {typeof lat === 'number'
             ? '拖曳標記 · 點地圖 · 雙指縮放'

@@ -22,11 +22,18 @@ const ACTIONS = [
     direct: '#/calendar',
   },
   {
-    path: ROUTES.PARKING,
+    path: ROUTES.VEHICLES,
     icon: '🚗',
-    title: '記車位 / 找車',
-    desc: '儲存停車座標與一鍵導航',
-    direct: '#/parking',
+    title: '車輛',
+    desc: '地圖上看全部車輛，記位置與保養記帳',
+    direct: '#/vehicles',
+  },
+  {
+    path: ROUTES.REGIONS,
+    icon: '🗺️',
+    title: '常用區域',
+    desc: '命名範圍，定位時自動帶入',
+    direct: '#/regions',
   },
 ];
 

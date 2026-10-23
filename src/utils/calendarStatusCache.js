@@ -25,6 +25,7 @@ function normalizeEvent(raw, kind) {
     start: raw.start || '',
     end: raw.end || '',
     marker: raw.marker || '',
+    lastTrailAt: raw.lastTrailAt || '',
     kind: kind === 'home' ? 'home' : 'start',
   };
 }

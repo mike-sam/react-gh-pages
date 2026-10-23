@@ -18,6 +18,7 @@ const MobileFriendlyDateTime = ({
   hideTrigger = false,
   autoOpen = false,
   onDismiss,
+  onEditingChange,
   compact = false,
 }) => {
   const [isEditing, setIsEditing] = useState(false);
@@ -44,6 +45,10 @@ const MobileFriendlyDateTime = ({
   useEffect(() => {
     if (!isEditing) setTempDate(value);
   }, [value, isEditing]);
+
+  useEffect(() => {
+    onEditingChange?.(isEditing);
+  }, [isEditing, onEditingChange]);
 
   useEffect(() => {
     if (!isEditing) return undefined;

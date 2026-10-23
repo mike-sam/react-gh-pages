@@ -5,6 +5,7 @@ import EntryPage from './pages/EntryPage';
 import ExpensePage from './pages/ExpensePage';
 import CalendarPage from './pages/CalendarPage';
 import ParkingPage from './pages/ParkingPage';
+import RegionsPage from './pages/RegionsPage';
 import './App.css';
 
 /**
@@ -14,7 +15,8 @@ import './App.css';
  *   #/expense?tab=scheduled  預定交易
  *   #/obligations 同上（相容舊連結）
  *   #/calendar   行事曆軌跡
- *   #/parking    記車位 / 找車
+ *   #/vehicles   車輛（#/parking 相容舊連結）
+ *   #/regions    常用區域
  */
 function App() {
   const path = useHashRoute();
@@ -26,7 +28,10 @@ function App() {
     case ROUTES.CALENDAR:
       return <CalendarPage />;
     case ROUTES.PARKING:
+    case ROUTES.VEHICLES:
       return <ParkingPage />;
+    case ROUTES.REGIONS:
+      return <RegionsPage />;
     case ROUTES.HOME:
     default:
       return <EntryPage />;

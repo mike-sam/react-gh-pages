@@ -5,7 +5,7 @@ import '../App.css';
 
 function ParkingPage() {
   return (
-    <PageChrome title="車輛位置">
+    <PageChrome title="車輛">
       <div className="app-container feature-page">
         <ParkingActions />
       </div>

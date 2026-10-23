@@ -1,16 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useSmartLocation } from '../hooks/useSmartLocation';
 import { useOfflineQueue } from '../context/QueueContext';
 import { API_ENDPOINTS } from '../config';
 import {
-  DEFAULT_CAR_PLATES,
   formatFullTimestamp,
   formatRelativeTime,
   applyParkedByCar,
   isParkedFetchFresh,
   loadParkedFetchAt,
   loadParkedForCar,
-  loadSelectedCarPlate,
   markParkedFetched,
   parkedDtoToLocal,
   PARKED_FETCH_TTL_MS,
@@ -23,6 +20,19 @@ import {
   subscribeAppBootstrap,
 } from '../utils/appBootstrap';
 import { DEFAULT_MAP_CENTER } from '../utils/mapDefaults';
+import {
+  ALL_VEHICLES,
+  VEHICLE_EXPENSE_CAT,
+  VEHICLE_EXPENSE_SHORTCUTS,
+  addVehicle,
+  canFitFleet,
+  listFleetMarkers,
+  loadVehicleRoster,
+  locatedFleet,
+  normalizePlate,
+  removeVehicle,
+} from '../utils/vehicles';
+import { navigate, ROUTES } from '../utils/routing';
 import ParkingMapPreview from './ParkingMapPreview';
 
 const FETCH_TIMEOUT_MS = 3000;
@@ -45,51 +55,33 @@ function formatCoordPair(lat, lng) {
   return `${Number(lat).toFixed(5)}, ${Number(lng).toFixed(5)}`;
 }
 
-/**
- * Simple parking: pick car → drag pin on inline map → save.
- */
 function ParkingActions() {
-  const { location: smartLoc, refreshLocation, hasLocation, locationMode, resolveForAction } =
-    useSmartLocation();
   const { enqueueAndSend } = useOfflineQueue();
-  const [presetPlates] = useState(DEFAULT_CAR_PLATES);
-  const [plateMode, setPlateMode] = useState(() => {
-    const saved = loadSelectedCarPlate();
-    return DEFAULT_CAR_PLATES.includes(saved) ? saved : 'other';
-  });
-  const [customPlate, setCustomPlate] = useState(() => {
-    const saved = loadSelectedCarPlate();
-    return DEFAULT_CAR_PLATES.includes(saved) ? '' : saved;
-  });
-  const [draft, setDraft] = useState(null); // { lat, lng, label } — current pin
-  /** Snapshot before unsaved edits (cloud/local parked, or last committed) */
+  const [roster, setRoster] = useState(() => loadVehicleRoster());
+  const [selection, setSelection] = useState(ALL_VEHICLES);
+  const [adding, setAdding] = useState(false);
+  const [newPlate, setNewPlate] = useState('');
+  const [draft, setDraft] = useState(null);
   const [baseline, setBaseline] = useState(null);
   const [isSaving, setIsSaving] = useState(false);
-  const [isSeeding, setIsSeeding] = useState(false);
   const [message, setMessage] = useState('');
   const [tick, setTick] = useState(0);
-  /** Bump on plate tap / restore so map flies to pin */
   const [mapFocusNonce, setMapFocusNonce] = useState(0);
-  /** Camera-only fly (返回車輛位置 after panning) */
+  const [fitNonce, setFitNonce] = useState(1);
   const [cameraFocus, setCameraFocus] = useState({
     lat: null,
     lng: null,
     nonce: 0,
   });
-  /** idle | loading | synced | cached | empty | error */
   const [syncStatus, setSyncStatus] = useState('idle');
   const [syncNote, setSyncNote] = useState('');
-  /** Lock map while cloud fetch in flight (unlock on done / fail / 3s timeout) */
   const [mapLocked, setMapLocked] = useState(false);
-  /** Bump to force cloud fetch even within TTL */
   const [forceFetchNonce, setForceFetchNonce] = useState(0);
   const fetchAbortRef = useRef(0);
   const bulkPrefetchDone = useRef(false);
 
-  const activePlate = useMemo(() => {
-    if (plateMode === 'other') return (customPlate || '').trim().toUpperCase();
-    return plateMode;
-  }, [plateMode, customPlate]);
+  const isAll = selection === ALL_VEHICLES;
+  const activePlate = isAll ? '' : selection;
 
   const parked = useMemo(() => {
     if (!activePlate) return null;
@@ -97,11 +89,20 @@ function ParkingActions() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activePlate, tick]);
 
-  const lastFetchAt = useMemo(
-    () => (activePlate ? loadParkedFetchAt(activePlate) : 0),
+  const fleet = useMemo(() => {
+    const markers = listFleetMarkers(roster);
+    if (!activePlate || !draft) return markers;
+    const patched = markers.map((m) =>
+      m.plate === activePlate ? { ...m, lat: draft.lat, lng: draft.lng, label: draft.label || m.label } : m
+    );
+    if (patched.some((m) => m.plate === activePlate)) return patched;
+    return [...patched, { plate: activePlate, lat: draft.lat, lng: draft.lng, label: draft.label || '', updatedAt: 0 }];
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [activePlate, tick, forceFetchNonce]
-  );
+  }, [roster, tick, parked?.lat, parked?.lng, activePlate, draft?.lat, draft?.lng, draft?.label]);
+
+  const located = useMemo(() => locatedFleet(fleet), [fleet]);
+  const canFitAll = canFitFleet(located);
+  const tooFar = isAll && located.length >= 2 && !canFitAll;
 
   useEffect(() => {
     if (activePlate) saveSelectedCarPlate(activePlate);
@@ -123,7 +124,7 @@ function ParkingActions() {
       setTick((n) => n + 1);
       return {
         status: existing ? 'synced' : 'empty',
-        note: existing ? '雲端尚無紀錄，顯示本機快取' : '尚無此車牌的車位紀錄',
+        note: existing ? '雲端尚無紀錄，顯示本機快取' : '尚無此車牌的位置',
       };
     }
     const local = parkedDtoToLocal(dto, plate);
@@ -142,7 +143,7 @@ function ParkingActions() {
       setDraft(next);
       commitBaseline(next);
       markParkedFetched(plate);
-      return { status: 'synced', note: '已從雲端同步車位' };
+      return { status: 'synced', note: '已從雲端同步' };
     }
     markParkedFetched(plate);
     setTick((n) => n + 1);
@@ -160,8 +161,8 @@ function ParkingActions() {
         setSyncStatus(existing ? 'cached' : 'empty');
         setSyncNote(
           existing
-            ? `1 小時內已讀取（${formatFetchAge(loadParkedFetchAt(plate))}）· 點「重新撈取」可更新`
-            : `1 小時內已查過雲端，尚無紀錄 · 點「重新撈取」可再查`
+            ? `1 小時內已讀取（${formatFetchAge(loadParkedFetchAt(plate))}）`
+            : '1 小時內已查過雲端，尚無紀錄'
         );
         return;
       }
@@ -172,14 +173,14 @@ function ParkingActions() {
         setSyncStatus(existing ? 'cached' : 'empty');
         setSyncNote(
           existing
-            ? '稍早已向雲端查過，先用本機快取 · 避免重整刷爆額度'
-            : '稍早已向雲端查過 · 點「重新撈取」才會再打 GAS'
+            ? '稍早已向雲端查過，先用本機快取'
+            : '稍早已向雲端查過'
         );
         return;
       }
 
       setSyncStatus('loading');
-      setSyncNote(force ? `正在重新撈取 ${plate}…` : `正在讀取 ${plate} 的車位…`);
+      setSyncNote(force ? `正在重新撈取 ${plate}…` : `正在讀取 ${plate}…`);
       const existingLocal = loadParkedForCar(plate);
       if (force && !existingLocal) setMapLocked(true);
       else setMapLocked(false);
@@ -212,11 +213,11 @@ function ParkingActions() {
         setSyncNote(
           timedOut
             ? existing
-              ? '讀取逾時（3秒），已解鎖地圖 · 顯示本機快取'
-              : '讀取逾時（3秒），已解鎖地圖 · 可手動選點'
+              ? '讀取逾時，顯示本機快取'
+              : '讀取逾時，可在地圖上選點'
             : existing
-              ? '雲端讀取失敗，已解鎖地圖 · 顯示本機快取'
-              : '雲端讀取失敗，已解鎖地圖 · 可手動選點'
+              ? '雲端讀取失敗，顯示本機快取'
+              : '雲端讀取失敗，可在地圖上選點'
         );
         setMapLocked(false);
       } finally {
@@ -226,7 +227,6 @@ function ParkingActions() {
     [applyCloudParked]
   );
 
-  // Background only: bootstrap / bulk must not block map or save
   useEffect(() => {
     if (bulkPrefetchDone.current) return undefined;
     bulkPrefetchDone.current = true;
@@ -239,7 +239,7 @@ function ParkingActions() {
       setTick((n) => n + 1);
       if (result === 'ok' || result === 'cached' || result === 'cooldown') return;
       if (isBootstrapAttemptCooling()) return;
-      if (DEFAULT_CAR_PLATES.every((p) => isParkedFetchFresh(p))) return;
+      if (roster.every((p) => isParkedFetchFresh(p))) return;
       (async () => {
         try {
           const url = `${API_ENDPOINTS.PARK_LOCATION}?action=getParkedLocations`;
@@ -248,7 +248,10 @@ function ParkingActions() {
           const data = await res.json();
           if (cancelled || !data?.success || !data.byCar) return;
           applyParkedByCar(data.byCar);
-          if (!cancelled) setTick((n) => n + 1);
+          if (!cancelled) {
+            setTick((n) => n + 1);
+            setFitNonce((n) => n + 1);
+          }
         } catch (err) {
           console.warn('getParkedLocations failed', err);
         }
@@ -258,13 +261,18 @@ function ParkingActions() {
       cancelled = true;
       unsub();
     };
-  }, []);
+  }, [roster]);
 
-  // Auto-fetch when plate changes (skipped if fresh within 1h)
   useEffect(() => {
-    if (!activePlate) {
-      setSyncStatus('idle');
-      setSyncNote('');
+    if (isAll) {
+      setSyncStatus(located.length ? 'synced' : 'empty');
+      setSyncNote(
+        located.length
+          ? `地圖顯示 ${located.length} 輛`
+          : roster.length
+            ? '尚無已記錄的位置'
+            : '請新增車輛'
+      );
       setMapLocked(false);
       return undefined;
     }
@@ -272,26 +280,49 @@ function ParkingActions() {
       fetchParkedFromCloud(activePlate, { force: false });
     }, 280);
     return () => clearTimeout(timer);
-  }, [activePlate, fetchParkedFromCloud]);
+  }, [isAll, activePlate, fetchParkedFromCloud, located.length, roster.length]);
 
-  // Manual「重新撈取」only
   useEffect(() => {
-    if (!forceFetchNonce || !activePlate) return undefined;
+    if (!forceFetchNonce) return undefined;
+    if (isAll) {
+      (async () => {
+        setSyncStatus('loading');
+        setSyncNote('正在重新撈取全部…');
+        try {
+          const url = `${API_ENDPOINTS.PARK_LOCATION}?action=getParkedLocations`;
+          const res = await fetch(url);
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const data = await res.json();
+          if (!data?.success) throw new Error(data?.error || '讀取失敗');
+          applyParkedByCar(data.byCar);
+          setTick((n) => n + 1);
+          setFitNonce((n) => n + 1);
+          setSyncStatus('synced');
+          setSyncNote('已同步全部');
+        } catch (err) {
+          console.warn(err);
+          setSyncStatus('error');
+          setSyncNote('雲端讀取失敗，顯示本機');
+        }
+      })();
+      return undefined;
+    }
+    if (!activePlate) return undefined;
     fetchParkedFromCloud(activePlate, { force: true });
     return undefined;
-  }, [forceFetchNonce]); // eslint-disable-line react-hooks/exhaustive-deps -- intentional: only on manual bump
+  }, [forceFetchNonce]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleForceFetch = () => {
-    if (!activePlate || syncStatus === 'loading') return;
+    if (syncStatus === 'loading') return;
     setForceFetchNonce((n) => n + 1);
   };
 
   const resolveDraftForPlate = (plate) => {
     if (!plate) {
       return {
-        lat: smartLoc?.lat ?? DEFAULT_MAP_CENTER.lat,
-        lng: smartLoc?.lng ?? DEFAULT_MAP_CENTER.lng,
-        label: smartLoc?.label || '',
+        lat: DEFAULT_MAP_CENTER.lat,
+        lng: DEFAULT_MAP_CENTER.lng,
+        label: '',
       };
     }
     const saved = loadParkedForCar(plate);
@@ -302,13 +333,6 @@ function ParkingActions() {
         label: saved.label || '',
       };
     }
-    if (smartLoc) {
-      return {
-        lat: smartLoc.lat,
-        lng: smartLoc.lng,
-        label: smartLoc.label || '',
-      };
-    }
     return {
       lat: DEFAULT_MAP_CENTER.lat,
       lng: DEFAULT_MAP_CENTER.lng,
@@ -316,25 +340,61 @@ function ParkingActions() {
     };
   };
 
-  // When switching car: parked → smart cache → default map center (still usable)
   useEffect(() => {
+    if (isAll) return;
     const next = resolveDraftForPlate(activePlate);
     setDraft(next);
     commitBaseline(next);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activePlate, parked?.lat, parked?.lng, parked?.label, smartLoc]);
+  }, [activePlate, parked?.lat, parked?.lng, parked?.label, isAll]);
 
   const selectPlate = (plate) => {
-    setPlateMode(plate);
-    // Sync draft immediately so flyTo uses this plate's coords (not previous car)
-    const nextPlate = plate === 'other' ? (customPlate || '').trim().toUpperCase() : plate;
-    const next = resolveDraftForPlate(nextPlate || null);
+    setAdding(false);
+    setMessage('');
+    if (plate === ALL_VEHICLES) {
+      setSelection(ALL_VEHICLES);
+      setDraft(null);
+      setBaseline(null);
+      if (canFitFleet(locatedFleet(listFleetMarkers(roster)))) {
+        setFitNonce((n) => n + 1);
+      }
+      return;
+    }
+    setSelection(plate);
+    const next = resolveDraftForPlate(plate);
     setDraft(next);
     commitBaseline(next);
     setMapFocusNonce((n) => n + 1);
   };
 
-  const isDirty = Boolean(draft && baseline && !sameCoord(draft, baseline));
+  const handleAddVehicle = (e) => {
+    e?.preventDefault?.();
+    const plate = normalizePlate(newPlate);
+    if (!plate) {
+      setMessage('請輸入車牌');
+      return;
+    }
+    const nextRoster = addVehicle(plate);
+    setRoster(nextRoster);
+    setNewPlate('');
+    setAdding(false);
+    selectPlate(plate);
+    setMessage(`已加入 ${plate}`);
+  };
+
+  const handleRemoveVehicle = () => {
+    if (!activePlate) return;
+    if (!window.confirm(`刪除 ${activePlate}？地圖上不再顯示，過去記錄會保留。`)) return;
+    const nextRoster = removeVehicle(activePlate);
+    setRoster(nextRoster);
+    setSelection(ALL_VEHICLES);
+    setDraft(null);
+    setBaseline(null);
+    setFitNonce((n) => n + 1);
+    setMessage(`已刪除 ${activePlate}，過去記錄仍保留`);
+  };
+
+  const isDirty = Boolean(!isAll && draft && baseline && !sameCoord(draft, baseline));
 
   const vehicleAnchor = useMemo(() => {
     if (parked && typeof parked.lat === 'number') {
@@ -348,10 +408,23 @@ function ParkingActions() {
     if (!baseline) return;
     setDraft({ ...baseline });
     setMapFocusNonce((n) => n + 1);
-    setMessage('已還原到原始座標');
+    setMessage('已還原');
   };
 
   const returnToVehicle = () => {
+    if (isAll) {
+      if (tooFar) {
+        setMessage('車輛太遠，無法同時顯示');
+        return;
+      }
+      if (!located.length) {
+        setMessage('尚無車輛位置可返回');
+        return;
+      }
+      setFitNonce((n) => n + 1);
+      setMessage(located.length === 1 ? '已返回車輛' : '已顯示全部車輛');
+      return;
+    }
     if (!vehicleAnchor) {
       setMessage('尚無車輛位置可返回');
       return;
@@ -361,55 +434,11 @@ function ParkingActions() {
       lng: vehicleAnchor.lng,
       nonce: prev.nonce + 1,
     }));
-    setMessage('已返回車輛位置視角');
-  };
-
-  const seedFromCache = () => {
-    if (!smartLoc) {
-      setDraft({
-        lat: DEFAULT_MAP_CENTER.lat,
-        lng: DEFAULT_MAP_CENTER.lng,
-        label: '',
-      });
-      setMessage('尚無上次定位，已放到預設地圖中心 — 請直接點地圖選點');
-      return;
-    }
-    setDraft({
-      lat: smartLoc.lat,
-      lng: smartLoc.lng,
-      label: smartLoc.label || '',
-    });
-    setMapFocusNonce((n) => n + 1);
-    setMessage('已移到上次定位位置，可拖曳微調');
-  };
-
-  const seedFromGps = async () => {
-    setIsSeeding(true);
-    setMessage('');
-    try {
-      const coords = await refreshLocation({ slowPromptMs: 3000 });
-      setDraft({
-        lat: coords.lat,
-        lng: coords.lng,
-        label: coords.label || '',
-      });
-      setMapFocusNonce((n) => n + 1);
-      setMessage('已移到目前 GPS 位置，可拖曳微調');
-    } catch (err) {
-      setDraft((prev) =>
-        prev || {
-          lat: DEFAULT_MAP_CENTER.lat,
-          lng: DEFAULT_MAP_CENTER.lng,
-          label: '',
-        }
-      );
-      setMessage('無法取得 GPS，請直接在地圖上點選');
-    } finally {
-      setIsSeeding(false);
-    }
+    setMessage('已返回車輛');
   };
 
   const handleMapChange = (lat, lng) => {
+    if (isAll) return;
     setDraft((prev) => ({
       lat,
       lng,
@@ -419,7 +448,7 @@ function ParkingActions() {
 
   const handlePark = async () => {
     if (!activePlate) {
-      setMessage('請選擇或輸入車牌');
+      setMessage('請先選擇車輛');
       return;
     }
     if (!draft) {
@@ -430,19 +459,8 @@ function ParkingActions() {
     setIsSaving(true);
     setMessage('');
     try {
-      let lat = draft.lat;
-      let lng = draft.lng;
-      if (locationMode === 'live') {
-        const gps = await resolveForAction();
-        const pinMoved =
-          smartLoc &&
-          (Math.abs(draft.lat - smartLoc.lat) > 0.00025 ||
-            Math.abs(draft.lng - smartLoc.lng) > 0.00025);
-        if (gps && !pinMoved) {
-          lat = gps.lat;
-          lng = gps.lng;
-        }
-      }
+      const lat = draft.lat;
+      const lng = draft.lng;
       const id = Date.now();
       const payload = {
         id,
@@ -470,8 +488,8 @@ function ParkingActions() {
       const result = await enqueueAndSend(payload);
       setMessage(
         result.sent
-          ? `已記下 ${activePlate} 車位`
-          : `已暫存 ${activePlate} 車位（離線佇列）`
+          ? `已記下 ${activePlate} 位置`
+          : `已暫存 ${activePlate} 位置（離線佇列）`
       );
       markParkedFetched(activePlate);
       setTick((n) => n + 1);
@@ -487,7 +505,7 @@ function ParkingActions() {
   const handleNavigate = () => {
     const target = parked || draft;
     if (!target) {
-      setMessage(activePlate ? `${activePlate} 尚無車位` : '請先選擇車牌');
+      setMessage(activePlate ? `${activePlate} 尚無位置` : '請先選擇車輛');
       return;
     }
     window.open(
@@ -497,23 +515,47 @@ function ParkingActions() {
     );
   };
 
+  const jumpExpense = (subcat) => {
+    if (!activePlate) return;
+    navigate(ROUTES.EXPENSE, {
+      query: {
+        cat: VEHICLE_EXPENSE_CAT,
+        subcat,
+        carPlate: activePlate,
+      },
+    });
+  };
+
+  const returnDisabled = isAll
+    ? !located.length || tooFar || mapLocked
+    : !vehicleAnchor || mapLocked;
+  const returnTitle = tooFar
+    ? '車輛太遠，無法同時顯示'
+    : isAll
+      ? '視角涵蓋全部車輛'
+      : '地圖視角回到車輛（不改標記）';
+
   return (
     <div className="entry-card parking-actions">
       <div className="entry-card-header">
-        <span>🚗 車輛位置</span>
-        {activePlate ? (
-          <span className="entry-route-badge">{activePlate}</span>
-        ) : null}
+        <span>🚗 車輛</span>
+        <span className="entry-route-badge">{isAll ? '全部' : activePlate}</span>
       </div>
 
       <section className="parking-section">
-        <label className="entry-field-label">選擇車輛</label>
         <div className="entry-chip-row">
-          {presetPlates.map((plate) => (
+          <button
+            type="button"
+            className={`entry-chip ${isAll ? 'active' : ''}`}
+            onClick={() => selectPlate(ALL_VEHICLES)}
+          >
+            全部
+          </button>
+          {roster.map((plate) => (
             <button
               key={plate}
               type="button"
-              className={`entry-chip ${plateMode === plate ? 'active' : ''}`}
+              className={`entry-chip ${selection === plate ? 'active' : ''}`}
               onClick={() => selectPlate(plate)}
             >
               {plate}
@@ -521,19 +563,28 @@ function ParkingActions() {
           ))}
           <button
             type="button"
-            className={`entry-chip ${plateMode === 'other' ? 'active' : ''}`}
-            onClick={() => selectPlate('other')}
+            className={`entry-chip ${adding ? 'active' : ''}`}
+            onClick={() => {
+              setAdding((v) => !v);
+              setNewPlate('');
+            }}
           >
-            其他
+            新增
           </button>
         </div>
-        {plateMode === 'other' && (
-          <input
-            className="entry-text-input"
-            value={customPlate}
-            onChange={(e) => setCustomPlate(e.target.value.toUpperCase())}
-            placeholder="輸入車牌"
-          />
+        {adding && (
+          <form className="vehicle-add-row" onSubmit={handleAddVehicle}>
+            <input
+              className="entry-text-input"
+              value={newPlate}
+              onChange={(e) => setNewPlate(e.target.value.toUpperCase())}
+              placeholder="車牌"
+              autoFocus
+            />
+            <button type="submit" className="location-search-btn">
+              加入
+            </button>
+          </form>
         )}
       </section>
 
@@ -546,18 +597,12 @@ function ParkingActions() {
           {syncStatus === 'loading' && (
             <>
               <span className="parking-sync-spinner" aria-hidden />
-              <span>{syncNote || '正在讀取車位…'}</span>
+              <span>{syncNote || '讀取中…'}</span>
             </>
           )}
-          {syncStatus === 'synced' && <span>{syncNote || '已同步'}</span>}
-          {syncStatus === 'cached' && (
-            <span>{syncNote || `沿用快取（${formatFetchAge(lastFetchAt)}）`}</span>
-          )}
-          {syncStatus === 'empty' && <span>{syncNote || '尚無車位紀錄'}</span>}
-          {syncStatus === 'error' && <span>{syncNote || '讀取失敗'}</span>}
-          {syncStatus === 'idle' && <span>選擇車牌後會自動讀取雲端車位</span>}
+          {syncStatus !== 'loading' && <span>{syncNote || '選擇車輛'}</span>}
         </div>
-        {activePlate && syncStatus !== 'loading' && syncStatus !== 'idle' && (
+        {syncStatus !== 'loading' && (
           <button
             type="button"
             className="parking-sync-refresh"
@@ -570,53 +615,28 @@ function ParkingActions() {
       </div>
 
       <section className="parking-section">
-        <label className="entry-field-label">把標記移到</label>
-        <div className="parking-seed-row parking-seed-row--3">
-          <button
-            type="button"
-            className="parking-seed-btn"
-            onClick={seedFromCache}
-            disabled={!hasLocation || mapLocked}
-            title={hasLocation ? '使用 App 上次定位快取' : '尚無上次定位'}
-          >
-            <span className="parking-seed-btn-title">上次定位</span>
-            <span className="parking-seed-btn-sub">
-              {hasLocation ? '本機快取座標' : '尚無快取'}
-            </span>
-          </button>
-          <button
-            type="button"
-            className="parking-seed-btn"
-            onClick={seedFromGps}
-            disabled={isSeeding || mapLocked}
-            title="向系統重新取得目前 GPS"
-          >
-            <span className="parking-seed-btn-title">
-              {isSeeding ? '定位中…' : '目前 GPS'}
-            </span>
-            <span className="parking-seed-btn-sub">重新定位並移過去</span>
-          </button>
-          <button
-            type="button"
-            className="parking-seed-btn"
-            onClick={returnToVehicle}
-            disabled={!vehicleAnchor || mapLocked}
-            title="地圖視角回到車輛位置（不改標記，方便你逛完地圖回來）"
-          >
-            <span className="parking-seed-btn-title">返回車輛</span>
-            <span className="parking-seed-btn-sub">只移動視角</span>
-          </button>
-        </div>
+        <button
+          type="button"
+          className="parking-seed-btn parking-seed-btn--return"
+          onClick={returnToVehicle}
+          disabled={returnDisabled}
+          title={returnTitle}
+        >
+          <span className="parking-seed-btn-title">返回車輛</span>
+          <span className="parking-seed-btn-sub">
+            {tooFar ? '車輛太遠，無法同時顯示' : isAll ? '涵蓋全部' : '只移動視角'}
+          </span>
+        </button>
       </section>
 
       <ParkingMapPreview
         lat={draft?.lat}
         lng={draft?.lng}
         onChange={handleMapChange}
-        editable
+        editable={!isAll}
         interactive={!mapLocked}
-        lockReason={mapLocked ? syncNote || '讀取車位中…' : ''}
-        focusKey={activePlate || plateMode}
+        lockReason={mapLocked ? syncNote || '讀取中…' : ''}
+        focusKey={activePlate || selection}
         focusNonce={mapFocusNonce}
         originLat={baseline?.lat}
         originLng={baseline?.lng}
@@ -624,9 +644,15 @@ function ParkingActions() {
         cameraLat={cameraFocus.lat}
         cameraLng={cameraFocus.lng}
         cameraNonce={cameraFocus.nonce}
+        fleet={fleet}
+        activePlate={activePlate}
+        onSelectPlate={selectPlate}
+        fitNonce={fitNonce}
+        viewMode={isAll ? 'fleet' : 'single'}
+        fitEnabled={canFitAll}
       />
 
-      {draft && (
+      {!isAll && draft && (
         <div className={`parking-coord-card${isDirty ? ' is-dirty' : ''}`}>
           <div className="parking-coord-main">
             <span className="parking-coord-label">
@@ -653,13 +679,6 @@ function ParkingActions() {
                 >
                   還原
                 </button>
-                <button
-                  type="button"
-                  className="parking-dirty-btn parking-dirty-btn--cancel"
-                  onClick={restoreOriginal}
-                >
-                  取消
-                </button>
               </div>
             </div>
           )}
@@ -677,31 +696,53 @@ function ParkingActions() {
                 {formatFullTimestamp(parked.updatedAt)}
               </time>
             </div>
-          ) : syncStatus === 'loading' ? (
-            <div className="parking-saved-meta parking-saved-meta--muted">
-              正在確認上次儲存時間…
-            </div>
           ) : null}
         </div>
       )}
 
+      {!isAll && activePlate && (
+        <div className="vehicle-shortcuts">
+          {VEHICLE_EXPENSE_SHORTCUTS.map((item) => (
+            <button
+              key={item.subcat}
+              type="button"
+              className="vehicle-shortcut-btn"
+              onClick={() => jumpExpense(item.subcat)}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+      )}
+
       <div className="entry-btn-row parking-actions-row">
-        <button
-          type="button"
-          className="entry-primary-btn"
-          onClick={handlePark}
-          disabled={isSaving || !activePlate || !draft}
-        >
-          {isSaving ? '儲存中…' : '記車位'}
-        </button>
+        {!isAll && (
+          <button
+            type="button"
+            className="entry-primary-btn"
+            onClick={handlePark}
+            disabled={isSaving || !activePlate || !draft}
+          >
+            {isSaving ? '儲存中…' : '儲存位置'}
+          </button>
+        )}
         <button
           type="button"
           className="entry-secondary-btn"
           onClick={handleNavigate}
-          disabled={!parked && !draft}
+          disabled={isAll ? located.length !== 1 : !parked && !draft}
         >
-          導航找車
+          導航
         </button>
+        {!isAll && activePlate && (
+          <button
+            type="button"
+            className="landmark-delete-btn"
+            onClick={handleRemoveVehicle}
+          >
+            刪除車輛
+          </button>
+        )}
       </div>
 
       {message && <div className="entry-message">{message}</div>}

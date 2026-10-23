@@ -62,6 +62,12 @@ export const CALENDAR_TRACK_PARAMS = [
     note: '本地牆鐘。有則可重送；沒帶用收到當下',
   },
   {
+    name: 'timestampMs',
+    required: '建議',
+    example: '1780873783000',
+    note: '毫秒 epoch。有則以此刻為準，避免牆鐘解析落到「現在」',
+  },
+  {
     name: 'lat',
     required: 'optional',
     example: '1.3133',
@@ -103,6 +109,12 @@ export const CALENDAR_TRACK_PARAMS = [
     example: '0',
     note: '預設 0。start 時 1：結束任何進行中（含既有行程）再開新的',
   },
+  {
+    name: 'lookbackDays',
+    required: 'optional',
+    example: '3',
+    note: '搜尋過去 N 天內尚未結束的行程（1–14，預設 3）。End / End All / End+Start 會用到',
+  },
 ];
 
 /** POST/queue body for trackCalendar (same fields as the GAS URL). */
@@ -126,6 +138,7 @@ export function calendarActionPayload({
     title: title || '',
     prefix,
     timestamp: stampCalendarTimestamp(when instanceof Date ? when : new Date()),
+    timestampMs: (when instanceof Date ? when : new Date()).getTime(),
     latitude: lat ?? null,
     longitude: lng ?? null,
     endExisting,
@@ -136,6 +149,23 @@ export function calendarActionPayload({
   };
 }
 
+/** Compact relative gap: (47m), (1h47m), (1d2h47m33s). */
+export function formatTrailGap(ms) {
+  if (!Number.isFinite(ms) || ms < 1000) return '';
+  const totalSec = Math.floor(ms / 1000);
+  const d = Math.floor(totalSec / 86400);
+  const h = Math.floor((totalSec % 86400) / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  const parts = [];
+  if (d) parts.push(`${d}d`);
+  if (h) parts.push(`${h}h`);
+  if (m) parts.push(`${m}m`);
+  if (s) parts.push(`${s}s`);
+  if (!parts.length) return '';
+  return ` - (${parts.join('')})`;
+}
+
 /** Description lines GAS writes onto the calendar event. */
 export function buildCalendarTrailPreview({
   when,
@@ -143,14 +173,18 @@ export function buildCalendarTrailPreview({
   lat = null,
   lng = null,
   marker = '**start**',
+  prevWhen = null,
 } = {}) {
   const prefixPart = String(prefix || '').trim() || '-no input-';
   const hasCoords =
     lat != null && lng != null && Number.isFinite(Number(lat)) && Number.isFinite(Number(lng));
   const maps = hasCoords ? `@http://maps.google.com/maps?q=${lat},${lng}` : '';
+  const at = when instanceof Date ? when : new Date();
+  const prev = prevWhen instanceof Date && !Number.isNaN(prevWhen.getTime()) ? prevWhen : null;
+  const gap = prev ? formatTrailGap(at.getTime() - prev.getTime()) : '';
   return {
     marker,
-    line: `[${stampCalendarTimestamp(when instanceof Date ? when : new Date())}][${prefixPart}]${maps}`,
+    line: `[${stampCalendarTimestamp(at)}][${prefixPart}]${maps}${gap}`,
   };
 }
 
@@ -189,6 +223,7 @@ export function buildCalendarTrackUrl(params, base = calendarTrackEndpoint()) {
     'title',
     'prefix',
     'timestamp',
+    'timestampMs',
     'lat',
     'lng',
     'latlong',

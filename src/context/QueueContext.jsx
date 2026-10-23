@@ -76,11 +76,16 @@ export function QueueProvider({ children }) {
       const { signal } = opts;
       const id = payload.id ?? payload.timestamp_ms ?? Date.now();
       const body = { ...payload, id };
-      if (
-        body.action === 'trackCalendar' &&
-        (body.timestamp == null || String(body.timestamp).trim() === '')
-      ) {
-        body.timestamp = stampCalendarTimestamp();
+      if (body.action === 'trackCalendar') {
+        const missingStamp =
+          body.timestamp == null || String(body.timestamp).trim() === '';
+        if (missingStamp) {
+          const now = new Date();
+          body.timestamp = stampCalendarTimestamp(now);
+          if (body.timestampMs == null || body.timestampMs === '') {
+            body.timestampMs = now.getTime();
+          }
+        }
       }
 
       if (signal?.aborted) {

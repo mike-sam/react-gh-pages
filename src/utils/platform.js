@@ -40,6 +40,7 @@ export function stringifyCalendarTrackInput(payload) {
     title: payload.title || '',
     prefix: payload.prefix || '',
     timestamp: payload.timestamp,
+    timestampMs: payload.timestampMs,
     latitude: payload.latitude ?? payload.lat ?? null,
     longitude: payload.longitude ?? payload.lng ?? null,
     endExisting: payload.endExisting,

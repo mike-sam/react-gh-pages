@@ -4,6 +4,7 @@ import UnifiedInput from './components/UnifiedInput';
 import NumberPad from './components/NumberPad';
 import { API_ENDPOINTS } from './config';
 import { getKeyValue } from './utils/keyValueCache';
+import { loadVehicleRoster, vehicleNeedsOdo } from './utils/vehicles';
 
 function Remark({ remark, setRemark, setCarPlate, carPlate, selectedTag, input, amount, onItemizedTotalChange, mileage, setMileage, tripInfo, setTripInfo, simpleDescription, setSimpleDescription, onFuelDataChange, onPhotoAdd, hideDescriptionHeader}) {
     const [fuelPrice, setFuelPrice] = useState('2.05');
@@ -85,7 +86,7 @@ function Remark({ remark, setRemark, setCarPlate, carPlate, selectedTag, input, 
         setUserEditedTripInfo(false);
     };
 
-    const carPlates = ['PPQ8777', 'WD6060E'];
+    const carPlates = loadVehicleRoster();
 
     useEffect(() => {
         if (selectedTag === '交通出行' && input === '打油' && tripInfo && amount) {
@@ -192,7 +193,7 @@ function Remark({ remark, setRemark, setCarPlate, carPlate, selectedTag, input, 
                             />
                         </div>
                     )}
-                    {!['车贷','洗车美容'].includes(input) && (
+                    {vehicleNeedsOdo(selectedTag, input) && (
                         <div className="input-group">
                             <NumberPad 
                                 value={mileage} 
@@ -631,7 +632,7 @@ function Remark({ remark, setRemark, setCarPlate, carPlate, selectedTag, input, 
                     `RM${anotherAveragePrice}/km[${anotherFuelType}]`,
                     `${averageLitterPer100Km} litter for 100 km`,
                 ],
-                mileage: !['车贷','洗车美容'].includes(input) && 
+                mileage: vehicleNeedsOdo(selectedTag, input) &&
                     mileage && `ODO: ${mileage}`
             };
     
@@ -700,77 +701,59 @@ function Remark({ remark, setRemark, setCarPlate, carPlate, selectedTag, input, 
         return () => clearTimeout(timer);
     }, [selectedTag, input]);
     
-    // 当选择车牌且是"交通出行"时，自动获取最新里程数（所有交通出行分类都需要）
+    // 打油 / 維修 / 車險 / 停車才拉上次 ODO；洗車美容、車貸不查
     useEffect(() => {
+        let cancelled = false;
         const fetchMileageData = async () => {
-            // 选择"交通出行"且有车牌号时获取（不只是打油）
-            const vehicleRelated = ['打油', '洗车美容', '维修保养', '车险', '停车费', '车贷'];
-            if (selectedTag === '交通出行' && vehicleRelated.includes(input) && carPlate && carPlate !== 'other' && !isLoadingMileage) {
-                setIsLoadingMileage(true);
-                try {
-                    // 根据 tag 和 input 生成 group，格式为 tag|input
-                    const group = selectedTag && input ? `${selectedTag}|${input}` : '打油';
-                    const url = `${API_ENDPOINTS.MILEAGE_DATA}?action=getMileageData&carPlate=${encodeURIComponent(carPlate)}&group=${encodeURIComponent(group)}`;
-                    const response = await fetch(url);
-                    
-                    if (response.ok) {
-                        const data = await response.json();
-                        console.log('Mileage API response:', data);
-                        
-                        if (data.success && data.mileageData) {
-                            const mileageData = data.mileageData;
-                            const latestMileage = mileageData.latestMileage;
-                            const latestRecord = mileageData.records && mileageData.records.length > 0 ? mileageData.records[0] : null;
-                            
-                            console.log('Mileage data:', {
-                                latestMileage,
-                                recordsCount: mileageData.records ? mileageData.records.length : 0,
-                                latestRecord
-                            });
-                            
-                            setLastMileage(latestMileage);
-                            
-                            // 保存最后一次记录信息（里程数和时间）
-                            if (latestRecord) {
-                                setLastMileageRecord({
-                                    mileage: latestRecord.mileage,
-                                    recordTime: latestRecord.recordTime,
-                                    expenseType: latestRecord.expenseType
-                                });
-                            } else {
-                                setLastMileageRecord(null);
-                            }
-                            
-                            if (latestMileage > 0) {
-                                console.log(`已获取车牌 ${carPlate} 的最新里程数: ${latestMileage}`, latestRecord);
-                            } else {
-                                console.warn(`车牌 ${carPlate} 没有找到里程记录，Mileage sheet可能是空的`);
-                            }
-                        } else {
-                            console.warn('获取里程数据失败:', data.error || '未知错误');
-                        }
-                    } else {
-                        console.error('API请求失败:', response.status, response.statusText);
-                    }
-                } catch (error) {
-                    console.warn('获取里程数据失败:', error);
-                    // 静默失败，不影响用户体验
-                } finally {
-                    setIsLoadingMileage(false);
-                }
-            } else {
-                // 如果条件不满足，清空上次里程数和记录
+            const shouldFetch =
+                vehicleNeedsOdo(selectedTag, input) &&
+                carPlate &&
+                carPlate !== 'other';
+            if (!shouldFetch) {
                 setLastMileage(null);
                 setLastMileageRecord(null);
+                return;
+            }
+            setIsLoadingMileage(true);
+            try {
+                const group = `${selectedTag}|${input}`;
+                const url = `${API_ENDPOINTS.MILEAGE_DATA}?action=getMileageData&carPlate=${encodeURIComponent(carPlate)}&group=${encodeURIComponent(group)}`;
+                const response = await fetch(url);
+
+                if (cancelled) return;
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.success && data.mileageData) {
+                        const mileageData = data.mileageData;
+                        const latestMileage = mileageData.latestMileage;
+                        const latestRecord = mileageData.records && mileageData.records.length > 0 ? mileageData.records[0] : null;
+                        setLastMileage(latestMileage);
+                        if (latestRecord) {
+                            setLastMileageRecord({
+                                mileage: latestRecord.mileage,
+                                recordTime: latestRecord.recordTime,
+                                expenseType: latestRecord.expenseType
+                            });
+                        } else {
+                            setLastMileageRecord(null);
+                        }
+                    }
+                }
+            } catch (error) {
+                console.warn('获取里程数据失败:', error);
+            } finally {
+                if (!cancelled) setIsLoadingMileage(false);
             }
         };
 
-        // 延迟一下，避免频繁请求
         const timer = setTimeout(() => {
             fetchMileageData();
         }, 300);
 
-        return () => clearTimeout(timer);
+        return () => {
+            cancelled = true;
+            clearTimeout(timer);
+        };
     }, [carPlate, selectedTag, input]);
 
     // 換車牌／分類時重算編輯旗標；AJAX 回來不覆蓋手輸

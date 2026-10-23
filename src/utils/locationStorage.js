@@ -97,9 +97,9 @@ export function loadParkedForCar(plate) {
 
 export function loadSelectedCarPlate() {
   try {
-    return localStorage.getItem(SELECTED_CAR_KEY) || DEFAULT_CAR_PLATES[0];
+    return localStorage.getItem(SELECTED_CAR_KEY) || '';
   } catch {
-    return DEFAULT_CAR_PLATES[0];
+    return '';
   }
 }
 

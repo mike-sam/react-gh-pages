@@ -96,6 +96,7 @@ export function parseExpenseQuickDraft(paymentOptions) {
 
   const cat = (p.get('cat') || '').trim();
   const subcat = (p.get('subcat') || p.get('txt') || p.get('tag') || '').trim();
+  const carPlate = (p.get('carPlate') || p.get('plate') || '').trim().toUpperCase();
   const amountRaw = (p.get('amount') || '').trim();
   const desc = (p.get('desc') || p.get('remark') || '').trim();
   const currency = (p.get('currency') || 'MYR').trim().toUpperCase() || 'MYR';
@@ -119,6 +120,8 @@ export function parseExpenseQuickDraft(paymentOptions) {
     'txt',
     'tag',
     'remark',
+    'carPlate',
+    'plate',
   ].some((k) => String(p.get(k) || '').trim() !== '');
 
   const paymentMethod = resolvePaymentMethod(paymentRaw, paymentOptions);
@@ -136,6 +139,7 @@ export function parseExpenseQuickDraft(paymentOptions) {
     hasQuickKeys,
     cat: cat || null,
     subcat: subcat || null,
+    carPlate: carPlate || null,
     amount: amountRaw || null,
     desc,
     currency,
@@ -158,6 +162,7 @@ export const EXPENSE_URL_PARAMS = [
   { name: 'currency', required: 'optional', example: 'MYR', note: '預設 MYR' },
   { name: 'timestamp', required: 'optional', example: '2026-10-22 21:00:00', note: '記帳時間' },
   { name: 'latlong', required: 'optional', example: '3.14,101.68', note: '座標，可加 ,Label' },
+  { name: 'carPlate', required: 'optional', example: 'PPQ8777', note: '車牌。別名 plate' },
   { name: 'silent', required: 'optional', example: 'true', note: '必填齊全才自動送出' },
 ];
 

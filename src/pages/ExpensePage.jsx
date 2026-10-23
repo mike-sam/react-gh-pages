@@ -14,6 +14,7 @@ import CameraAICapture from '../components/CameraAICapture';
 import { useOfflineQueue } from '../context/QueueContext';
 import { useSmartLocation } from '../hooks/useSmartLocation';
 import { toMapsUrl } from '../utils/locationStorage';
+import { rememberNamedPoint } from '../utils/landmarkRegions';
 import { getBuildVersion } from '../utils/buildInfo';
 import {
   loadExpenseHistory,
@@ -175,6 +176,7 @@ function ExpensePage() {
 
     if (draft.cat) setSelectedTag(draft.cat);
     if (draft.subcat) setInput(draft.subcat);
+    if (draft.carPlate) setCarPlate(draft.carPlate);
     if (draft.amount) {
       setAmount(draft.amount);
       setIsAmountManuallySet(true);
@@ -303,6 +305,9 @@ function ExpensePage() {
       loc = smartLoc;
     }
     const geo = loc ? toMapsUrl(loc.lat, loc.lng, loc.label || '') : resolveGeoUrl();
+    if (loc?.label && typeof loc.lat === 'number' && typeof loc.lng === 'number') {
+      rememberNamedPoint({ lat: loc.lat, lng: loc.lng, name: loc.label });
+    }
     const weekdayNames = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
     // 編輯模式沿用原 id；新筆用當前時間選擇器
     const id = editingId != null ? Number(editingId) : selectedDateTime.getTime();

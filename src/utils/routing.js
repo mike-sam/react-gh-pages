@@ -1,6 +1,6 @@
 /**
  * Lightweight hash routing for GitHub Pages.
- * Examples: #/  #/expense  #/calendar  #/parking
+ * Examples: #/  #/expense  #/calendar  #/vehicles  #/parking  #/regions
  *
  * In-app Back returns to 主頁 (tool pages are not stacked).
  */
@@ -10,6 +10,8 @@ export const ROUTES = {
   EXPENSE: '/expense',
   CALENDAR: '/calendar',
   PARKING: '/parking',
+  VEHICLES: '/vehicles',
+  REGIONS: '/regions',
   OBLIGATIONS: '/obligations',
 };
 

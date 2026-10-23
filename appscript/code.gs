@@ -1705,7 +1705,7 @@ function collectLandmarkRegions() {
   var lastRow = sheet.getLastRow();
   if (lastRow < 2) return [];
   var lastCol = Math.max(sheet.getLastColumn(), 7);
-  var values = sheet.getRange(2, 1, lastRow, lastCol).getValues();
+  var values = sheet.getRange(2, 1, lastRow - 1, lastCol).getValues();
   var regions = [];
   for (var i = 0; i < values.length; i++) {
     var row = values[i];
@@ -1717,10 +1717,24 @@ function collectLandmarkRegions() {
     var radiusM = parseFloat(row[4]);
     if (isNaN(radiusM) || radiusM < 10) radiusM = 150;
     var vertices = [];
+    var shape = 'circle';
     try {
-      if (row[5]) vertices = JSON.parse(row[5].toString());
+      if (row[5]) {
+        var parsedVerts = JSON.parse(row[5].toString());
+        if (Array.isArray(parsedVerts)) {
+          vertices = parsedVerts;
+          shape = parsedVerts.length >= 3 ? 'polygon' : 'circle';
+        } else if (parsedVerts && typeof parsedVerts === 'object') {
+          vertices = Array.isArray(parsedVerts.vertices) ? parsedVerts.vertices : [];
+          shape = (parsedVerts.shape || '').toString().trim();
+          if (shape !== 'rect' && shape !== 'polygon' && shape !== 'circle' && shape !== 'point') {
+            shape = vertices.length >= 3 ? 'polygon' : 'circle';
+          }
+        }
+      }
     } catch (e) {
       vertices = [];
+      shape = 'circle';
     }
     var updatedAt = 0;
     if (row[6] instanceof Date) updatedAt = row[6].getTime();
@@ -1737,10 +1751,64 @@ function collectLandmarkRegions() {
       lng: lng,
       radiusM: radiusM,
       vertices: Array.isArray(vertices) ? vertices : [],
+      shape: shape || 'circle',
       updatedAt: updatedAt || Date.now()
     });
   }
+  var namedPoints = collectNamedLocationPoints();
+  for (var p = 0; p < namedPoints.length; p++) {
+    var pt = namedPoints[p];
+    var dup = false;
+    for (var r = 0; r < regions.length; r++) {
+      if (
+        String(regions[r].name || '').toLowerCase() === String(pt.name || '').toLowerCase() &&
+        calculateDistance(regions[r].lat, regions[r].lng, pt.lat, pt.lng) <= 0.12
+      ) {
+        dup = true;
+        break;
+      }
+    }
+    if (!dup) regions.push(pt);
+  }
   return regions;
+}
+
+function collectNamedLocationPoints() {
+  try {
+    var doc = SpreadsheetApp.openById(sheetId);
+    var sheet = doc.getSheetByName('Location');
+    if (!sheet || sheet.getLastRow() < 2) return [];
+    var values = sheet.getDataRange().getValues();
+    var out = [];
+    for (var i = 1; i < values.length; i++) {
+      var lat = parseFloat(values[i][0]);
+      var lng = parseFloat(values[i][1]);
+      var name = (values[i][2] || '').toString().trim();
+      if (!name || isNaN(lat) || isNaN(lng)) continue;
+      var updatedAt = 0;
+      if (values[i][3] instanceof Date) updatedAt = values[i][3].getTime();
+      else if (values[i][3]) {
+        var parsedT = Date.parse(String(values[i][3]).replace(' ', 'T'));
+        if (!isNaN(parsedT)) updatedAt = parsedT;
+      }
+      out.push({
+        id: 'loc_' + lat.toFixed(5) + '_' + lng.toFixed(5),
+        name: name,
+        latitude: lat,
+        longitude: lng,
+        lat: lat,
+        lng: lng,
+        radiusM: 100,
+        vertices: [],
+        shape: 'point',
+        updatedAt: updatedAt || 1
+      });
+    }
+    return out;
+  } catch (e) {
+    appendLog(['collectNamedLocationPoints', e.toString()]);
+    return [];
+  }
 }
 
 function listLandmarkRegions() {
@@ -1776,7 +1844,14 @@ function upsertLandmarkRegion(data) {
     var id = (data.id || '').toString().trim();
     if (!id) id = 'lr_' + Date.now() + '_' + Math.floor(Math.random() * 10000);
     var vertices = Array.isArray(data.vertices) ? data.vertices : [];
-    var verticesJson = JSON.stringify(vertices);
+    var shape = (data.shape || '').toString().trim();
+    if (shape !== 'rect' && shape !== 'polygon' && shape !== 'circle' && shape !== 'point') {
+      shape = vertices.length >= 3 ? 'polygon' : 'circle';
+    }
+    if (shape === 'point' && (isNaN(parseFloat(data.radiusM)) || parseFloat(data.radiusM) < 10)) {
+      radiusM = 100;
+    }
+    var verticesJson = JSON.stringify({ shape: shape, vertices: vertices });
     var updatedAt = datetimetoYMDHIS();
 
     var sheet = ensureLandmarkRegionSheet();
@@ -1794,7 +1869,7 @@ function upsertLandmarkRegion(data) {
 
     var row = [id, name, lat, lng, radiusM, verticesJson, updatedAt];
     if (rowIndex > 0) {
-      sheet.getRange(rowIndex, 1, rowIndex, 7).setValues([row]);
+      sheet.getRange(rowIndex, 1, 1, 7).setValues([row]);
     } else {
       sheet.appendRow(row);
     }
@@ -1808,6 +1883,7 @@ function upsertLandmarkRegion(data) {
         longitude: lng,
         radiusM: radiusM,
         vertices: vertices,
+        shape: shape,
         updatedAt: Date.now()
       }
     })).setMimeType(ContentService.MimeType.JSON);
@@ -1952,7 +2028,13 @@ function calendarFlag(value, defaultVal) {
   return defaultVal;
 }
 
-function parseCalendarTimestamp(raw) {
+function parseCalendarTimestamp(raw, ms) {
+  if (ms !== undefined && ms !== null && String(ms).trim() !== '') {
+    var epoch = Number(ms);
+    if (!isNaN(epoch) && isFinite(epoch) && epoch > 0) {
+      return new Date(epoch < 1e12 ? epoch * 1000 : epoch);
+    }
+  }
   if (raw === undefined || raw === null || String(raw).trim() === '') {
     return new Date();
   }
@@ -2029,9 +2111,41 @@ function resolveCalendarOp(data) {
 }
 
 /**
- * 格式：[YYYY-MM-DD HH:mm:ss][prefix]place@http://maps.google.com/maps?q=lat,lng
+ * Compact relative gap: (47m), (1h47m), (1d2h47m33s).
+ * Largest unit first; skip zeros.
  */
-function buildCalendarLogLine(prefix, placeName, lat, lng, when) {
+function formatTrailGap(ms) {
+  if (!(ms >= 1000)) return '';
+  var totalSec = Math.floor(ms / 1000);
+  var d = Math.floor(totalSec / 86400);
+  var h = Math.floor((totalSec % 86400) / 3600);
+  var m = Math.floor((totalSec % 3600) / 60);
+  var s = totalSec % 60;
+  var parts = [];
+  if (d) parts.push(d + 'd');
+  if (h) parts.push(h + 'h');
+  if (m) parts.push(m + 'm');
+  if (s) parts.push(s + 's');
+  if (!parts.length) return '';
+  return ' - (' + parts.join('') + ')';
+}
+
+function lastTrailTimestamp(desc) {
+  var lines = (desc || '').toString().split('\n');
+  for (var i = lines.length - 1; i >= 0; i--) {
+    var line = (lines[i] || '').trim();
+    var match = line.match(/^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]/);
+    if (!match) continue;
+    var parsed = parseCalendarTimestamp(match[1]);
+    if (parsed && !isNaN(parsed.getTime())) return parsed;
+  }
+  return null;
+}
+
+/**
+ * 格式：[YYYY-MM-DD HH:mm:ss][prefix]place@http://maps.google.com/maps?q=lat,lng - (1h47m)
+ */
+function buildCalendarLogLine(prefix, placeName, lat, lng, when, prevWhen) {
   var timeStr = formatCalendarStamp(when || new Date());
   var prefixPart = trailPrefix(prefix, '-no input-');
   var placePart = placeName || '';
@@ -2039,7 +2153,11 @@ function buildCalendarLogLine(prefix, placeName, lat, lng, when) {
   if (lat !== undefined && lng !== undefined && !isNaN(lat) && !isNaN(lng)) {
     mapsUrl = 'http://maps.google.com/maps?q=' + lat + ',' + lng;
   }
-  return '[' + timeStr + '][' + prefixPart + ']' + placePart + (mapsUrl ? '@' + mapsUrl : '');
+  var line = '[' + timeStr + '][' + prefixPart + ']' + placePart + (mapsUrl ? '@' + mapsUrl : '');
+  if (prevWhen && when) {
+    line += formatTrailGap(when.getTime() - prevWhen.getTime());
+  }
+  return line;
 }
 
 function descriptionFirstLine(desc) {
@@ -2200,9 +2318,10 @@ function closeCalendarEvent(event, when, trailPfx, placeName, lat, lng) {
   var ts = formatCalendarStamp(when);
   var desc = event.getDescription() || '';
   var skipped = descriptionHasTrail(desc, ts, prefix);
+  var prevWhen = lastTrailTimestamp(desc);
   desc = setFirstLineMarker(desc, CALENDAR_END_MARKER);
   if (!skipped) {
-    desc = appendDescriptionLine(desc, buildCalendarLogLine(prefix, placeName, lat, lng, when));
+    desc = appendDescriptionLine(desc, buildCalendarLogLine(prefix, placeName, lat, lng, when, prevWhen));
   }
   event.setDescription(desc);
   var start = event.getStartTime();
@@ -2239,7 +2358,11 @@ function eventSummaries(events) {
       title: ev.getTitle(),
       start: ev.getStartTime().toISOString(),
       end: ev.getEndTime().toISOString(),
-      marker: descriptionFirstLine(ev.getDescription())
+      marker: descriptionFirstLine(ev.getDescription()),
+      lastTrailAt: (function () {
+        var t = lastTrailTimestamp(ev.getDescription());
+        return t ? t.toISOString() : '';
+      })()
     });
   }
   return out;
@@ -2255,7 +2378,10 @@ function handleCalendarTrack(data) {
     appendLog(['handleCalendarTrack called', JSON.stringify(data)]);
 
     var op = resolveCalendarOp(data);
-    var when = parseCalendarTimestamp(data.timestamp);
+    var when = parseCalendarTimestamp(
+      data.timestamp,
+      data.timestampMs != null ? data.timestampMs : data.timestamp_ms
+    );
     var title = (data.title || '').toString().trim();
     var coords = parseCalendarCoords(data);
     var lat = coords.lat;
@@ -2366,7 +2492,7 @@ function handleCalendarTrack(data) {
         return calendarJson(result);
       }
       var appended = [];
-      var logLine = buildCalendarLogLine(prefix, placeName, lat, lng, when);
+      var logLine = '';
       for (var a = 0; a < targets.length; a++) {
         var ev = targets[a];
         var nextDesc = ev.getDescription() || '';
@@ -2378,6 +2504,8 @@ function handleCalendarTrack(data) {
         ) {
           nextDesc = setFirstLineMarker(nextDesc, CALENDAR_START_MARKER);
         }
+        var prevWhen = lastTrailTimestamp(nextDesc);
+        logLine = buildCalendarLogLine(prefix, placeName, lat, lng, when, prevWhen);
         nextDesc = appendDescriptionLine(nextDesc, logLine);
         ev.setDescription(nextDesc);
         extendEventEnd(ev, when);

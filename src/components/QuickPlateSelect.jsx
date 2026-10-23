@@ -1,15 +1,18 @@
 import React from 'react';
+import {
+  loadVehicleRoster,
+  VEHICLE_EXPENSE_SUBCATS,
+  vehicleNeedsOdo,
+} from '../utils/vehicles';
 
-const DEFAULT_PLATES = ['PPQ8777', 'WD6060E'];
-
-const VEHICLE_SUBCATS = ['打油', '洗车美容', '维修保养', '车险', '停车费', '车贷'];
+const VEHICLE_SUBCATS = VEHICLE_EXPENSE_SUBCATS;
 
 export function needsCarPlate(selectedTag, input) {
   return selectedTag === '交通出行' && VEHICLE_SUBCATS.includes(input);
 }
 
 /** Quick plate chips near amount — triggers Remark mileage AJAX early via setCarPlate */
-function QuickPlateSelect({ selectedTag, input, carPlate, setCarPlate, plates = DEFAULT_PLATES }) {
+function QuickPlateSelect({ selectedTag, input, carPlate, setCarPlate, plates = loadVehicleRoster() }) {
   if (!needsCarPlate(selectedTag, input) || !setCarPlate) return null;
 
   return (
@@ -27,9 +30,9 @@ function QuickPlateSelect({ selectedTag, input, carPlate, setCarPlate, plates = 
           </button>
         ))}
       </div>
-      {carPlate && plates.includes(carPlate) && (
+      {carPlate && plates.includes(carPlate) && vehicleNeedsOdo(selectedTag, input) ? (
         <span className="quick-plate-hint">已選 · 里程預載中</span>
-      )}
+      ) : null}
     </div>
   );
 }

@@ -29,7 +29,7 @@ function HeaderActions({ compact = false }) {
     <div className={`header-actions ${compact ? 'header-actions-compact' : ''}`}>
       <QueueStatusBadge />
       {locationMode === 'live' && (
-        <span className="location-mode-live-hint" title="每次記帳、行事曆、記車位會先實時 GPS">
+        <span className="location-mode-live-hint" title="每次記帳、行事曆會先實時 GPS">
           實時
         </span>
       )}

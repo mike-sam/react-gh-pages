@@ -37,7 +37,11 @@ function CalendarTracker() {
   const [status, setStatus] = useState(() => loadCalendarStatus());
   const [actionTime, setActionTime] = useState(() => new Date());
   const [lookbackDays, setLookbackDays] = useState(() => loadCalendarLookbackDays());
+  const [endPrompt, setEndPrompt] = useState(null);
   const timeEditedRef = useRef(false);
+  const editorOpenRef = useRef(false);
+  const actionTimeRef = useRef(actionTime);
+  actionTimeRef.current = actionTime;
   const checkTimer = useRef(null);
 
   const onIOS = useMemo(() => isIOS(), []);
@@ -69,7 +73,8 @@ function CalendarTracker() {
 
   useEffect(() => {
     const id = setInterval(() => {
-      if (!timeEditedRef.current) setActionTime(new Date());
+      if (timeEditedRef.current || editorOpenRef.current) return;
+      setActionTime(new Date());
     }, 15000);
     return () => clearInterval(id);
   }, []);
@@ -85,9 +90,21 @@ function CalendarTracker() {
       params.lng = location.lng;
     }
     params.timestamp = stampCalendarTimestamp(actionTime);
+    params.timestampMs = actionTime instanceof Date ? actionTime.getTime() : Date.now();
     params.lookbackDays = lookbackDays;
     return buildCalendarTrackUrl(params);
   }, [resolvedTitle, prefix, location, actionTime, lookbackDays]);
+
+  const prevTrailAt = useMemo(() => {
+    const pool = status.starts || [];
+    if (!pool.length) return null;
+    const want = resolvedTitle;
+    const ev = (want && pool.find((e) => e.title === want)) || pool[0];
+    const raw = ev.lastTrailAt || ev.start;
+    if (!raw) return null;
+    const d = new Date(raw);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }, [status.starts, resolvedTitle]);
 
   const trailPreview = useMemo(
     () =>
@@ -96,21 +113,34 @@ function CalendarTracker() {
         prefix,
         lat: location?.lat,
         lng: location?.lng,
+        prevWhen: prevTrailAt,
       }),
-    [actionTime, prefix, location]
+    [actionTime, prefix, location, prevTrailAt]
   );
 
-  const handleOp = (op, flags = {}) => {
+  const pickLookbackDays = (n) => {
+    const next = saveCalendarLookbackDays(n);
+    setLookbackDays(next);
+    refreshStatus({ silent: true, force: true });
+    return next;
+  };
+
+  const handleOp = (op, flags = {}, days = lookbackDays) => {
     if ((op === 'start' || flags.requireTitle) && !resolvedTitle) {
       setMessage('請選擇或輸入 Event 標題');
       return;
     }
+    setEndPrompt(null);
 
     const label = flags.uiLabel || resolvedTitle || op;
-    const when = actionTime instanceof Date ? actionTime : new Date();
+    const source =
+      actionTimeRef.current instanceof Date ? actionTimeRef.current : actionTime;
+    const when = source instanceof Date ? new Date(source.getTime()) : new Date();
     const timestamp = stampCalendarTimestamp(when);
+    const timestampMs = when.getTime();
     const cached = location;
     timeEditedRef.current = false;
+    editorOpenRef.current = false;
     setActionTime(new Date());
     setStatus(
       applyOptimisticCalendarAction(loadCalendarStatus(), {
@@ -133,13 +163,14 @@ function CalendarTracker() {
       title: flags.all ? '' : resolvedTitle || '',
       prefix: prefix.trim(),
       timestamp,
+      timestampMs,
       latitude: coords?.lat ?? null,
       longitude: coords?.lng ?? null,
       endExisting: flags.endExisting !== undefined ? flags.endExisting : true,
       startHome: flags.startHome === true,
       all: flags.all === true,
       endAny: flags.endAny === true,
-      lookbackDays,
+      lookbackDays: days,
     });
 
     if (onIOS && useShortcut) {
@@ -192,8 +223,11 @@ function CalendarTracker() {
         <MobileFriendlyDateTime
           value={actionTime}
           onChange={(d) => {
-            timeEditedRef.current = Math.abs(Date.now() - d.getTime()) > 120000;
+            timeEditedRef.current = true;
             setActionTime(d);
+          }}
+          onEditingChange={(open) => {
+            editorOpenRef.current = Boolean(open);
           }}
           title="軌跡時間"
         />
@@ -264,27 +298,6 @@ function CalendarTracker() {
           />
         </section>
 
-        <section className="calendar-field">
-          <div className="calendar-field-head">
-            <span className="entry-field-label">Days</span>
-          </div>
-          <div className="entry-chip-row">
-            {CALENDAR_LOOKBACK_DAY_CHOICES.map((n) => (
-              <button
-                key={n}
-                type="button"
-                className={`entry-chip ${lookbackDays === n ? 'active' : ''}`}
-                onClick={() => {
-                  const next = saveCalendarLookbackDays(n);
-                  setLookbackDays(next);
-                  refreshStatus({ silent: true, force: true });
-                }}
-              >
-                {n}
-              </button>
-            ))}
-          </div>
-        </section>
       </div>
 
       <div className="entry-radio-row calendar-loc-row" role="radiogroup" aria-label="座標來源">
@@ -339,7 +352,10 @@ function CalendarTracker() {
 
       <div className="calendar-status">
         <div className="calendar-status-head">
-          <span className="entry-field-label">進行中</span>
+          <span className="entry-field-label">
+            進行中
+            <span className="calendar-lookback-caption">過去 {lookbackDays} 天</span>
+          </span>
           <button
             type="button"
             className="calendar-status-refresh"
@@ -350,7 +366,7 @@ function CalendarTracker() {
           </button>
         </div>
         {status.starts.length === 0 && status.homes.length === 0 ? (
-          <p className="calendar-status-empty">尚無進行中的行程</p>
+          <p className="calendar-status-empty">過去 {lookbackDays} 天內沒有尚未結束的行程</p>
         ) : (
           <ul className="calendar-status-list">
             {status.starts.map((ev) => (
@@ -389,6 +405,38 @@ function CalendarTracker() {
         ) : null}
       </div>
 
+      {endPrompt ? (
+        <div className="calendar-end-prompt">
+          <p className="calendar-end-prompt-hint">
+            {endPrompt.flags.uiLabel} 會搜尋過去 {lookbackDays} 天內尚未結束的行程（不含未來）
+          </p>
+          <div className="entry-chip-row">
+            {CALENDAR_LOOKBACK_DAY_CHOICES.map((n) => (
+              <button
+                key={n}
+                type="button"
+                className={`entry-chip${lookbackDays === n ? ' active' : ''}`}
+                onClick={() => pickLookbackDays(n)}
+              >
+                {n} 天
+              </button>
+            ))}
+          </div>
+          <div className="calendar-end-prompt-actions">
+            <button type="button" className="cancel-btn" onClick={() => setEndPrompt(null)}>
+              取消
+            </button>
+            <button
+              type="button"
+              className="confirm-btn"
+              onClick={() => handleOp(endPrompt.op, endPrompt.flags, lookbackDays)}
+            >
+              確認 {endPrompt.flags.uiLabel}
+            </button>
+          </div>
+        </div>
+      ) : null}
+
       <div className="entry-btn-row">
         <button
           type="button"
@@ -412,11 +460,14 @@ function CalendarTracker() {
           type="button"
           className="entry-btn-end-start"
           onClick={() =>
-            handleOp('start', {
-              endExisting: true,
-              endAny: true,
-              requireTitle: true,
-              uiLabel: 'End+Start',
+            setEndPrompt({
+              op: 'start',
+              flags: {
+                endExisting: true,
+                endAny: true,
+                requireTitle: true,
+                uiLabel: 'End+Start',
+              },
             })
           }
           title="結束任何進行中的行程後，用目前標題開新的"
@@ -426,7 +477,7 @@ function CalendarTracker() {
         <button
           type="button"
           className="entry-btn-end"
-          onClick={() => handleOp('end', { uiLabel: 'End' })}
+          onClick={() => setEndPrompt({ op: 'end', flags: { uiLabel: 'End' } })}
           title="結束目前所選標題的行程"
         >
           End
@@ -434,7 +485,12 @@ function CalendarTracker() {
         <button
           type="button"
           className="entry-btn-end-all"
-          onClick={() => handleOp('end', { all: true, endAny: true, uiLabel: 'End All' })}
+          onClick={() =>
+            setEndPrompt({
+              op: 'end',
+              flags: { all: true, endAny: true, uiLabel: 'End All' },
+            })
+          }
           title="結束所有進行中的行程"
         >
           End All
