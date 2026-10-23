@@ -66,6 +66,16 @@ function EntryPage() {
       </div>
 
       <div className="entry-action-grid">
+        {ACTIONS.slice(0, 1).map((action) => (
+          <a key={action.path} className="entry-action-card" href={hrefFor(action.path)}>
+            <div className="entry-action-icon">{action.icon}</div>
+            <div className="entry-action-body">
+              <div className="entry-action-title">{action.title}</div>
+              <div className="entry-action-desc">{action.desc}</div>
+              <code className="entry-action-url">{action.direct}</code>
+            </div>
+          </a>
+        ))}
         <button type="button" className="entry-action-card" onClick={() => setEatOpen(true)}>
           <div className="entry-action-icon">🍜</div>
           <div className="entry-action-body">
@@ -73,7 +83,7 @@ function EntryPage() {
             <div className="entry-action-desc">附近過去一年吃過的，轉一下。不進報表。</div>
           </div>
         </button>
-        {ACTIONS.map((action) => (
+        {ACTIONS.slice(1).map((action) => (
           <a key={action.path} className="entry-action-card" href={hrefFor(action.path)}>
             <div className="entry-action-icon">{action.icon}</div>
             <div className="entry-action-body">

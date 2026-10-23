@@ -10,18 +10,19 @@ import {
   formatMoney,
   formatTimestamp,
   isYearMonthFuture,
+  mergeExpenseSummaries,
   normalizeYearMonth,
   readExpenseSummaryCache,
   readYearTotals,
   recordTag,
   shiftYearMonth,
-  summaryRecords,
   timestampMs,
+  yearMonthsThroughNow,
   yearMonthStatuses,
 } from '../utils/expenseSummary';
 import { displayFxCodes, fromMyr } from '../utils/fxRates';
 import { getMergedQueryParams } from '../utils/expenseQuickUrl';
-import ExpenseHeatMap from './ExpenseHeatMap';
+import ExpenseHeatMap, { heatGeoCount } from './ExpenseHeatMap';
 
 const FX_PREF_KEY = 'expenseSummary.displayFx';
 
@@ -118,25 +119,36 @@ function Donut({ slices, total, pickedTags, labelMode, onPick }) {
   );
 }
 
-function YearStrip({ ym, totals, statuses, onPickMonth, fx }) {
+function YearStrip({ ym, totals, statuses, onPickMonth, fx, multi, pickedYms, onToggleMonth, onEnableMulti }) {
   const year = String(ym).slice(0, 4);
   const cur = Number(String(ym).slice(5, 7)) || 1;
   const bars = Array.from({ length: 12 }, (_, i) => Number(totals[i]) || 0);
   const max = Math.max(1, ...bars);
   const [showAmt, setShowAmt] = useState(false);
+  const holdRef = useRef(0);
+  const heldRef = useRef(false);
+  const picked = pickedYms || [];
+
+  const clearHold = () => {
+    if (holdRef.current) {
+      window.clearTimeout(holdRef.current);
+      holdRef.current = 0;
+    }
+  };
+
   return (
     <div
-      className={`expense-year-strip${showAmt ? ' is-labeled' : ''}`}
+      className={`expense-year-strip${showAmt ? ' is-labeled' : ''}${multi ? ' is-multi' : ''}`}
       role="list"
       aria-label={`${year} 月支出`}
     >
       {bars.map((n, i) => {
         const month = i + 1;
-        const on = month === cur;
+        const nextYm = `${year}-${String(month).padStart(2, '0')}`;
+        const on = multi ? picked.includes(nextYm) : month === cur;
         const status = statuses[i] || 'uncached';
         const pending = status === 'uncached';
         const h = n > 0 ? Math.max(10, Math.round((n / max) * (showAmt ? 28 : 34))) : 4;
-        const nextYm = `${year}-${String(month).padStart(2, '0')}`;
         return (
           <button
             key={month}
@@ -147,9 +159,33 @@ function YearStrip({ ym, totals, statuses, onPickMonth, fx }) {
             title={
               status === 'future'
                 ? `${nextYm} · 未發生`
-                : `${nextYm} · ${fx} ${formatMoney(fromMyr(n, fx))}${pending ? ' · 未載入' : ''}`
+                : multi
+                  ? `${nextYm} · 長按可開關多月`
+                  : `${nextYm} · ${fx} ${formatMoney(fromMyr(n, fx))}${pending ? ' · 未載入' : ''} · 長按多月`
             }
+            onPointerDown={() => {
+              if (status === 'future') return;
+              heldRef.current = false;
+              clearHold();
+              holdRef.current = window.setTimeout(() => {
+                holdRef.current = 0;
+                heldRef.current = true;
+                onEnableMulti(nextYm);
+              }, 650);
+            }}
+            onPointerUp={clearHold}
+            onPointerLeave={clearHold}
+            onPointerCancel={clearHold}
             onClick={() => {
+              if (heldRef.current) {
+                heldRef.current = false;
+                return;
+              }
+              if (status === 'future') return;
+              if (multi) {
+                onToggleMonth(nextYm);
+                return;
+              }
               if (on) setShowAmt((v) => !v);
               else onPickMonth(nextYm);
             }}
@@ -346,7 +382,13 @@ function ExpenseSummary() {
   const [labelMode, setLabelMode] = useState('pct');
   const [fx, setFx] = useState(readFxPref);
   const [sort, setSort] = useState({ key: 'timestamp', dir: 'desc' });
+  const [heatOpen, setHeatOpen] = useState(false);
+  const [multiMonths, setMultiMonths] = useState(false);
+  const [pickedMonths, setPickedMonths] = useState([]);
+  const [monthPacks, setMonthPacks] = useState({});
+  const [yearBusy, setYearBusy] = useState('');
   const seqRef = useRef(0);
+  const yearSeqRef = useRef(0);
 
   const load = useCallback(
     ({ force = false } = {}) => {
@@ -371,6 +413,8 @@ function ExpenseSummary() {
         .then((next) => {
           if (seq !== seqRef.current) return;
           setData(next);
+          const packedYm = normalizeYearMonth(next?.yearmonth) || ym;
+          setMonthPacks((prev) => ({ ...prev, [packedYm]: next }));
         })
         .catch((e) => {
           if (seq !== seqRef.current) return;
@@ -390,7 +434,74 @@ function ExpenseSummary() {
   useEffect(() => {
     setPickedTags([]);
     setShowTable(false);
+    setHeatOpen(false);
+    const year = String(ym).slice(0, 4);
+    setPickedMonths((prev) => prev.filter((m) => String(m).slice(0, 4) === year));
   }, [ym]);
+
+  const ensureMonth = useCallback(async (targetYm) => {
+    const key = normalizeYearMonth(targetYm);
+    if (!key || isYearMonthFuture(key)) return null;
+    const cached = readExpenseSummaryCache(key);
+    if (cached) {
+      setMonthPacks((prev) => (prev[key] ? prev : { ...prev, [key]: cached }));
+      return cached;
+    }
+    const next = await fetchExpenseSummary({ yearmonth: key });
+    setMonthPacks((prev) => ({ ...prev, [key]: next }));
+    return next;
+  }, []);
+
+  const enableMulti = (seedYm) => {
+    const key = normalizeYearMonth(seedYm) || ym;
+    setMultiMonths(true);
+    setPickedMonths((prev) => {
+      const base = prev.length ? prev : [ym];
+      return base.includes(key) ? base : [...base, key];
+    });
+    ensureMonth(key).catch(() => {});
+  };
+
+  const toggleMonth = (targetYm) => {
+    const key = normalizeYearMonth(targetYm);
+    if (!key || isYearMonthFuture(key)) return;
+    setPickedMonths((prev) => {
+      if (prev.includes(key)) {
+        const next = prev.filter((m) => m !== key);
+        return next.length ? next : prev;
+      }
+      return [...prev, key].sort();
+    });
+    ensureMonth(key).catch((e) => setErr(e.message || String(e)));
+  };
+
+  const fetchWholeYear = async () => {
+    const months = yearMonthsThroughNow(String(ym).slice(0, 4));
+    if (
+      !window.confirm(
+        `會依序抓 ${months[0]}–${months[months.length - 1]}（已快取的會跳過）。全年較久，確定？`
+      )
+    ) {
+      return;
+    }
+    const seq = ++yearSeqRef.current;
+    setMultiMonths(true);
+    setPickedMonths(months);
+    setErr('');
+    for (let i = 0; i < months.length; i += 1) {
+      if (seq !== yearSeqRef.current) return;
+      const key = months[i];
+      setYearBusy(`${key} · ${i + 1}/${months.length}`);
+      try {
+        await ensureMonth(key);
+      } catch (e) {
+        if (seq !== yearSeqRef.current) return;
+        setErr(e.message || String(e));
+        break;
+      }
+    }
+    if (seq === yearSeqRef.current) setYearBusy('');
+  };
 
   const fxCodes = displayFxCodes();
 
@@ -403,16 +514,29 @@ function ExpenseSummary() {
     }
   }, [fx, fxCodes]);
 
+  const viewMonths = useMemo(
+    () => (multiMonths && pickedMonths.length ? pickedMonths : [ym]),
+    [multiMonths, pickedMonths, ym]
+  );
+  const merged = useMemo(() => {
+    const packs = viewMonths.map((key) => {
+      if (monthPacks[key]) return monthPacks[key];
+      if (normalizeYearMonth(data?.yearmonth) === key) return data;
+      return readExpenseSummaryCache(key);
+    });
+    return mergeExpenseSummaries(packs.filter(Boolean));
+  }, [viewMonths, monthPacks, data]);
+
   const slices = useMemo(() => {
-    const rows = data?.byTag || [];
+    const rows = merged.byTag || [];
     return rows.map((row, i) => ({
       ...row,
       color: colorForTag(row.tag, i),
       displayAmount: fromMyr(row.amount, fx),
     }));
-  }, [data, fx]);
+  }, [merged, fx]);
 
-  const records = useMemo(() => summaryRecords(data), [data]);
+  const records = merged.records || [];
 
   const visibleRows = useMemo(() => {
     const want = pickedTags;
@@ -446,7 +570,7 @@ function ExpenseSummary() {
     return merged;
   }, [ym, data]);
 
-  const total = Number(data?.total) || 0;
+  const total = Number(merged.total) || 0;
   const currency = fx;
   const pickedSlices = pickedTags.length ? slices.filter((s) => pickedTags.includes(s.tag)) : [];
   const shownTotal = pickedTags.length
@@ -454,11 +578,17 @@ function ExpenseSummary() {
     : total;
   const shownCount = pickedTags.length
     ? pickedSlices.reduce((n, s) => n + (Number(s.count) || 0), 0)
-    : data?.count || 0;
+    : merged.count || 0;
   const shownPct = total ? Math.round((shownTotal / total) * 1000) / 10 : 0;
   const shownPctLabel = Number.isInteger(shownPct) ? `${shownPct}` : shownPct.toFixed(1);
   const pickLabel =
-    !pickedTags.length ? '本月' : pickedTags.length === 1 ? pickedTags[0] : `${pickedTags.length} 項`;
+    !pickedTags.length
+      ? viewMonths.length > 1
+        ? `${viewMonths.length} 月`
+        : '本月'
+      : pickedTags.length === 1
+        ? pickedTags[0]
+        : `${pickedTags.length} 項`;
 
   const pickTag = (tag) => {
     setPickedTags((prev) => toggleTag(prev, tag));
@@ -474,11 +604,25 @@ function ExpenseSummary() {
   return (
     <div className="expense-summary">
       <div className="expense-summary-head">
-        <button type="button" className="expense-summary-nav" onClick={() => setYm((v) => shiftYearMonth(v, -1))}>
+        <button
+          type="button"
+          className="expense-summary-nav"
+          onClick={() => {
+            setMultiMonths(false);
+            setYm((v) => shiftYearMonth(v, -1));
+          }}
+        >
           ‹
         </button>
         <strong>{ym}</strong>
-        <button type="button" className="expense-summary-nav" onClick={() => setYm((v) => shiftYearMonth(v, 1))}>
+        <button
+          type="button"
+          className="expense-summary-nav"
+          onClick={() => {
+            setMultiMonths(false);
+            setYm((v) => shiftYearMonth(v, 1));
+          }}
+        >
           ›
         </button>
         <button
@@ -518,64 +662,92 @@ function ExpenseSummary() {
           ym={ym}
           totals={yearTotals}
           statuses={monthStatuses}
-          onPickMonth={setYm}
+          onPickMonth={(next) => {
+            setMultiMonths(false);
+            setYm(next);
+          }}
           fx={fx}
+          multi={multiMonths}
+          pickedYms={pickedMonths}
+          onToggleMonth={toggleMonth}
+          onEnableMulti={enableMulti}
         />
+      ) : null}
+      {multiMonths ? (
+        <div className="expense-year-multi">
+          <span>多月 {pickedMonths.length}</span>
+          {yearBusy ? <span>{yearBusy}</span> : null}
+          <button type="button" className="expense-chip" onClick={fetchWholeYear} disabled={Boolean(yearBusy)}>
+            全年
+          </button>
+          <button
+            type="button"
+            className="expense-chip"
+            onClick={() => {
+              yearSeqRef.current += 1;
+              setYearBusy('');
+              setMultiMonths(false);
+              setPickedMonths([]);
+            }}
+          >
+            結束
+          </button>
+        </div>
       ) : null}
 
       {err ? <p className="expense-summary-status is-error">{err}</p> : null}
 
       <div className={`expense-summary-hero${loading && monthReady ? ' is-refreshing' : ''}`}>
-        <div className={`expense-donut-wrap${pickedTags.length && monthReady ? ' is-picked' : ''}`}>
-          <Donut
-            slices={monthReady ? slices : []}
-            total={monthReady ? total : 0}
-            pickedTags={monthReady ? pickedTags : []}
-            labelMode={labelMode}
-            onPick={monthReady ? pickTag : () => {}}
-          />
-          <div className="expense-summary-total">
-            {monthReady && pickedTags.length ? (
+        <div className="expense-summary-hero-main">
+          <div className={`expense-donut-wrap${pickedTags.length && monthReady ? ' is-picked' : ''}`}>
+            <Donut
+              slices={monthReady ? slices : []}
+              total={monthReady ? total : 0}
+              pickedTags={monthReady ? pickedTags : []}
+              labelMode={labelMode}
+              onPick={monthReady ? pickTag : () => {}}
+            />
+            <div className="expense-summary-total">
+              {monthReady && pickedTags.length ? (
+                <button
+                  type="button"
+                  className="expense-summary-total-label is-clear"
+                  onClick={() => setPickedTags([])}
+                >
+                  {pickLabel}
+                </button>
+              ) : (
+                <span className="expense-summary-total-label">
+                  {loading && !monthReady ? '讀取中…' : pickLabel}
+                </span>
+              )}
+              {monthReady && pickedTags.length ? (
+                <span className="expense-summary-total-share">
+                  {shownPctLabel}% of 100%
+                </span>
+              ) : null}
               <button
                 type="button"
-                className="expense-summary-total-label is-clear"
-                onClick={() => setPickedTags([])}
+                className="expense-summary-total-fx"
+                onClick={() => {
+                  if (!monthReady) return;
+                  const i = Math.max(0, fxCodes.indexOf(fx));
+                  setFx(fxCodes[(i + 1) % fxCodes.length] || 'MYR');
+                }}
               >
-                {pickLabel}
+                {monthReady ? `${currency} ${formatMoney(fromMyr(shownTotal, fx))}` : '—'}
               </button>
-            ) : (
-              <span className="expense-summary-total-label">
-                {loading && !monthReady ? '讀取中…' : '本月'}
+              {monthReady && pickedTags.length ? (
+                <span className="expense-summary-total-share">
+                  of {currency} {formatMoney(fromMyr(total, fx))}
+                </span>
+              ) : null}
+              <span className="expense-summary-total-count">
+                {monthReady ? `${shownCount} 筆` : loading ? '…' : '0 筆'}
               </span>
-            )}
-            {monthReady && pickedTags.length ? (
-              <span className="expense-summary-total-share">
-                {shownPctLabel}% of 100%
-              </span>
-            ) : null}
-            <button
-              type="button"
-              className="expense-summary-total-fx"
-              onClick={() => {
-                if (!monthReady) return;
-                const i = Math.max(0, fxCodes.indexOf(fx));
-                setFx(fxCodes[(i + 1) % fxCodes.length] || 'MYR');
-              }}
-            >
-              {monthReady ? `${currency} ${formatMoney(fromMyr(shownTotal, fx))}` : '—'}
-            </button>
-            {monthReady && pickedTags.length ? (
-              <span className="expense-summary-total-share">
-                of {currency} {formatMoney(fromMyr(total, fx))}
-              </span>
-            ) : null}
-            <span className="expense-summary-total-count">
-              {monthReady ? `${shownCount} 筆` : loading ? '…' : '0 筆'}
-            </span>
+            </div>
           </div>
-        </div>
-        {monthReady ? (
-          <>
+          {monthReady ? (
             <div className="expense-display-toggles">
               <div className="expense-label-toggle" role="group" aria-label="圖上數字">
                 <button
@@ -593,6 +765,10 @@ function ExpenseSummary() {
                   金額
                 </button>
               </div>
+              <button type="button" className="expense-heat-open" onClick={() => setHeatOpen(true)}>
+                地圖
+                <em>{heatGeoCount(records)}</em>
+              </button>
               {fxCodes.length > 1 ? (
                 <div className="expense-label-toggle" role="group" aria-label="顯示幣別">
                   {fxCodes.map((code) => (
@@ -608,19 +784,27 @@ function ExpenseSummary() {
                 </div>
               ) : null}
             </div>
-            {data.updatedAt ? (
-              <p className="expense-summary-updated">
-                {data.updatedAt}
-                {loading ? ' · 重抓中' : data.source === 'live' ? ' · 即時' : ''}
-              </p>
-            ) : null}
-          </>
+          ) : null}
+        </div>
+        {monthReady && data.updatedAt ? (
+          <p className="expense-summary-updated">
+            {data.updatedAt}
+            {loading ? ' · 重抓中' : data.source === 'live' ? ' · 即時' : ''}
+            {yearBusy ? ` · ${yearBusy}` : ''}
+          </p>
         ) : null}
       </div>
       {monthReady ? (
         <>
           <CategoryBars slices={slices} total={total} pickedTags={pickedTags} onPick={pickTag} fx={fx} />
-          <ExpenseHeatMap records={records} slices={slices} initialTags={pickedTags} fx={fx} />
+          <ExpenseHeatMap
+            records={records}
+            slices={slices}
+            initialTags={pickedTags}
+            fx={fx}
+            open={heatOpen}
+            onClose={() => setHeatOpen(false)}
+          />
           {showTable ? (
             <RecordsTable
               rows={visibleRows}

@@ -133,6 +133,57 @@ export function summaryRecords(data) {
   return Array.isArray(data?.recent) ? data.recent : [];
 }
 
+export function yearMonthsThroughNow(year) {
+  const y = String(year || '').slice(0, 4);
+  const now = currentYearMonth();
+  const out = [];
+  for (let m = 1; m <= 12; m += 1) {
+    const ym = `${y}-${String(m).padStart(2, '0')}`;
+    if (ym > now) break;
+    out.push(ym);
+  }
+  return out;
+}
+
+export function mergeExpenseSummaries(list) {
+  const records = [];
+  const seen = new Set();
+  const tagMap = {};
+  let total = 0;
+  (list || []).forEach((d) => {
+    if (!d) return;
+    total += Number(d.total) || 0;
+    summaryRecords(d).forEach((r, i) => {
+      const id = String(r.id || `${d.yearmonth || ''}-${r.timestamp || ''}-${i}`);
+      if (seen.has(id)) return;
+      seen.add(id);
+      records.push(r);
+    });
+    (d.byTag || []).forEach((t) => {
+      const tag = recordTag(t);
+      if (!tag) return;
+      if (!tagMap[tag]) tagMap[tag] = { tag, amount: 0, count: 0 };
+      tagMap[tag].amount += Number(t.amount) || 0;
+      tagMap[tag].count += Number(t.count) || 0;
+    });
+  });
+  if (!Object.keys(tagMap).length && records.length) {
+    records.forEach((r) => {
+      const tag = recordTag(r) || '未分類';
+      if (!tagMap[tag]) tagMap[tag] = { tag, amount: 0, count: 0 };
+      tagMap[tag].amount += Number(r.amount) || 0;
+      tagMap[tag].count += 1;
+    });
+  }
+  const byTag = Object.values(tagMap).sort((a, b) => b.amount - a.amount);
+  return {
+    records,
+    byTag,
+    total,
+    count: records.length,
+  };
+}
+
 export function isSummaryRecordsComplete(data) {
   if (!data) return false;
   const recs = summaryRecords(data);

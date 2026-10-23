@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { CircleMarker, MapContainer, Popup, TileLayer, ZoomControl, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -6,18 +7,24 @@ import { DEFAULT_ZOOM, MapInvalidateOn, TILES } from './map/LeafletBits';
 import { DEFAULT_MAP_CENTER } from '../utils/mapDefaults';
 import { colorForTag, formatMoney, parseRecordCoords, recordTag } from '../utils/expenseSummary';
 import { fromMyr } from '../utils/fxRates';
+import { useHistoryOverlay } from '../hooks/useHistoryOverlay';
 
 function FitPoints({ points, token }) {
   const map = useMap();
   useEffect(() => {
-    const valid = (points || []).filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lng));
-    if (!valid.length) return;
-    if (valid.length === 1) {
-      map.setView([valid[0].lat, valid[0].lng], Math.max(map.getZoom() || DEFAULT_ZOOM, 15));
-      return;
-    }
-    const b = L.latLngBounds(valid.map((p) => [p.lat, p.lng]));
-    map.fitBounds(b.pad(0.18), { maxZoom: 16, animate: false });
+    const fit = () => {
+      const valid = (points || []).filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lng));
+      if (!valid.length) return;
+      map.invalidateSize({ animate: false });
+      if (valid.length === 1) {
+        map.setView([valid[0].lat, valid[0].lng], Math.max(map.getZoom() || DEFAULT_ZOOM, 15));
+        return;
+      }
+      const b = L.latLngBounds(valid.map((p) => [p.lat, p.lng]));
+      map.fitBounds(b.pad(0.18), { maxZoom: 16, animate: false });
+    };
+    const t = window.setTimeout(fit, 120);
+    return () => window.clearTimeout(t);
   }, [token, map, points]);
   return null;
 }
@@ -105,15 +112,16 @@ function HeatMapBody({ records, slices, cats, sub, fx }) {
   );
 }
 
-export default function ExpenseHeatMap({ records, slices, initialTags, fx }) {
-  const [open, setOpen] = useState(false);
+export function heatGeoCount(records) {
+  return (records || []).reduce((n, r) => n + (parseRecordCoords(r) ? 1 : 0), 0);
+}
+
+export default function ExpenseHeatMap({ records, slices, initialTags, fx, open, onClose }) {
+  useHistoryOverlay(open, onClose);
   const [cats, setCats] = useState([]);
   const [sub, setSub] = useState('');
 
-  const geoCount = useMemo(
-    () => (records || []).reduce((n, r) => n + (parseRecordCoords(r) ? 1 : 0), 0),
-    [records]
-  );
+  const geoCount = useMemo(() => heatGeoCount(records), [records]);
 
   const subcats = useMemo(() => {
     const want = cats;
@@ -130,29 +138,33 @@ export default function ExpenseHeatMap({ records, slices, initialTags, fx }) {
       .map(([title, count]) => ({ title, count }));
   }, [records, cats]);
 
-  const openMap = () => {
+  useEffect(() => {
+    if (!open) return undefined;
     setCats(Array.isArray(initialTags) ? initialTags.filter(Boolean) : initialTags ? [initialTags] : []);
     setSub('');
-    setOpen(true);
-  };
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [open, initialTags]);
 
-  if (!open) {
-    return (
-      <div className="expense-heat-launch">
-        <button type="button" className="expense-heat-open" onClick={openMap}>
-          地圖
-          <em>{geoCount}</em>
-        </button>
-      </div>
-    );
-  }
+  if (!open) return null;
 
-  return (
-    <div className="expense-heat expense-heat-card">
-      <div className="expense-heat-toolbar">
-        <button type="button" className="expense-records-hide" onClick={() => setOpen(false)}>
-          隱藏地圖
-        </button>
+  const node = (
+    <div className="eat-modal-overlay" onClick={onClose} role="presentation">
+      <div
+        className="eat-modal expense-heat-modal"
+        role="dialog"
+        aria-label="花費地圖"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="eat-modal-head">
+          <h4>地圖 · {geoCount} 點</h4>
+          <button type="button" className="picker-modal-close" onClick={onClose} aria-label="關閉">
+            ✕
+          </button>
+        </div>
         <div className="expense-records-filters">
           <button
             type="button"
@@ -180,34 +192,36 @@ export default function ExpenseHeatMap({ records, slices, initialTags, fx }) {
             </button>
           ))}
         </div>
-      </div>
-      {subcats.length ? (
-        <div className="expense-records-filters expense-heat-subs">
-          <button
-            type="button"
-            className={`expense-chip${sub === '' ? ' is-on' : ''}`}
-            onClick={() => setSub('')}
-          >
-            子分類
-          </button>
-          {subcats.map((s) => (
+        {subcats.length ? (
+          <div className="expense-records-filters expense-heat-subs">
             <button
-              key={s.title}
               type="button"
-              className={`expense-chip${sub === s.title ? ' is-on' : ''}`}
-              onClick={() => setSub((cur) => (cur === s.title ? '' : s.title))}
+              className={`expense-chip${sub === '' ? ' is-on' : ''}`}
+              onClick={() => setSub('')}
             >
-              {s.title}
-              <em>{s.count}</em>
+              子分類
             </button>
-          ))}
-        </div>
-      ) : null}
-      {!geoCount ? (
-        <p className="expense-summary-status">這個月沒有經緯度。掃描報表後才會帶入。</p>
-      ) : (
-        <HeatMapBody records={records} slices={slices} cats={cats} sub={sub} fx={fx} />
-      )}
+            {subcats.map((s) => (
+              <button
+                key={s.title}
+                type="button"
+                className={`expense-chip${sub === s.title ? ' is-on' : ''}`}
+                onClick={() => setSub((cur) => (cur === s.title ? '' : s.title))}
+              >
+                {s.title}
+                <em>{s.count}</em>
+              </button>
+            ))}
+          </div>
+        ) : null}
+        {!geoCount ? (
+          <p className="expense-summary-status">沒有經緯度。掃描報表後才會帶入。</p>
+        ) : (
+          <HeatMapBody records={records} slices={slices} cats={cats} sub={sub} fx={fx} />
+        )}
+      </div>
     </div>
   );
+
+  return createPortal(node, document.body);
 }

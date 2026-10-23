@@ -8807,6 +8807,27 @@ input,textarea {
   gap: 10px;
   margin: 4px 0 14px;
 }
+.expense-summary-hero-main {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  width: 100%;
+}
+.expense-year-strip.is-multi .expense-year-bar.is-on i {
+  box-shadow: 0 0 0 1px var(--accent, #3d9cf0);
+}
+.expense-year-multi {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin: -8px 0 12px;
+  font-size: 12px;
+  color: var(--text-muted, #9aa3b2);
+}
 .expense-summary-hero.is-refreshing {
   opacity: 0.45;
   pointer-events: none;
@@ -8883,9 +8904,14 @@ input,textarea {
 .expense-display-toggles {
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
   margin-top: 2px;
+}
+@media (max-width: 480px) {
+  .expense-display-toggles {
+    align-items: center;
+  }
 }
 .expense-label-toggle {
   display: inline-flex;
@@ -9188,6 +9214,9 @@ input,textarea {
 }
 .expense-heat-launch {
   margin: 12px 2px 0;
+}
+.expense-heat-modal .expense-heat-map {
+  height: min(52vh, 360px);
 }
 .expense-heat-open {
   appearance: none;
