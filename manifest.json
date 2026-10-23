@@ -1,29 +1,37 @@
 {
   "short_name": "自理",
-  "name": "Self-Manage",
+  "name": "自理",
+  "id": "./",
+  "lang": "zh-Hant",
   "icons": [
     {
-      "src": "favicon.ico",
-      "sizes": "64x64 32x32 24x24 16x16",
-      "type": "image/x-icon"
-    },
-    {
-      "src": "logo192.png",
+      "src": "logo192.png?v=4",
       "type": "image/png",
       "sizes": "192x192",
       "purpose": "any"
     },
     {
-      "src": "logo512.png",
+      "src": "logo512.png?v=4",
       "type": "image/png",
       "sizes": "512x512",
       "purpose": "any"
+    },
+    {
+      "src": "favicon-32.png?v=4",
+      "type": "image/png",
+      "sizes": "32x32"
+    },
+    {
+      "src": "favicon.ico?v=4",
+      "sizes": "256x256 64x64 48x48 32x32 16x16",
+      "type": "image/x-icon"
     }
   ],
-  "start_url": ".",
+  "start_url": "./",
+  "scope": "./",
   "display": "standalone",
   "orientation": "portrait-primary",
   "theme_color": "#1a1a1a",
-  "background_color": "#1a1d24",
-  "description": "極速啟動的記帳與個人效率 Entry Point（離線可用）"
+  "background_color": "#1d1d1d",
+  "description": "自理：記帳、行事曆軌跡、車輛（離線可用）"
 }
