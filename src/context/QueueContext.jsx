@@ -4,7 +4,9 @@ import {
   enqueueItem,
   loadQueue,
   queueLength,
+  rememberUnconfirmed,
   removeFromQueue,
+  restoreUnconfirmedToQueue,
 } from '../utils/offlineQueue';
 import { stampCalendarTimestamp } from '../utils/calendarTrackUrl';
 import { markBootstrapDirty } from '../utils/appBootstrap';
@@ -40,6 +42,11 @@ export function QueueProvider({ children }) {
     setPending(queueLength());
   }, []);
 
+  useEffect(() => {
+    restoreUnconfirmedToQueue();
+    refreshCount();
+  }, [refreshCount]);
+
   const flushQueue = useCallback(async () => {
     if (flushing) return { ok: true, remaining: queueLength() };
     if (typeof navigator !== 'undefined' && navigator.onLine === false) {
@@ -53,6 +60,7 @@ export function QueueProvider({ children }) {
       for (const item of items) {
         try {
           await postPayload(item.payload);
+          rememberUnconfirmed(item);
           removeFromQueue(item.id);
         } catch {
           // keep item; stop sequential flush on first hard failure
@@ -105,6 +113,12 @@ export function QueueProvider({ children }) {
           return { queued: true, sent: false };
         }
         await postPayload(body, signal);
+        rememberUnconfirmed({
+          id,
+          action: body.action || 'expense',
+          payload: body,
+          enqueuedAt: Date.now(),
+        });
         removeFromQueue(id);
         refreshCount();
         markBootstrapDirty();

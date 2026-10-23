@@ -20,6 +20,7 @@ import {
   formatCoverage,
   inferShape,
   insertPolygonVertex,
+  commitPolygonVertexMove,
   loadLandmarkRegions,
   matchLandmarksAt,
   mergeLandmarkRegionsFromCloud,
@@ -37,6 +38,7 @@ import {
   DraggableMarker,
   MapBoundsWatcher,
   MapEditClick,
+  MapInvalidateOn,
   MAX_ZOOM,
   OffMarkerWatcher,
   ProbeDot,
@@ -94,7 +96,43 @@ function LandmarkRegionsManager() {
   const [mapBounds, setMapBounds] = useState(null);
   const [probe, setProbe] = useState(null);
   const [hereHits, setHereHits] = useState([]);
+  const [dragPreview, setDragPreview] = useState(null);
+  const [canUndo, setCanUndo] = useState(false);
+  const [ringChoice, setRingChoice] = useState(null);
+  const undoRef = useRef([]);
   const returnBtnRef = useRef(null);
+  const ringChipRef = useRef(null);
+  const wrapRef = useRef(null);
+  const dockRef = useRef(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [sizeToken, setSizeToken] = useState(0);
+
+  const clearUndo = useCallback(() => {
+    undoRef.current = [];
+    setCanUndo(false);
+  }, []);
+
+  const rememberDraft = useCallback((d) => {
+    if (!d) return;
+    undoRef.current.push({
+      shape: d.shape,
+      center: d.center ? { lat: d.center.lat, lng: d.center.lng } : null,
+      radiusM: d.radiusM,
+      vertices: (d.vertices || []).map((v) => ({ lat: v.lat, lng: v.lng })),
+    });
+    if (undoRef.current.length > 40) undoRef.current.shift();
+    queueMicrotask(() => setCanUndo(true));
+  }, []);
+
+  const undoEdit = useCallback(() => {
+    const prev = undoRef.current.pop();
+    if (!prev) return;
+    setCanUndo(undoRef.current.length > 0);
+    setSelectedVertex(null);
+    setDragPreview(null);
+    setRingChoice(null);
+    setEditDraft((d) => (d ? { ...d, ...prev } : d));
+  }, []);
 
   const reloadLocal = () => {
     const next = loadLandmarkRegions();
@@ -132,9 +170,118 @@ function LandmarkRegionsManager() {
     return undefined;
   }, [offMarker]);
 
+  useEffect(() => {
+    const el = ringChipRef.current;
+    if (!el) return undefined;
+    L.DomEvent.disableClickPropagation(el);
+    L.DomEvent.disableScrollPropagation(el);
+    return undefined;
+  }, [ringChoice]);
+
+  useEffect(() => {
+    const el = dockRef.current;
+    if (!el) return undefined;
+    L.DomEvent.disableClickPropagation(el);
+    return undefined;
+  }, []);
+
+  useEffect(() => {
+    const onFsChange = () => {
+      const el = wrapRef.current;
+      const active = Boolean(
+        document.fullscreenElement === el || document.webkitFullscreenElement === el
+      );
+      setIsFullscreen(active);
+      setSizeToken((n) => n + 1);
+    };
+    document.addEventListener('fullscreenchange', onFsChange);
+    document.addEventListener('webkitfullscreenchange', onFsChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', onFsChange);
+      document.removeEventListener('webkitfullscreenchange', onFsChange);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isFullscreen) return undefined;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const onKey = (e) => {
+      if (e.key !== 'Escape') return;
+      if (document.fullscreenElement || document.webkitFullscreenElement) return;
+      setIsFullscreen(false);
+      setSizeToken((n) => n + 1);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => {
+      document.body.style.overflow = prev;
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [isFullscreen]);
+
+  useEffect(
+    () => () => {
+      if (document.fullscreenElement && document.exitFullscreen) {
+        document.exitFullscreen().catch(() => {});
+      } else if (document.webkitFullscreenElement && document.webkitExitFullscreen) {
+        document.webkitExitFullscreen();
+      }
+    },
+    []
+  );
+
+  const toggleFullscreen = async () => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const nativeOn =
+      document.fullscreenElement === el || document.webkitFullscreenElement === el;
+    if (isFullscreen) {
+      if (nativeOn) {
+        try {
+          if (document.exitFullscreen) await document.exitFullscreen();
+          else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+        } catch (err) {
+          console.warn('fullscreen failed', err);
+          setIsFullscreen(false);
+          setSizeToken((n) => n + 1);
+        }
+      } else {
+        setIsFullscreen(false);
+        setSizeToken((n) => n + 1);
+      }
+      return;
+    }
+    try {
+      if (el.requestFullscreen) await el.requestFullscreen();
+      else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
+      else {
+        setIsFullscreen(true);
+        setSizeToken((n) => n + 1);
+      }
+    } catch (err) {
+      console.warn('fullscreen failed', err);
+      setIsFullscreen(true);
+      setSizeToken((n) => n + 1);
+    }
+  };
+
+  useEffect(() => {
+    if (tab !== 'create') return undefined;
+    const onKey = (e) => {
+      if (!(e.ctrlKey || e.metaKey) || String(e.key).toLowerCase() !== 'z') return;
+      const tag = e.target && e.target.tagName;
+      if (tag && /INPUT|TEXTAREA|SELECT/.test(tag)) return;
+      e.preventDefault();
+      undoEdit();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [tab, undoEdit]);
+
   const handleChange = (lat, lng) => {
     setPosition([lat, lng]);
     if (editDraft && inferShape(editDraft) === SHAPE_RECT) {
+      rememberDraft(editDraft);
       setEditDraft((d) =>
         d
           ? {
@@ -241,6 +388,8 @@ function LandmarkRegionsManager() {
     setTab('create');
     setEditMode('create');
     setSelectedVertex(null);
+    setDragPreview(null);
+    clearUndo();
     setEditDraft({
       id: newLandmarkId(),
       name: '',
@@ -256,6 +405,8 @@ function LandmarkRegionsManager() {
     setTab('create');
     setEditMode('edit');
     setSelectedVertex(null);
+    setDragPreview(null);
+    clearUndo();
     setEditDraft({
       ...region,
       shape,
@@ -271,9 +422,16 @@ function LandmarkRegionsManager() {
     setEditMode(null);
     setEditDraft(null);
     setSelectedVertex(null);
+    setDragPreview(null);
+    clearUndo();
     setFilterMode('view');
     setProbe(null);
     setHereHits([]);
+  };
+
+  const switchTab = (next) => {
+    if (next === 'browse') goBrowse();
+    else if (tab !== 'create') startCreateRegion();
   };
 
   const pickResult = (item) => {
@@ -288,6 +446,7 @@ function LandmarkRegionsManager() {
 
   const setDraftShape = (shape) => {
     setSelectedVertex(null);
+    if (editDraft) rememberDraft(editDraft);
     setEditDraft((d) => {
       if (!d) return d;
       const center = { lat: position[0], lng: position[1] };
@@ -322,26 +481,53 @@ function LandmarkRegionsManager() {
   };
 
   const addPolygonVertex = (lat, lng) => {
-    const d = editDraft;
-    if (!d || inferShape(d) !== SHAPE_POLYGON) return;
-    const result = insertPolygonVertex(d.vertices || [], { lat, lng });
-    if (result.index < 0) return;
-    setSelectedVertex(result.index);
-    if (result.snapped) return;
-    setEditDraft({ ...d, vertices: result.vertices });
-  };
-
-  const movePolygonVertex = (index, lat, lng) => {
     setEditDraft((d) => {
-      if (!d) return d;
-      const vertices = (d.vertices || []).map((v, i) => (i === index ? { lat, lng } : v));
-      return { ...d, vertices };
+      if (!d || inferShape(d) !== SHAPE_POLYGON) return d;
+      const result = insertPolygonVertex(d.vertices || [], { lat, lng });
+      if (result.index < 0 || result.snapped) return d;
+      rememberDraft(d);
+      queueMicrotask(() => {
+        setSelectedVertex(result.index);
+        setRingChoice(null);
+      });
+      return { ...d, vertices: result.vertices };
     });
   };
 
-  const removePolygonVertex = (index) => {
+  const movePolygonVertex = useCallback((index, lat, lng) => {
     setEditDraft((d) => {
       if (!d) return d;
+      const result = commitPolygonVertexMove(d.vertices || [], index, lat, lng);
+      if (!result.changed) return d;
+      rememberDraft(d);
+      queueMicrotask(() => setSelectedVertex(result.index));
+      if (result.reordered && result.original) {
+        queueMicrotask(() =>
+          setRingChoice({
+            original: result.original,
+            fromIndex: result.fromIndex,
+          })
+        );
+      } else {
+        queueMicrotask(() => setRingChoice(null));
+      }
+      return { ...d, vertices: result.vertices };
+    });
+  }, [rememberDraft]);
+
+  const keepOriginalRing = useCallback(() => {
+    setRingChoice((choice) => {
+      if (!choice?.original) return null;
+      setEditDraft((d) => (d ? { ...d, vertices: choice.original } : d));
+      setSelectedVertex(choice.fromIndex ?? null);
+      return null;
+    });
+  }, []);
+
+  const removePolygonVertex = useCallback((index) => {
+    setEditDraft((d) => {
+      if (!d) return d;
+      rememberDraft(d);
       return { ...d, vertices: (d.vertices || []).filter((_, i) => i !== index) };
     });
     setSelectedVertex((cur) => {
@@ -350,15 +536,16 @@ function LandmarkRegionsManager() {
       if (cur > index) return cur - 1;
       return cur;
     });
-  };
+  }, [rememberDraft]);
 
-  const selectPolygonVertex = (index) => {
-    if (selectedVertex === index) {
-      removePolygonVertex(index);
-      return;
-    }
-    setSelectedVertex(index);
-  };
+  const selectPolygonVertex = useCallback((index) => {
+    setSelectedVertex((cur) => (cur === index ? null : index));
+  }, []);
+
+  const onVertexDragLive = useCallback((p) => {
+    setDragPreview(p);
+    if (p) setRingChoice(null);
+  }, []);
 
   const saveEditDraft = async () => {
     if (!editDraft) return;
@@ -417,13 +604,28 @@ function LandmarkRegionsManager() {
   }, [editDraft, position]);
 
   const polygonMode = Boolean(tab === 'create' && liveDraft && liveDraft.shape === SHAPE_POLYGON);
+  const polyVertices = useMemo(() => {
+    const verts = liveDraft?.vertices || [];
+    if (!dragPreview || dragPreview.index == null) return verts;
+    return verts.map((v, i) =>
+      i === dragPreview.index ? { lat: dragPreview.lat, lng: dragPreview.lng } : v
+    );
+  }, [liveDraft, dragPreview]);
   const draftShape = liveDraft ? liveDraft.shape : SHAPE_CIRCLE;
   const tile = TILES[basemap] || TILES.street;
   const coverageText = liveDraft ? formatCoverage(liveDraft) : '';
 
   const shapesToShow = useMemo(() => {
     if (tab === 'create' && liveDraft) {
-      return [{ ...liveDraft, id: 'edit-draft', editing: true, hit: false }];
+      return [
+        {
+          ...liveDraft,
+          vertices: liveDraft.shape === SHAPE_POLYGON ? polyVertices : liveDraft.vertices,
+          id: 'edit-draft',
+          editing: true,
+          hit: false,
+        },
+      ];
     }
     const hitIds = new Set(hereHits.map((h) => h.id));
     return regions.map((r) => ({
@@ -432,7 +634,7 @@ function LandmarkRegionsManager() {
       nearby: false,
       hit: hitIds.has(r.id),
     }));
-  }, [tab, liveDraft, regions, hereHits]);
+  }, [tab, liveDraft, regions, hereHits, polyVertices]);
 
   const listedRegions = useMemo(() => {
     if (tab !== 'browse') return regions;
@@ -451,10 +653,7 @@ function LandmarkRegionsManager() {
         <ModeToggle
           ariaLabel="模式"
           value={tab}
-          onChange={(next) => {
-            if (next === 'browse') goBrowse();
-            else if (tab !== 'create') startCreateRegion();
-          }}
+          onChange={switchTab}
           options={[
             { id: 'create', label: '新增' },
             { id: 'browse', label: '瀏覽' },
@@ -501,6 +700,10 @@ function LandmarkRegionsManager() {
         </ul>
       )}
 
+      <div
+        ref={wrapRef}
+        className={`landmark-manager-shell${isFullscreen ? ' is-fullscreen' : ''}`}
+      >
       <div className="leaflet-map-container location-picker-map landmark-manager-map">
         <div className="parking-map-basemap" role="group" aria-label="地圖類型">
           <button
@@ -521,6 +724,15 @@ function LandmarkRegionsManager() {
           </button>
         </div>
         <div className="parking-map-actions" role="group" aria-label="地圖檢視">
+          <button
+            type="button"
+            className="parking-map-action-btn"
+            onClick={toggleFullscreen}
+            title={isFullscreen ? '退出全螢幕' : '全螢幕編輯'}
+            aria-pressed={isFullscreen}
+          >
+            {isFullscreen ? '退出全螢幕' : '全螢幕'}
+          </button>
           <button
             type="button"
             className="parking-map-action-btn"
@@ -547,10 +759,10 @@ function LandmarkRegionsManager() {
           center={position}
           zoom={DEFAULT_ZOOM}
           maxZoom={MAX_ZOOM}
-          style={{ height: 320, width: '100%' }}
+          style={{ height: isFullscreen ? '100%' : 320, width: '100%' }}
           zoomControl={false}
           scrollWheelZoom
-          doubleClickZoom
+          doubleClickZoom={tab !== 'create'}
           touchZoom
           dragging
         >
@@ -561,7 +773,11 @@ function LandmarkRegionsManager() {
             subdomains={tile.subdomains}
             maxZoom={MAX_ZOOM}
           />
-          <ZoomControl position="bottomright" />
+          <ZoomControl
+            key={isFullscreen ? 'zoom-fs' : 'zoom-n'}
+            position={isFullscreen ? 'topright' : 'bottomright'}
+          />
+          <MapInvalidateOn token={sizeToken} />
           {shapesToShow.map((c) => (
             <RegionShape
               key={c.id}
@@ -578,6 +794,7 @@ function LandmarkRegionsManager() {
               selectedIndex={selectedVertex}
               onMove={movePolygonVertex}
               onSelect={selectPolygonVertex}
+              onDragLive={onVertexDragLive}
             />
           )}
           {tab === 'create' && !polygonMode && (
@@ -605,12 +822,32 @@ function LandmarkRegionsManager() {
         {polygonMode && (
           <div className="landmark-map-hint">
             {selectedVertex != null
-              ? '已選取 · 再點一次刪除，或按刪除此點'
-              : '點靠近邊會接到附近的點 · 拖曳調整 · 單擊選取刪除'}
+              ? '已選取 · 拖曳移動，或按刪除此點'
+              : '點地圖加點 · 點頂點選取 · 拖過交叉會重排連線'}
           </div>
         )}
+        {polygonMode && ringChoice ? (
+          <div ref={ringChipRef} className="landmark-ring-chip">
+            <span>已重排連線</span>
+            <button type="button" onClick={keepOriginalRing}>
+              維持原連線
+            </button>
+          </div>
+        ) : null}
       </div>
 
+      <div ref={dockRef} className="landmark-fs-dock">
+      <div className="landmark-fs-tabs">
+        <ModeToggle
+          ariaLabel="模式"
+          value={tab}
+          onChange={switchTab}
+          options={[
+            { id: 'create', label: '新增' },
+            { id: 'browse', label: '瀏覽' },
+          ]}
+        />
+      </div>
       {tab === 'create' || probe ? (
         <div className="coordinates-display">
           <span>{(probe?.lat ?? position[0]).toFixed(6)}</span>
@@ -648,7 +885,7 @@ function LandmarkRegionsManager() {
           ) : draftShape === SHAPE_POLYGON ? (
             <div className="landmark-poly-tools">
               <p className="landmark-edit-hint">
-                點靠近邊會接到附近的點 · 拖曳調整 · 單擊選取，再點刪除
+                點地圖加點 · 點頂點選取 · 刪除請按刪除此點
               </p>
               <div className="landmark-poly-row">
                 <span>{(liveDraft.vertices || []).length} 頂點</span>
@@ -676,6 +913,7 @@ function LandmarkRegionsManager() {
                   max={REGION_RADIUS_MAX_M}
                   step={10}
                   value={liveDraft.radiusM}
+                  onPointerDown={() => rememberDraft(editDraft)}
                   onChange={(e) =>
                     setEditDraft((d) => {
                       if (!d) return d;
@@ -696,6 +934,14 @@ function LandmarkRegionsManager() {
             </>
           )}
           <div className="landmark-edit-actions">
+            <button
+              type="button"
+              className="landmark-undo-btn"
+              onClick={undoEdit}
+              disabled={!canUndo}
+            >
+              復原
+            </button>
             <button type="button" className="cancel-btn" onClick={goBrowse}>
               取消
             </button>
@@ -760,6 +1006,8 @@ function LandmarkRegionsManager() {
           </ul>
         </>
       )}
+      </div>
+      </div>
     </div>
   );
 }

@@ -1,6 +1,17 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useOfflineQueue } from '../context/QueueContext';
+import { useSmartLocation } from '../hooks/useSmartLocation';
 import { API_ENDPOINTS } from '../config';
+import { isIOS } from '../utils/platform';
+import {
+  buildVehiclePageUrl,
+  consumeVehicleQuickDraft,
+  copyVehicleShare,
+  latlongValue,
+  sendVehicleWhatsApp,
+  takeVehicleQuickDraft,
+} from '../utils/vehicleShare';
+import VehicleUrlExamples from './VehicleUrlExamples';
 import {
   formatFullTimestamp,
   formatRelativeTime,
@@ -57,6 +68,7 @@ function formatCoordPair(lat, lng) {
 
 function ParkingActions() {
   const { enqueueAndSend } = useOfflineQueue();
+  const { resolveForAction } = useSmartLocation();
   const [roster, setRoster] = useState(() => loadVehicleRoster());
   const [selection, setSelection] = useState(ALL_VEHICLES);
   const [adding, setAdding] = useState(false);
@@ -79,6 +91,9 @@ function ParkingActions() {
   const [forceFetchNonce, setForceFetchNonce] = useState(0);
   const fetchAbortRef = useRef(0);
   const bulkPrefetchDone = useRef(false);
+  const pendingDraftRef = useRef(null);
+  const quickRanRef = useRef(false);
+  const onIOS = useMemo(() => isIOS(), []);
 
   const isAll = selection === ALL_VEHICLES;
   const activePlate = isAll ? '' : selection;
@@ -342,6 +357,13 @@ function ParkingActions() {
 
   useEffect(() => {
     if (isAll) return;
+    if (pendingDraftRef.current) {
+      const next = pendingDraftRef.current;
+      pendingDraftRef.current = null;
+      setDraft(next);
+      commitBaseline(next);
+      return;
+    }
     const next = resolveDraftForPlate(activePlate);
     setDraft(next);
     commitBaseline(next);
@@ -396,6 +418,29 @@ function ParkingActions() {
 
   const isDirty = Boolean(!isAll && draft && baseline && !sameCoord(draft, baseline));
 
+  const sharePayload = useMemo(() => {
+    if (!activePlate) return null;
+    const pos = draft && typeof draft.lat === 'number' ? draft : parked;
+    if (!pos || typeof pos.lat !== 'number' || typeof pos.lng !== 'number') return null;
+    const isPlaceholder = !parked && sameCoord(pos, DEFAULT_MAP_CENTER);
+    if (isPlaceholder && !isDirty) return null;
+    return {
+      plate: activePlate,
+      lat: pos.lat,
+      lng: pos.lng,
+      label: pos.label || parked?.label || '',
+      updatedAt: isDirty ? Date.now() : parked?.updatedAt || Date.now(),
+    };
+  }, [activePlate, draft, parked, isDirty]);
+
+  const liveVehicleUrl = useMemo(() => {
+    if (!sharePayload) return '';
+    return buildVehiclePageUrl({
+      plate: sharePayload.plate,
+      latlong: latlongValue(sharePayload.lat, sharePayload.lng, sharePayload.label),
+    });
+  }, [sharePayload]);
+
   const vehicleAnchor = useMemo(() => {
     if (parked && typeof parked.lat === 'number') {
       return { lat: parked.lat, lng: parked.lng, label: parked.label || '' };
@@ -446,61 +491,157 @@ function ParkingActions() {
     }));
   };
 
-  const handlePark = async () => {
-    if (!activePlate) {
-      setMessage('請先選擇車輛');
-      return;
-    }
-    if (!draft) {
-      setMessage('請先在地圖上選好座標');
-      return;
-    }
+  const parkNow = useCallback(
+    async ({ plate, pos, autoWhatsApp = false, autoCopy = false } = {}) => {
+      const usePlate = plate || activePlate;
+      const usePos = pos || draft;
+      if (!usePlate) {
+        setMessage('請先選擇車輛');
+        return false;
+      }
+      if (!usePos || typeof usePos.lat !== 'number' || typeof usePos.lng !== 'number') {
+        setMessage('請先在地圖上選好座標');
+        return false;
+      }
 
-    setIsSaving(true);
-    setMessage('');
-    try {
-      const lat = draft.lat;
-      const lng = draft.lng;
-      const id = Date.now();
-      const payload = {
-        id,
-        action: 'save_parking',
-        latitude: lat,
-        longitude: lng,
-        accuracy: null,
-        label: draft.label || '',
-        carPlate: activePlate,
-        timestamp: new Date().toISOString(),
-      };
+      setIsSaving(true);
+      setMessage('');
+      try {
+        const lat = usePos.lat;
+        const lng = usePos.lng;
+        const label = usePos.label || '';
+        const id = Date.now();
+        const payload = {
+          id,
+          action: 'save_parking',
+          latitude: lat,
+          longitude: lng,
+          accuracy: null,
+          label,
+          carPlate: usePlate,
+          timestamp: new Date().toISOString(),
+        };
 
-      const parkedRecord = {
-        lat,
-        lng,
-        accuracy: null,
-        updatedAt: Date.now(),
-        label: draft.label || '',
-        carPlate: activePlate,
-      };
-      saveParkedForCar(activePlate, parkedRecord);
-      commitBaseline(parkedRecord);
-      setTick((n) => n + 1);
+        const parkedRecord = {
+          lat,
+          lng,
+          accuracy: null,
+          updatedAt: Date.now(),
+          label,
+          carPlate: usePlate,
+        };
+        saveParkedForCar(usePlate, parkedRecord);
+        commitBaseline(parkedRecord);
+        setDraft({ lat, lng, label });
+        setTick((n) => n + 1);
 
-      const result = await enqueueAndSend(payload);
-      setMessage(
-        result.sent
-          ? `已記下 ${activePlate} 位置`
-          : `已暫存 ${activePlate} 位置（離線佇列）`
-      );
-      markParkedFetched(activePlate);
-      setTick((n) => n + 1);
-      setSyncStatus('synced');
-      setSyncNote('已儲存並上傳');
-    } catch (err) {
-      setMessage(`失敗：${err.message || err}`);
-    } finally {
-      setIsSaving(false);
-    }
+        const result = await enqueueAndSend(payload);
+        setMessage(
+          result.sent
+            ? `已記下 ${usePlate} 位置`
+            : `已暫存 ${usePlate} 位置（離線佇列）`
+        );
+        markParkedFetched(usePlate);
+        setTick((n) => n + 1);
+        setSyncStatus('synced');
+        setSyncNote('已儲存並上傳');
+
+        const share = { plate: usePlate, lat, lng, label, updatedAt: Date.now() };
+        if (autoCopy) {
+          const ok = await copyVehicleShare(share);
+          if (ok && !autoWhatsApp) setMessage(`已記下 ${usePlate} · 已複製`);
+        }
+        if (autoWhatsApp) {
+          sendVehicleWhatsApp(share);
+        }
+        return true;
+      } catch (err) {
+        setMessage(`失敗：${err.message || err}`);
+        return false;
+      } finally {
+        setIsSaving(false);
+      }
+    },
+    [activePlate, draft, enqueueAndSend, commitBaseline]
+  );
+
+  const handlePark = () => {
+    parkNow();
   };
+
+  useEffect(() => {
+    let cancelled = false;
+    let timer = 0;
+
+    const arm = () => {
+      takeVehicleQuickDraft();
+      window.clearTimeout(timer);
+      timer = window.setTimeout(async () => {
+        if (cancelled) return;
+        const q = consumeVehicleQuickDraft();
+        if (!q) return;
+        const plate = normalizePlate(q.plate);
+        if (plate) {
+          const nextRoster = addVehicle(plate);
+          setRoster(nextRoster);
+          if (q.latlong) {
+            pendingDraftRef.current = {
+              lat: q.latlong.lat,
+              lng: q.latlong.lng,
+              label: q.latlong.label || '',
+            };
+          }
+          setSelection(plate);
+          setAdding(false);
+        }
+
+        if (!q.silent) return;
+        if (quickRanRef.current) return;
+        if (!plate) {
+          setMessage('silent 需要車牌');
+          return;
+        }
+        quickRanRef.current = true;
+
+        let pos = q.latlong
+          ? { lat: q.latlong.lat, lng: q.latlong.lng, label: q.latlong.label || '' }
+          : null;
+        if (!pos) {
+          setMessage('正在定位…');
+          try {
+            pos = await resolveForAction();
+          } catch {
+            pos = null;
+          }
+        }
+        if (cancelled) return;
+        if (!pos || typeof pos.lat !== 'number' || typeof pos.lng !== 'number') {
+          quickRanRef.current = false;
+          setMessage('無法取得定位，請在地圖選點後儲存');
+          return;
+        }
+        const next = { lat: pos.lat, lng: pos.lng, label: pos.label || '' };
+        pendingDraftRef.current = next;
+        setDraft(next);
+        await parkNow({
+          plate,
+          pos: next,
+          autoWhatsApp: q.send,
+          autoCopy: q.copy,
+        });
+      }, 50);
+    };
+
+    arm();
+    window.addEventListener('hashchange', arm);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+      window.removeEventListener('hashchange', arm);
+    };
+    // One-shot URL consume + later hash queries
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleNavigate = () => {
     const target = parked || draft;
@@ -697,21 +838,32 @@ function ParkingActions() {
               </time>
             </div>
           ) : null}
-        </div>
-      )}
 
-      {!isAll && activePlate && (
-        <div className="vehicle-shortcuts">
-          {VEHICLE_EXPENSE_SHORTCUTS.map((item) => (
-            <button
-              key={item.subcat}
-              type="button"
-              className="vehicle-shortcut-btn"
-              onClick={() => jumpExpense(item.subcat)}
-            >
-              {item.label}
-            </button>
-          ))}
+          {sharePayload && (
+            <div className="parking-share-bar">
+              <button
+                type="button"
+                className="parking-share-btn"
+                onClick={async () => {
+                  const ok = await copyVehicleShare(sharePayload);
+                  setMessage(ok ? '已複製' : '無法複製');
+                }}
+              >
+                複製
+              </button>
+              <button
+                type="button"
+                className="parking-share-btn parking-share-btn--wa"
+                title={onIOS ? '捷徑 whatsapp.recordCar' : '開啟 WhatsApp'}
+                onClick={() => {
+                  sendVehicleWhatsApp(sharePayload);
+                  setMessage(onIOS ? '已開啟捷徑' : '已開啟 WhatsApp');
+                }}
+              >
+                WhatsApp
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -746,6 +898,29 @@ function ParkingActions() {
       </div>
 
       {message && <div className="entry-message">{message}</div>}
+
+      {!isAll && activePlate && (
+        <section className="vehicle-expense-block">
+          <div className="vehicle-expense-head">
+            <span className="entry-field-label">記帳</span>
+            <span className="entry-hint">開支出頁並帶入車牌，不是記位置</span>
+          </div>
+          <div className="vehicle-shortcuts">
+            {VEHICLE_EXPENSE_SHORTCUTS.map((item) => (
+              <button
+                key={item.subcat}
+                type="button"
+                className="vehicle-shortcut-btn"
+                onClick={() => jumpExpense(item.subcat)}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
+
+      <VehicleUrlExamples liveUrl={liveVehicleUrl} />
     </div>
   );
 }

@@ -133,6 +133,7 @@ export async function fetchCalendarCheck({ force = false } = {}) {
   localStorage.setItem(CALENDAR_CHECK_ATTEMPT_KEY, String(Date.now()));
   const url = buildCalendarTrackUrl({
     op: 'check',
+    days: loadCalendarLookbackDays(),
     lookbackDays: loadCalendarLookbackDays(),
   });
   if (!url) throw new Error('缺少行事曆端點');

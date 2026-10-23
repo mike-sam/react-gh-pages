@@ -1,9 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
 import { SHORTCUTS } from '../config';
 import { useSmartLocation } from '../hooks/useSmartLocation';
 import { useOfflineQueue } from '../context/QueueContext';
-import { useHistoryOverlay } from '../hooks/useHistoryOverlay';
 import { isIOS, openShortcut, stringifyCalendarTrackInput } from '../utils/platform';
 import CalendarUrlExamples from './CalendarUrlExamples';
 import MobileFriendlyDateTime from './MobileFriendlyDateTime';
@@ -25,66 +23,6 @@ import {
   loadCalendarStatus,
 } from '../utils/calendarStatusCache';
 
-function CalendarEndPromptModal({ label, lookbackDays, onPickDays, onCancel, onConfirm }) {
-  useHistoryOverlay(true, onCancel);
-  useEffect(() => {
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => {
-      document.body.style.overflow = prev;
-    };
-  }, []);
-
-  const node = (
-    <div
-      className="picker-modal-overlay picker-modal-overlay--center"
-      onClick={onCancel}
-      role="presentation"
-    >
-      <div
-        className="calendar-end-modal"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="calendar-end-modal-title"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="picker-modal-header">
-          <h4 id="calendar-end-modal-title">尚未送出 · {label}</h4>
-          <button type="button" className="picker-modal-close" onClick={onCancel} aria-label="關閉">
-            ✕
-          </button>
-        </div>
-        <p className="calendar-end-prompt-hint">
-          搜尋過去 {lookbackDays} 天內尚未結束的行程（不含未來）
-        </p>
-        <div className="entry-chip-row">
-          {CALENDAR_LOOKBACK_DAY_CHOICES.map((n) => (
-            <button
-              key={n}
-              type="button"
-              className={`entry-chip${lookbackDays === n ? ' active' : ''}`}
-              onClick={() => onPickDays(n)}
-            >
-              {n} 天
-            </button>
-          ))}
-        </div>
-        <div className="calendar-end-prompt-actions">
-          <button type="button" className="cancel-btn" onClick={onCancel}>
-            取消
-          </button>
-          <button type="button" className="confirm-btn" onClick={onConfirm}>
-            確認 {label}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-
-  if (typeof document === 'undefined') return node;
-  return createPortal(node, document.body);
-}
-
 function CalendarTracker() {
   const { location, hasLocation, locationMode, setLocationMode, refreshLocation } =
     useSmartLocation();
@@ -99,7 +37,6 @@ function CalendarTracker() {
   const [status, setStatus] = useState(() => loadCalendarStatus());
   const [actionTime, setActionTime] = useState(() => new Date());
   const [lookbackDays, setLookbackDays] = useState(() => loadCalendarLookbackDays());
-  const [endPrompt, setEndPrompt] = useState(null);
   const timeEditedRef = useRef(false);
   const editorOpenRef = useRef(false);
   const actionTimeRef = useRef(actionTime);
@@ -153,6 +90,7 @@ function CalendarTracker() {
     }
     params.timestamp = stampCalendarTimestamp(actionTime);
     params.timestampMs = actionTime instanceof Date ? actionTime.getTime() : Date.now();
+    params.days = lookbackDays;
     params.lookbackDays = lookbackDays;
     return buildCalendarTrackUrl(params);
   }, [resolvedTitle, prefix, location, actionTime, lookbackDays]);
@@ -192,8 +130,6 @@ function CalendarTracker() {
       setMessage('請選擇或輸入 Event 標題');
       return;
     }
-    setEndPrompt(null);
-
     const label = flags.uiLabel || resolvedTitle || op;
     const source =
       actionTimeRef.current instanceof Date ? actionTimeRef.current : actionTime;
@@ -232,6 +168,8 @@ function CalendarTracker() {
       startHome: flags.startHome === true,
       all: flags.all === true,
       endAny: flags.endAny === true,
+      silent: true,
+      days,
       lookbackDays: days,
     });
 
@@ -467,16 +405,6 @@ function CalendarTracker() {
         ) : null}
       </div>
 
-      {endPrompt ? (
-        <CalendarEndPromptModal
-          label={endPrompt.flags.uiLabel}
-          lookbackDays={lookbackDays}
-          onPickDays={pickLookbackDays}
-          onCancel={() => setEndPrompt(null)}
-          onConfirm={() => handleOp(endPrompt.op, endPrompt.flags, lookbackDays)}
-        />
-      ) : null}
-
       <div className="entry-btn-row">
         <button
           type="button"
@@ -496,45 +424,57 @@ function CalendarTracker() {
         >
           Start New
         </button>
-        <button
-          type="button"
-          className="entry-btn-end-start"
-          onClick={() =>
-            setEndPrompt({
-              op: 'start',
-              flags: {
+      </div>
+
+      <div className="calendar-end-group">
+        <div className="calendar-end-group-head">
+          <span className="calendar-lookback-caption">過去 {lookbackDays} 天</span>
+          <span className="entry-chip-row calendar-lookback-chips" role="group" aria-label="搜尋過去幾天">
+            {CALENDAR_LOOKBACK_DAY_CHOICES.map((n) => (
+              <button
+                key={n}
+                type="button"
+                className={`entry-chip${lookbackDays === n ? ' active' : ''}`}
+                onClick={() => pickLookbackDays(n)}
+              >
+                {n}天
+              </button>
+            ))}
+          </span>
+        </div>
+        <div className="entry-btn-row">
+          <button
+            type="button"
+            className="entry-btn-end-start"
+            onClick={() =>
+              handleOp('start', {
                 endExisting: true,
                 endAny: true,
                 requireTitle: true,
                 uiLabel: 'End+Start',
-              },
-            })
-          }
-          title="結束任何進行中的行程後，用目前標題開新的"
-        >
-          End+Start
-        </button>
-        <button
-          type="button"
-          className="entry-btn-end"
-          onClick={() => setEndPrompt({ op: 'end', flags: { uiLabel: 'End' } })}
-          title="結束目前所選標題的行程"
-        >
-          End
-        </button>
-        <button
-          type="button"
-          className="entry-btn-end-all"
-          onClick={() =>
-            setEndPrompt({
-              op: 'end',
-              flags: { all: true, endAny: true, uiLabel: 'End All' },
-            })
-          }
-          title="結束所有進行中的行程"
-        >
-          End All
-        </button>
+              })
+            }
+            title="結束任何進行中的行程後，用目前標題開新的"
+          >
+            End+Start
+          </button>
+          <button
+            type="button"
+            className="entry-btn-end"
+            onClick={() => handleOp('end', { uiLabel: 'End' })}
+            title="結束目前所選標題的行程"
+          >
+            End
+          </button>
+          <button
+            type="button"
+            className="entry-btn-end-all"
+            onClick={() => handleOp('end', { all: true, endAny: true, uiLabel: 'End All' })}
+            title="結束所有進行中的行程"
+          >
+            End All
+          </button>
+        </div>
       </div>
       <pre className="calendar-trail-preview" aria-label="預覽">
         <span className="calendar-trail-label">預覽</span>

@@ -35,16 +35,15 @@ import {
   clearExpenseQuickQuery,
   getMergedQueryParams,
 } from '../utils/expenseQuickUrl';
-import { calendarActionPayload } from '../utils/calendarTrackUrl';
-import {
-  applyOptimisticCalendarAction,
-  loadCalendarStatus,
-} from '../utils/calendarStatusCache';
 import { ObligationsPanel } from './ObligationsPage';
+import ExpenseSummary from '../components/ExpenseSummary';
+import { invalidateExpenseSummaryCache } from '../utils/expenseSummary';
 
 function ledgerFromLocation() {
   if (getHashPath() === ROUTES.OBLIGATIONS) return 'scheduled';
-  if (getMergedQueryParams().get('tab') === 'scheduled') return 'scheduled';
+  const tab = getMergedQueryParams().get('tab');
+  if (tab === 'scheduled') return 'scheduled';
+  if (tab === 'summary') return 'summary';
   return 'now';
 }
 
@@ -244,7 +243,7 @@ function ExpensePage() {
     setAmount(entry.amount != null ? String(entry.amount) : '');
     setSelectedTag(entry.tag || '');
     setRemark(entry.remark || '');
-    setSimpleDescription(entry.remark || '');
+    setSimpleDescription(entry.description || entry.remark || '');
     setCurrency(entry.currency || 'MYR');
     setPaymentMethod(entry.payment_method || '');
     setCarPlate(entry.carPlate || '');
@@ -313,10 +312,7 @@ function ExpensePage() {
     const id = editingId != null ? Number(editingId) : selectedDateTime.getTime();
     const dt = editingId != null ? new Date(Number(editingId)) : selectedDateTime;
 
-    const calStart = eventStart;
-    const calEnd = eventEnd;
-    const calTitle = (input || '').trim() || selectedTag || 'Trip';
-    const shouldStartCalendar = editingId == null && Boolean(calStart && calEnd);
+    const hasCalendarRange = Boolean(eventStart && eventEnd);
 
     const contents_for_gsheets = {
       id,
@@ -331,6 +327,7 @@ function ExpensePage() {
       tax_addons: taxAddons,
       tax_tags: formatTaxAddonTags(taxAddons),
       remark,
+      description: String(simpleDescription || '').trim(),
       geolocation: geo,
       latitude: loc?.lat ?? smartLoc?.lat ?? null,
       longitude: loc?.lng ?? smartLoc?.lng ?? null,
@@ -355,6 +352,7 @@ function ExpensePage() {
       amount: computeFinalAmount(amount, taxAddons),
       tag: selectedTag,
       remark,
+      description: String(simpleDescription || '').trim(),
       currency,
       payment_method: paymentMethod,
       event_start: eventStart ? formatDateTime(eventStart, 'YMDHIS') : '',
@@ -390,57 +388,14 @@ function ExpensePage() {
         setLog(pushExpenseHistory(historyEntry));
         resetData();
       }
-      if (shouldStartCalendar) {
-        const lat = loc?.lat ?? null;
-        const lng = loc?.lng ?? null;
-        const t0 = Date.now();
-        applyOptimisticCalendarAction(loadCalendarStatus(), {
-          op: 'start',
-          title: calTitle,
-          uiLabel: 'Start New',
-          queued: !result.sent,
-        });
-        applyOptimisticCalendarAction(loadCalendarStatus(), {
-          op: 'end',
-          title: calTitle,
-          uiLabel: 'End',
-          queued: !result.sent,
-        });
-        void (async () => {
-          try {
-            await enqueueAndSend(
-              calendarActionPayload({
-                op: 'start',
-                title: calTitle,
-                when: calStart,
-                lat,
-                lng,
-                endExisting: true,
-                id: t0 + 1,
-              })
-            );
-            await enqueueAndSend(
-              calendarActionPayload({
-                op: 'end',
-                title: calTitle,
-                when: calEnd,
-                lat,
-                lng,
-                id: t0 + 2,
-              })
-            );
-          } catch (err) {
-            console.warn('expense calendar range failed', err);
-          }
-        })();
-      }
+      invalidateExpenseSummaryCache(formatDateTime(dt, 'YM'));
       setOutput(
         result.sent
-          ? shouldStartCalendar
-            ? '已送出 · 已排入行事曆 Start New'
+          ? hasCalendarRange
+            ? '已送出 · 已寫入行事曆'
             : '已送出'
-          : shouldStartCalendar
-            ? '已暫存佇列 · 含行事曆 Start New'
+          : hasCalendarRange
+            ? '已暫存佇列 · 含行事曆'
             : '目前離線或網路異常，已暫存於本機佇列，稍後自動同步'
       );
       return true;
@@ -459,6 +414,7 @@ function ExpensePage() {
     amount,
     taxAddons,
     remark,
+    simpleDescription,
     smartLoc,
     selectedTag,
     currency,
@@ -601,7 +557,13 @@ function ExpensePage() {
 
   const goLedger = (next) => {
     setLedger(next);
-    applyHash(next === 'scheduled' ? '#/expense?tab=scheduled' : '#/expense', {
+    const hash =
+      next === 'scheduled'
+        ? '#/expense?tab=scheduled'
+        : next === 'summary'
+          ? '#/expense?tab=summary'
+          : '#/expense';
+    applyHash(hash, {
       replace: true,
       state: window.history.state,
     });
@@ -641,10 +603,28 @@ function ExpensePage() {
             </svg>
             排程
           </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={ledger === 'summary'}
+            className={`ledger-tab${ledger === 'summary' ? ' is-active' : ''}`}
+            aria-label="報表"
+            onClick={() => goLedger('summary')}
+          >
+            <svg className="ledger-tab-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden>
+              <path
+                fill="currentColor"
+                d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zM9 17H7v-7h2v7zm4 0h-2V7h2v10zm4 0h-2v-4h2v4z"
+              />
+            </svg>
+            報表
+          </button>
         </div>
 
         {ledger === 'scheduled' ? (
           <ObligationsPanel />
+        ) : ledger === 'summary' ? (
+          <ExpenseSummary />
         ) : (
           <>
         {(silentPhase === 'armed' || silentPhase === 'sending') && (

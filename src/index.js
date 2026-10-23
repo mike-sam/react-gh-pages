@@ -7,26 +7,30 @@ import { LocationProvider } from './context/LocationContext';
 import { ThemeProvider } from './context/ThemeContext';
 import { QueueProvider } from './context/QueueContext';
 import { FloatingStackProvider } from './context/FloatingStackContext';
+import AccessGate from './components/AccessGate';
 import { registerSW } from './utils/registerSW';
-import { ensureAppBootstrap } from './utils/appBootstrap';
+import { installAccessFetchHook } from './utils/accessGate';
+
+installAccessFetchHook();
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(
   <React.StrictMode>
     <ThemeProvider>
-      <LocationProvider>
-        <QueueProvider>
-          <FloatingStackProvider>
-            <App />
-          </FloatingStackProvider>
-        </QueueProvider>
-      </LocationProvider>
+      <AccessGate>
+        <LocationProvider>
+          <QueueProvider>
+            <FloatingStackProvider>
+              <App />
+            </FloatingStackProvider>
+          </QueueProvider>
+        </LocationProvider>
+      </AccessGate>
     </ThemeProvider>
   </React.StrictMode>
 );
 
 registerSW();
-ensureAppBootstrap();
 
 // If you want to start measuring performance in your app, pass a function
 // to log results (for example: reportWebVitals(console.log))

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef } from 'react';
+import React, { useEffect, useRef } from 'react';
 import {
   Circle,
   CircleMarker,
@@ -66,6 +66,18 @@ export function Recenter({ lat, lng, focusNonce }) {
   return null;
 }
 
+/** After CSS size changes (fullscreen), tell Leaflet to remeasure. */
+export function MapInvalidateOn({ token }) {
+  const map = useMap();
+  useEffect(() => {
+    const t = window.setTimeout(() => {
+      map.invalidateSize({ animate: false });
+    }, 80);
+    return () => window.clearTimeout(t);
+  }, [token, map]);
+  return null;
+}
+
 export function DraggableMarker({ position, onChange }) {
   const markerRef = useRef(null);
   return (
@@ -128,14 +140,45 @@ export function ProbeDot({ lat, lng }) {
   );
 }
 
+let suppressMapClickUntil = 0;
+
+function suppressMapClick(ms = 400) {
+  suppressMapClickUntil = Date.now() + ms;
+}
+
+function isMapClickSuppressed() {
+  return Date.now() < suppressMapClickUntil;
+}
+
+function clickOnVertexIcon(e) {
+  const t = e?.originalEvent?.target;
+  if (!t || typeof t.closest !== 'function') return false;
+  return Boolean(t.closest('.landmark-vertex-icon, .leaflet-marker-draggable'));
+}
+
 export function MapEditClick({ onPin, onAddVertex, polygonMode }) {
+  const map = useMap();
+  useEffect(() => {
+    if (polygonMode) map.doubleClickZoom.disable();
+    else map.doubleClickZoom.enable();
+    return () => {
+      map.doubleClickZoom.enable();
+    };
+  }, [map, polygonMode]);
   useMapEvents({
     click(e) {
+      if (isMapClickSuppressed() || clickOnVertexIcon(e)) return;
       if (polygonMode) {
         onAddVertex?.(e.latlng.lat, e.latlng.lng);
         return;
       }
       onPin?.(e.latlng.lat, e.latlng.lng);
+    },
+    dblclick(e) {
+      if (!polygonMode) return;
+      suppressMapClick(800);
+      L.DomEvent.stop(e);
+      if (e.originalEvent) L.DomEvent.stop(e.originalEvent);
     },
   });
   return null;
@@ -265,55 +308,126 @@ function vertexIcon(selected) {
   });
 }
 
-function VertexHandle({ index, lat, lng, selected, onMove, onSelect }) {
-  const markerRef = useRef(null);
-  const draggedRef = useRef(false);
-  const icon = useMemo(() => vertexIcon(selected), [selected]);
-  return (
-    <Marker
-      draggable
-      autoPan
-      bubblingMouseEvents={false}
-      position={[lat, lng]}
-      icon={icon}
-      zIndexOffset={selected ? 1200 : 1000}
-      ref={markerRef}
-      eventHandlers={{
-        click(e) {
-          L.DomEvent.stopPropagation(e.originalEvent || e);
-          if (draggedRef.current) return;
-          onSelect(index);
-        },
-        dragstart() {
-          draggedRef.current = true;
-        },
-        dragend() {
-          const marker = markerRef.current;
-          if (marker) {
-            const ll = marker.getLatLng();
-            onMove(index, ll.lat, ll.lng);
-          }
-          window.setTimeout(() => {
-            draggedRef.current = false;
-          }, 0);
-        },
-      }}
-    />
-  );
+function stopVertexEvent(e) {
+  suppressMapClick(800);
+  L.DomEvent.stop(e);
+  if (e?.originalEvent) {
+    L.DomEvent.stop(e.originalEvent);
+  }
 }
 
-export function VertexMarkers({ vertices, selectedIndex, onMove, onSelect }) {
-  return (vertices || []).map((v, i) => (
-    <VertexHandle
-      key={`vx-${i}`}
-      index={i}
-      lat={v.lat}
-      lng={v.lng}
-      selected={selectedIndex === i}
-      onMove={onMove}
-      onSelect={onSelect}
-    />
-  ));
+/**
+ * Imperative vertex layer. react-leaflet Marker is a controlled `position`,
+ * so parent re-renders call setLatLng(original) and snap the drag back.
+ */
+export function VertexMarkers({ vertices, selectedIndex, onMove, onSelect, onDragLive }) {
+  const map = useMap();
+  const layerRef = useRef(null);
+  const markersRef = useRef([]);
+  const dragIndexRef = useRef(-1);
+  const lastClickAtRef = useRef(0);
+  const ignoreClickUntilRef = useRef(0);
+  const propsRef = useRef({ vertices, selectedIndex, onMove, onSelect, onDragLive });
+  propsRef.current = { vertices, selectedIndex, onMove, onSelect, onDragLive };
+
+  useEffect(() => {
+    const layer = L.layerGroup().addTo(map);
+    layerRef.current = layer;
+    return () => {
+      layer.remove();
+      layerRef.current = null;
+      markersRef.current = [];
+      dragIndexRef.current = -1;
+    };
+  }, [map]);
+
+  useEffect(() => {
+    const layer = layerRef.current;
+    if (!layer) return;
+    const verts = Array.isArray(vertices) ? vertices : [];
+    const markers = markersRef.current;
+
+    const bindMarker = (marker) => {
+      marker.on('mousedown', stopVertexEvent);
+      marker.on('dblclick', stopVertexEvent);
+      marker.on('click', (e) => {
+        stopVertexEvent(e);
+        if (dragIndexRef.current >= 0) return;
+        const now = Date.now();
+        if (now < ignoreClickUntilRef.current) return;
+        if (now - lastClickAtRef.current < 400) return;
+        lastClickAtRef.current = now;
+        propsRef.current.onSelect(marker._vertexIndex);
+      });
+      marker.on('dragstart', (e) => {
+        stopVertexEvent(e);
+        dragIndexRef.current = marker._vertexIndex;
+      });
+      marker.on('drag', () => {
+        suppressMapClick(800);
+        const ll = marker.getLatLng();
+        propsRef.current.onDragLive?.({
+          index: marker._vertexIndex,
+          lat: ll.lat,
+          lng: ll.lng,
+        });
+      });
+      marker.on('dragend', () => {
+        suppressMapClick(800);
+        const idx = marker._vertexIndex;
+        const ll = marker.getLatLng();
+        ignoreClickUntilRef.current = Date.now() + 200;
+        dragIndexRef.current = -1;
+        propsRef.current.onMove(idx, ll.lat, ll.lng);
+        propsRef.current.onDragLive?.(null);
+      });
+    };
+
+    while (markers.length > verts.length) {
+      const extra = markers.pop();
+      layer.removeLayer(extra);
+    }
+    while (markers.length < verts.length) {
+      const i = markers.length;
+      const v = verts[i];
+      const marker = L.marker([v.lat, v.lng], {
+        draggable: true,
+        autoPan: false,
+        keyboard: false,
+        bubblingMouseEvents: false,
+        icon: vertexIcon(false),
+        zIndexOffset: 1000,
+        title: `頂點 ${i + 1}`,
+        alt: `頂點 ${i + 1}`,
+      });
+      bindMarker(marker);
+      marker.addTo(layer);
+      if (marker.dragging?._draggable) {
+        marker.dragging._draggable.options.clickTolerance = 12;
+      }
+      markers.push(marker);
+    }
+
+    markers.forEach((marker, i) => {
+      marker._vertexIndex = i;
+      const selected = selectedIndex === i;
+      const dragging = dragIndexRef.current === i;
+      if (!dragging && marker._vertexSelected !== selected) {
+        marker.setIcon(vertexIcon(selected));
+        marker._vertexSelected = selected;
+        marker.setZIndexOffset(selected ? 1200 : 1000);
+      }
+      marker.options.title = `頂點 ${i + 1}`;
+      if (dragging) return;
+      const v = verts[i];
+      const ll = marker.getLatLng();
+      if (ll.lat !== v.lat || ll.lng !== v.lng) {
+        marker.setLatLng([v.lat, v.lng]);
+      }
+    });
+  }, [vertices, selectedIndex]);
+
+  return null;
 }
 
 export function ReturnPinButton({ buttonRef, onClick }) {

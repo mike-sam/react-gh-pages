@@ -110,10 +110,10 @@ export const CALENDAR_TRACK_PARAMS = [
     note: '預設 0。start 時 1：結束任何進行中（含既有行程）再開新的',
   },
   {
-    name: 'lookbackDays',
+    name: 'days',
     required: 'optional',
     example: '3',
-    note: '搜尋過去 N 天內尚未結束的行程（1–14，預設 3）。End / End All / End+Start 會用到',
+    note: '搜尋過去 N 天（1–14，預設 3）。也可用 lookbackDays',
   },
 ];
 
@@ -129,8 +129,11 @@ export function calendarActionPayload({
   endAny = false,
   prefix = '',
   lookbackDays,
+  days,
+  silent = true,
   id,
 }) {
+  const resolvedDays = Number(days ?? lookbackDays) || CALENDAR_LOOKBACK_DAYS_DEFAULT;
   return {
     id: id ?? Date.now(),
     action: 'trackCalendar',
@@ -145,7 +148,9 @@ export function calendarActionPayload({
     startHome: false,
     all: Boolean(all),
     endAny: Boolean(endAny),
-    lookbackDays: Number(lookbackDays) || CALENDAR_LOOKBACK_DAYS_DEFAULT,
+    silent: silent !== false,
+    days: resolvedDays,
+    lookbackDays: resolvedDays,
   };
 }
 
@@ -231,6 +236,8 @@ export function buildCalendarTrackUrl(params, base = calendarTrackEndpoint()) {
     'startHome',
     'all',
     'endAny',
+    'silent',
+    'days',
     'lookbackDays',
   ];
   keys.forEach((k) => {
@@ -275,21 +282,23 @@ export function calendarTrackUrlExamples() {
     },
     {
       title: 'End+Start · Work',
-      note: '結束任何進行中後開 Work',
+      note: '結束任何進行中後開 Work。days 可省略（預設 3）',
       params: {
         op: 'start',
         title: 'Work',
         endExisting: true,
         endAny: true,
+        days: 3,
         timestamp: ts,
       },
     },
     {
       title: 'End All',
-      note: '結束所有進行中（**start**、即時行程、Home）',
+      note: '結束所有進行中。days 可省略（預設 3）',
       params: {
         op: 'end',
         all: true,
+        days: 3,
         timestamp: ts,
       },
     },

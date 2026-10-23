@@ -239,6 +239,10 @@ export function regionAreaM2(region) {
 }
 
 export const VERTEX_SNAP_M = 30;
+/** Click within this of an edge sticks onto the edge; farther clicks keep the tap point. */
+export const EDGE_STICK_M = 18;
+/** Ignore snap-merge unless the vertex actually moved (dblclick / click jitter). */
+export const MIN_MERGE_MOVE_M = 10;
 
 function localMetersPerDegree(lat) {
   const cos = Math.cos((Number(lat) * Math.PI) / 180);
@@ -248,25 +252,41 @@ function localMetersPerDegree(lat) {
   };
 }
 
-/** Shortest distance from point to segment AB, in metres. */
-export function distancePointToSegmentMeters(point, a, b) {
-  if (!point || !a || !b) return Infinity;
+/** Closest point on segment AB, in lat/lng, plus distance in metres. */
+export function closestPointOnSegment(point, a, b) {
+  if (!point || !a || !b) {
+    return { lat: NaN, lng: NaN, t: 0, distM: Infinity };
+  }
   const { mPerLat, mPerLng } = localMetersPerDegree(a.lat);
   const px = (point.lng - a.lng) * mPerLng;
   const py = (point.lat - a.lat) * mPerLat;
   const bx = (b.lng - a.lng) * mPerLng;
   const by = (b.lat - a.lat) * mPerLat;
   const len2 = bx * bx + by * by;
-  if (len2 < 1e-6) return distanceMeters(point, a);
-  let t = (px * bx + py * by) / len2;
-  t = Math.max(0, Math.min(1, t));
-  return Math.hypot(px - t * bx, py - t * by);
+  let t = 0;
+  if (len2 >= 1e-6) {
+    t = (px * bx + py * by) / len2;
+    t = Math.max(0, Math.min(1, t));
+  }
+  return {
+    lat: a.lat + t * (by / mPerLat),
+    lng: a.lng + t * (bx / mPerLng),
+    t,
+    distM: Math.hypot(px - t * bx, py - t * by),
+  };
+}
+
+/** Shortest distance from point to segment AB, in metres. */
+export function distancePointToSegmentMeters(point, a, b) {
+  return closestPointOnSegment(point, a, b).distM;
 }
 
 /**
  * Add a polygon vertex next to nearby points instead of always appending
  * (which makes edges jump across the shape).
- * n < 3: append. n >= 3: insert on the nearest edge. Snap if within VERTEX_SNAP_M.
+ * n < 3: append. n >= 3: insert on the nearest edge.
+ * Snap to an existing vertex within VERTEX_SNAP_M.
+ * Only stick onto the edge if the tap is within EDGE_STICK_M; otherwise keep the tap point.
  */
 export function insertPolygonVertex(vertices, point, snapM = VERTEX_SNAP_M) {
   const verts = Array.isArray(vertices) ? vertices : [];
@@ -295,16 +315,149 @@ export function insertPolygonVertex(vertices, point, snapM = VERTEX_SNAP_M) {
   let bestI = verts.length - 1;
   let bestD = Infinity;
   for (let i = 0; i < verts.length; i++) {
-    const d = distancePointToSegmentMeters(pt, verts[i], verts[(i + 1) % verts.length]);
-    if (d < bestD) {
-      bestD = d;
+    const hit = closestPointOnSegment(pt, verts[i], verts[(i + 1) % verts.length]);
+    if (hit.distM < bestD) {
+      bestD = hit.distM;
       bestI = i;
     }
   }
+  const hit = closestPointOnSegment(pt, verts[bestI], verts[(bestI + 1) % verts.length]);
+  const insertPt = hit.distM <= EDGE_STICK_M ? { lat: hit.lat, lng: hit.lng } : pt;
   const next = [...verts];
   const insertAt = bestI + 1;
-  next.splice(insertAt, 0, pt);
+  next.splice(insertAt, 0, insertPt);
   return { vertices: next, index: insertAt, snapped: false };
+}
+
+function orient2d(a, b, c) {
+  const { mPerLat, mPerLng } = localMetersPerDegree(a.lat);
+  const ax = a.lng * mPerLng;
+  const ay = a.lat * mPerLat;
+  const bx = b.lng * mPerLng;
+  const by = b.lat * mPerLat;
+  const cx = c.lng * mPerLng;
+  const cy = c.lat * mPerLat;
+  return (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+}
+
+function segmentsCross(a, b, c, d) {
+  const o1 = orient2d(a, b, c);
+  const o2 = orient2d(a, b, d);
+  const o3 = orient2d(c, d, a);
+  const o4 = orient2d(c, d, b);
+  return o1 * o2 < 0 && o3 * o4 < 0;
+}
+
+/** True when two non-adjacent edges of the closed ring properly intersect. */
+export function polygonSelfIntersects(vertices) {
+  const verts = Array.isArray(vertices) ? vertices : [];
+  const n = verts.length;
+  if (n < 4) return false;
+  for (let i = 0; i < n; i += 1) {
+    for (let j = i + 1; j < n; j += 1) {
+      if (j === i + 1) continue;
+      if (i === 0 && j === n - 1) continue;
+      if (
+        segmentsCross(
+          verts[i],
+          verts[(i + 1) % n],
+          verts[j],
+          verts[(j + 1) % n]
+        )
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * Pull `index` out of the ring and splice it onto a remaining edge.
+ * Prefer a simple (non-crossing) ring; among those, the nearest edge.
+ */
+export function reinsertVertexOnNearestEdge(vertices, index) {
+  const verts = Array.isArray(vertices) ? vertices.map((v) => ({ lat: v.lat, lng: v.lng })) : [];
+  if (index < 0 || index >= verts.length || verts.length < 4) {
+    return { vertices: verts, index, changed: false };
+  }
+  const pt = verts[index];
+  const rest = verts.filter((_, i) => i !== index);
+  const candidates = [];
+  for (let i = 0; i < rest.length; i += 1) {
+    const next = [...rest];
+    const insertAt = i + 1;
+    next.splice(insertAt, 0, pt);
+    const dist = closestPointOnSegment(pt, rest[i], rest[(i + 1) % rest.length]).distM;
+    candidates.push({
+      vertices: next,
+      index: insertAt,
+      dist,
+      crosses: polygonSelfIntersects(next),
+    });
+  }
+  const simple = candidates.filter((c) => !c.crosses);
+  const pool = simple.length ? simple : candidates;
+  pool.sort((a, b) => a.dist - b.dist);
+  const best = pool[0];
+  if (!best) return { vertices: verts, index, changed: false };
+  const unchanged =
+    best.vertices.length === verts.length &&
+    best.vertices.every((v, i) => v.lat === verts[i].lat && v.lng === verts[i].lng);
+  return { vertices: best.vertices, index: best.index, changed: !unchanged };
+}
+
+/**
+ * Drop a vertex at lat/lng. If it lands on another vertex, snap onto it and
+ * remove the duplicate so the ring forms a new shape instead of stacking.
+ * If the in-place ring crosses itself, reinsert the vertex on the nearest edge.
+ */
+export function commitPolygonVertexMove(vertices, index, lat, lng, snapM = VERTEX_SNAP_M) {
+  const verts = Array.isArray(vertices) ? vertices.map((v) => ({ lat: v.lat, lng: v.lng })) : [];
+  if (index < 0 || index >= verts.length) {
+    return { vertices: verts, index, changed: false };
+  }
+  const pt = { lat: Number(lat), lng: Number(lng) };
+  if (!Number.isFinite(pt.lat) || !Number.isFinite(pt.lng)) {
+    return { vertices: verts, index, changed: false };
+  }
+  let hit = -1;
+  let hitD = Infinity;
+  verts.forEach((v, i) => {
+    if (i === index) return;
+    const d = distanceMeters(pt, v);
+    if (d < hitD) {
+      hitD = d;
+      hit = i;
+    }
+  });
+  const prev = verts[index];
+  const movedM = prev ? distanceMeters(prev, pt) : Infinity;
+  if (hit >= 0 && hitD <= snapM && verts.length > 3 && movedM >= MIN_MERGE_MOVE_M) {
+    const snapped = { lat: verts[hit].lat, lng: verts[hit].lng };
+    const next = verts.map((v, i) => (i === index ? snapped : v)).filter((_, i) => i !== hit);
+    const newIndex = hit < index ? index - 1 : index;
+    return { vertices: next, index: newIndex, changed: true, merged: true };
+  }
+  if (prev && prev.lat === pt.lat && prev.lng === pt.lng) {
+    return { vertices: verts, index, changed: false };
+  }
+  verts[index] = pt;
+  if (verts.length >= 4 && polygonSelfIntersects(verts)) {
+    const relocated = reinsertVertexOnNearestEdge(verts, index);
+    if (relocated.changed) {
+      return {
+        vertices: relocated.vertices,
+        index: relocated.index,
+        changed: true,
+        merged: false,
+        reordered: true,
+        original: verts,
+        fromIndex: index,
+      };
+    }
+  }
+  return { vertices: verts, index, changed: true, merged: false };
 }
 
 /** Shoelace area in m² using a local-meters projection. */

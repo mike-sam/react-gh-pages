@@ -11,7 +11,7 @@ const ACTIONS = [
     path: ROUTES.EXPENSE,
     icon: '🧾',
     title: '記帳',
-    desc: '單筆或排程入帳。URL 參數見內頁 ?',
+    desc: '單筆、排程、報表。URL 參數見內頁 ?',
     direct: '#/expense',
   },
   {
@@ -25,7 +25,7 @@ const ACTIONS = [
     path: ROUTES.VEHICLES,
     icon: '🚗',
     title: '車輛',
-    desc: '地圖上看全部車輛，記位置與保養記帳',
+    desc: '地圖上看全部車輛，記位置與保養記帳。URL 參數見內頁 ?',
     direct: '#/vehicles',
   },
   {
