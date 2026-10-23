@@ -3323,7 +3323,7 @@ function postObligationInstallmentToRecords(ob, inst) {
     id: recordId,
     timestamp_ms: now.getTime(),
     timestamp: datetimetoYMDHIS(now),
-    yearmonth: Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyyMM'),
+    yearmonth: Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyy-MM'),
     title: ob.title || ob.name,
     amount: amount.toFixed(2),
     remark: remark,
@@ -3532,12 +3532,28 @@ function syncExpenseCalendarEvent(data, upsert) {
   return eventId;
 }
 
+/** Records 存 yyyyMM，報表用 yyyy-MM。讀寫都先正規化。 */
+function normalizeYearMonth(raw) {
+  if (raw == null || raw === '') return '';
+  if (Object.prototype.toString.call(raw) === '[object Date]' && !isNaN(raw.getTime())) {
+    return Utilities.formatDate(raw, Session.getScriptTimeZone(), 'yyyy-MM');
+  }
+  var s = String(raw).trim();
+  var m = s.match(/^(\d{4})[-\/]?(\d{1,2})/);
+  if (!m) return '';
+  var month = ('0' + m[2]).slice(-2);
+  if (Number(month) < 1 || Number(month) > 12) return '';
+  return m[1] + '-' + month;
+}
+
 function invalidateExpenseSummary(yearmonth) {
-  var ym = String(yearmonth || '').trim();
+  var ym = normalizeYearMonth(yearmonth);
   if (!ym) {
     ym = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM');
   }
-  PropertiesService.getScriptProperties().deleteProperty(EXPENSE_SUMMARY_PREFIX + ym);
+  var props = PropertiesService.getScriptProperties();
+  props.deleteProperty(EXPENSE_SUMMARY_PREFIX + ym);
+  props.deleteProperty(EXPENSE_SUMMARY_PREFIX + ym.replace('-', ''));
 }
 
 function sheetText(v) {
@@ -3551,15 +3567,11 @@ function sheetText(v) {
 function rowYearMonth(row, col) {
   var tz = Session.getScriptTimeZone();
   var ymCell = col.yearmonth != null ? row[col.yearmonth] : '';
-  var yearmonth = '';
-  if (Object.prototype.toString.call(ymCell) === '[object Date]' && !isNaN(ymCell.getTime())) {
-    yearmonth = Utilities.formatDate(ymCell, tz, 'yyyy-MM');
-  } else {
-    yearmonth = String(ymCell != null ? ymCell : '').trim();
-  }
+  var yearmonth = normalizeYearMonth(ymCell);
   if (!yearmonth && col.timestamp != null && row[col.timestamp]) {
     try {
-      yearmonth = Utilities.formatDate(new Date(row[col.timestamp]), tz, 'yyyy-MM');
+      yearmonth = normalizeYearMonth(row[col.timestamp]) ||
+        Utilities.formatDate(new Date(row[col.timestamp]), tz, 'yyyy-MM');
     } catch (e) {}
   }
   return yearmonth;
@@ -3682,7 +3694,7 @@ function computeExpenseSummary(ym) {
 function getExpenseSummary(parameter) {
   try {
     parameter = parameter || {};
-    var ym = String(parameter.yearmonth || '').trim();
+    var ym = normalizeYearMonth(parameter.yearmonth);
     if (!ym) ym = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM');
     var force = /^(1|true|yes)$/i.test(String(parameter.force || ''));
     var props = PropertiesService.getScriptProperties();
@@ -3694,7 +3706,7 @@ function getExpenseSummary(parameter) {
       if (cachedRaw) {
         try {
           var cached = JSON.parse(cachedRaw);
-          if (cached && Array.isArray(cached.byTag)) {
+          if (cached && Array.isArray(cached.byTag) && Number(cached.count) > 0) {
             live = cached;
             fromCache = true;
           }
