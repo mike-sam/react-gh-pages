@@ -407,6 +407,7 @@ function ExpensePage() {
       remark,
       description: String(simpleDescription || '').trim(),
       geolocation: geo,
+      location_label: loc?.label || '',
       latitude: loc?.lat ?? smartLoc?.lat ?? null,
       longitude: loc?.lng ?? smartLoc?.lng ?? null,
       tag: selectedTag,

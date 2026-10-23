@@ -1008,10 +1008,21 @@ function resolveGeminiModel_(name) {
   var n = String(name || '').trim().replace(/[\r\n]/g, '');
   n = n.replace(/^models\//i, '');
   var slug = n.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9._-]/g, '');
-  if (/^gemini-[a-z0-9._-]+$/.test(slug)) return slug;
-  if (/flash-lite/.test(slug)) return 'gemini-2.5-flash-lite';
-  if (/flash/.test(slug) || /^gemini/.test(slug)) return 'gemini-2.5-flash';
+  // Only pass through versioned ids (gemini-2.5-flash). "gemini-flash" 404s.
+  if (/^gemini-\d+[a-z0-9._-]*$/.test(slug)) return slug;
+  if (/lite/.test(slug)) return 'gemini-2.5-flash-lite';
+  if (/pro/.test(slug)) return 'gemini-2.5-pro';
   return 'gemini-2.5-flash';
+}
+
+function geminiHttpError_(code, text) {
+  var msg = '';
+  try {
+    var j = JSON.parse(text);
+    msg = String(((j && j.error) || {}).message || '').trim();
+  } catch (e) {}
+  if (!msg) msg = String(text || '').replace(/^\s*\{[\s\S]*$/, '').trim();
+  return 'Gemini HTTP ' + code + (msg ? ': ' + msg : '');
 }
 
 function buildReceiptPrompt_(data) {
@@ -1068,36 +1079,12 @@ function parseGeminiSuggestions_(text) {
   return list.filter(function (s) { return s && typeof s === 'object'; }).slice(0, 8);
 }
 
-function callGeminiVision_(apiKey, model, mimeType, base64, prompt) {
-  var url = 'https://generativelanguage.googleapis.com/v1beta/models/' +
-    model + ':generateContent?key=' + encodeURIComponent(apiKey);
-  var body = {
-    contents: [{
-      parts: [
-        { text: prompt },
-        { inlineData: { mimeType: mimeType || 'image/jpeg', data: base64 } }
-      ]
-    }],
-    generationConfig: {
-      temperature: 0.2,
-      responseMimeType: 'application/json'
-    }
-  };
-  var res = UrlFetchApp.fetch(url, {
-    method: 'post',
-    contentType: 'application/json',
-    payload: JSON.stringify(body),
-    muteHttpExceptions: true
-  });
-  var code = res.getResponseCode();
-  var text = res.getContentText() || '';
-  if (code < 200 || code >= 300) {
-    throw new Error('Gemini HTTP ' + code + ' ' + sanitizeGeminiError_(text));
-  }
-  var parsed = JSON.parse(text);
+function extractGeminiText_(httpBody) {
+  var parsed = JSON.parse(httpBody);
   var parts = ((((parsed || {}).candidates || [])[0] || {}).content || {}).parts || [];
   var out = '';
-  for (var i = 0; i < parts.length; i++) {
+  var i;
+  for (i = 0; i < parts.length; i++) {
     if (parts[i] && parts[i].text) out += parts[i].text;
   }
   if (!out) {
@@ -1105,6 +1092,46 @@ function callGeminiVision_(apiKey, model, mimeType, base64, prompt) {
     throw new Error(block ? ('Gemini blocked: ' + block) : 'Gemini 無內容');
   }
   return out;
+}
+
+function callGeminiVision_(apiKey, model, mimeType, base64, prompt) {
+  var tried = [];
+  var models = [model, 'gemini-2.5-flash', 'gemini-2.0-flash'];
+  var lastErr = '';
+  var i;
+  for (i = 0; i < models.length; i++) {
+    var m = String(models[i] || '').trim();
+    if (!m || tried.indexOf(m) !== -1) continue;
+    tried.push(m);
+    var url = 'https://generativelanguage.googleapis.com/v1beta/models/' +
+      m + ':generateContent?key=' + encodeURIComponent(apiKey);
+    var body = {
+      contents: [{
+        parts: [
+          { text: prompt },
+          { inlineData: { mimeType: mimeType || 'image/jpeg', data: base64 } }
+        ]
+      }],
+      generationConfig: {
+        temperature: 0.2,
+        responseMimeType: 'application/json'
+      }
+    };
+    var res = UrlFetchApp.fetch(url, {
+      method: 'post',
+      contentType: 'application/json',
+      payload: JSON.stringify(body),
+      muteHttpExceptions: true
+    });
+    var code = res.getResponseCode();
+    var text = res.getContentText() || '';
+    if (code >= 200 && code < 300) {
+      return { text: extractGeminiText_(text), model: m };
+    }
+    lastErr = geminiHttpError_(code, text);
+    if (code !== 404 && code !== 400) break;
+  }
+  throw new Error(sanitizeGeminiError_(lastErr || 'Gemini 失敗'));
 }
 
 function ensureAiSuggestSheet() {
@@ -1143,14 +1170,15 @@ function handleAnalyzeReceipt(data) {
     var mime = data.mimeType || data.type || 'image/jpeg';
     if (String(mime).indexOf('image/') !== 0) mime = 'image/jpeg';
     var prompt = buildReceiptPrompt_(data);
-    var rawText = callGeminiVision_(apiKey, model, mime, b64, prompt);
-    var suggestions = parseGeminiSuggestions_(rawText);
+    var vision = callGeminiVision_(apiKey, model, mime, b64, prompt);
+    var suggestions = parseGeminiSuggestions_(vision.text);
+    var usedModel = vision.model || model;
     var hash = photoHash_(b64);
-    appendLog(['analyzeReceipt', data.tag || '', data.title || '', suggestions.length, model, hash]);
+    appendLog(['analyzeReceipt', data.tag || '', data.title || '', suggestions.length, usedModel, hash]);
     return jsonOut({
       success: true,
       action: 'analyzeReceipt',
-      model: model,
+      model: usedModel,
       photoHash: hash,
       suggestions: suggestions
     });
@@ -4036,12 +4064,31 @@ function expenseDescShort(raw) {
   return s.substring(0, 3);
 }
 
+function expenseLocationName_(data) {
+  data = data || {};
+  var label = String(data.location_label || data.place || data.locationName || '').trim();
+  if (label) return label;
+  var geo = String(data.geolocation || '');
+  var m = geo.match(/[?&]name=([^&]+)/i);
+  if (m) {
+    try {
+      return decodeURIComponent(String(m[1]).replace(/\+/g, ' ')).trim();
+    } catch (e) {
+      return String(m[1] || '').trim();
+    }
+  }
+  return '';
+}
+
 function expenseCalendarTitle(data) {
   var subcat = String((data && data.title) || '').trim() || '支出';
   var shortDesc = expenseDescShort(
     (data && (data.description || data.simpleDescription || data.remark)) || ''
   );
-  return shortDesc ? '[' + subcat + '] - ' + shortDesc : '[' + subcat + ']';
+  var locName = expenseLocationName_(data);
+  var title = shortDesc ? '[' + subcat + '] - ' + shortDesc : '[' + subcat + ']';
+  if (locName && title.indexOf(locName) === -1) title += ' · ' + locName;
+  return title;
 }
 
 function expenseCalendarBody(data, recordId) {

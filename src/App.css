@@ -7409,6 +7409,7 @@ input,textarea {
   -webkit-overflow-scrolling: touch;
   scrollbar-width: none;
   overscroll-behavior: contain;
+  scroll-snap-type: y mandatory;
 }
 .wheel-picker--y .wheel-picker-track {
   overflow-x: hidden;
@@ -7420,9 +7421,10 @@ input,textarea {
   overflow-x: auto;
   overflow-y: hidden;
   align-items: stretch;
+  scroll-snap-type: x mandatory;
 }
 .wheel-picker-track::-webkit-scrollbar { display: none; width: 0; height: 0; }
-.wheel-picker-pad { flex-shrink: 0; pointer-events: none; }
+.wheel-picker-pad { flex-shrink: 0; pointer-events: none; scroll-snap-align: none; }
 .wheel-picker-item {
   appearance: none;
   border: none;
@@ -7441,6 +7443,7 @@ input,textarea {
   opacity: 0.28;
   transform: scale(0.88);
   transition: opacity 0.12s ease, transform 0.12s ease, color 0.12s ease;
+  scroll-snap-align: center;
 }
 .wheel-picker--x .wheel-picker-item {
   width: auto;

@@ -16,12 +16,14 @@ function WheelPicker({
   className = '',
   ariaLabel,
   infinite: infiniteProp,
+  flushRef,
 }) {
   const viewportRef = useRef(null);
   const trackRef = useRef(null);
   const settleTimer = useRef(null);
   const syncing = useRef(false);
   const skipChangeRef = useRef(false);
+  const interacting = useRef(false);
   const lastTap = useRef({ t: 0, value: null });
   const [itemSize, setItemSize] = useState(24);
   const [activeBase, setActiveBase] = useState(0);
@@ -102,6 +104,7 @@ function WheelPicker({
   );
 
   useEffect(() => {
+    if (interacting.current) return;
     syncToValue('auto');
   }, [value, n, itemSize, infinite]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -113,7 +116,7 @@ function WheelPicker({
   };
 
   const commitFromScroll = useCallback(() => {
-    if (!n || !itemSize || syncing.current) return;
+    if (!n || !itemSize) return;
     let loopIdx = readLoopIndex();
     loopIdx = Math.max(0, Math.min(loopIdx, looped.length - 1));
     const base = ((loopIdx % n) + n) % n;
@@ -124,6 +127,9 @@ function WheelPicker({
       onChange?.(next);
     }
     skipChangeRef.current = false;
+    interacting.current = false;
+
+    if (syncing.current) return;
 
     if (infinite) {
       const copy = Math.floor(loopIdx / n);
@@ -137,12 +143,25 @@ function WheelPicker({
     }
   }, [n, itemSize, looped.length, normalized, value, onChange, infinite, midCopy, scrollToLoopIndex]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  useEffect(() => {
+    if (!flushRef) return undefined;
+    flushRef.current = () => {
+      interacting.current = false;
+      skipChangeRef.current = false;
+      commitFromScroll();
+    };
+    return () => {
+      if (flushRef.current) flushRef.current = null;
+    };
+  }, [flushRef, commitFromScroll]);
+
   const onScroll = () => {
     if (syncing.current || !n || !itemSize || n <= 1) return;
+    interacting.current = true;
     const loopIdx = readLoopIndex();
     setActiveBase(((loopIdx % n) + n) % n);
     clearTimeout(settleTimer.current);
-    settleTimer.current = setTimeout(commitFromScroll, 70);
+    settleTimer.current = setTimeout(commitFromScroll, 140);
   };
 
   const handleTap = (baseIdx) => {
@@ -204,7 +223,22 @@ function WheelPicker({
       <div className="wheel-picker-fade wheel-picker-fade--start" aria-hidden />
       <div className="wheel-picker-fade wheel-picker-fade--end" aria-hidden />
       <div className="wheel-picker-center-band" aria-hidden />
-      <div ref={trackRef} className="wheel-picker-track" onScroll={onScroll}>
+      <div
+        ref={trackRef}
+        className="wheel-picker-track"
+        onScroll={onScroll}
+        onPointerDown={() => {
+          interacting.current = true;
+        }}
+        onPointerUp={() => {
+          clearTimeout(settleTimer.current);
+          settleTimer.current = setTimeout(commitFromScroll, 160);
+        }}
+        onPointerCancel={() => {
+          clearTimeout(settleTimer.current);
+          settleTimer.current = setTimeout(commitFromScroll, 160);
+        }}
+      >
         <div className="wheel-picker-pad" style={padStyle} aria-hidden />
         {looped.map((opt) => {
           const isActive = opt._base === activeBase;

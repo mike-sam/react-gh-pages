@@ -25,6 +25,9 @@ const MobileFriendlyDateTime = ({
   const [tempDate, setTempDate] = useState(value);
   const snapshotRef = useRef(null);
   const prevHourRef = useRef(null);
+  const hourFlushRef = useRef(null);
+  const minFlushRef = useRef(null);
+  const ampmFlushRef = useRef(null);
   const swipeRef = useRef({ x: 0, y: 0, axis: null, moved: false });
   const dateSwipePadRef = useRef(null);
   const nativeDateRef = useRef(null);
@@ -32,12 +35,13 @@ const MobileFriendlyDateTime = ({
   tempDateRef.current = tempDate;
 
   const applyTemp = (next) => {
+    tempDateRef.current = next;
     setTempDate(next);
     if (isEditing && !hideTrigger) onChange?.(new Date(next));
   };
 
   const patchDate = (mutator) => {
-    const next = new Date(tempDate);
+    const next = new Date(tempDateRef.current);
     mutator(next);
     applyTemp(next);
   };
@@ -219,10 +223,10 @@ const MobileFriendlyDateTime = ({
   ];
 
   const getCurrentHour12 = () => {
-    const hour = tempDate.getHours();
+    const hour = (tempDateRef.current || tempDate).getHours();
     return hour === 0 ? 12 : hour > 12 ? hour - 12 : hour;
   };
-  const isAM = () => tempDate.getHours() < 12;
+  const isAM = () => (tempDateRef.current || tempDate).getHours() < 12;
 
   /** 11↔12 跨越時切換 AM/PM（雙向：AM→PM 與 PM→AM） */
   const setHour12 = (h12) => {
@@ -266,7 +270,10 @@ const MobileFriendlyDateTime = ({
   }, [autoOpen]);
 
   const handleConfirm = () => {
-    onChange(new Date(tempDate));
+    hourFlushRef.current?.();
+    minFlushRef.current?.();
+    ampmFlushRef.current?.();
+    onChange(new Date(tempDateRef.current));
     setIsEditing(false);
     snapshotRef.current = null;
     onDismiss?.();
@@ -417,6 +424,7 @@ const MobileFriendlyDateTime = ({
                   options={hour12Opts}
                   value={String(getCurrentHour12())}
                   onChange={setHour12}
+                  flushRef={hourFlushRef}
                   ariaLabel="小時"
                 />
                 <span className="time-wheel-colon">:</span>
@@ -426,6 +434,7 @@ const MobileFriendlyDateTime = ({
                   options={minuteOpts}
                   value={String(tempDate.getMinutes())}
                   onChange={(m) => patchDate((d) => d.setMinutes(parseInt(m, 10)))}
+                  flushRef={minFlushRef}
                   ariaLabel="分鐘"
                 />
                 <WheelPicker
@@ -435,6 +444,7 @@ const MobileFriendlyDateTime = ({
                   value={isAM() ? 'AM' : 'PM'}
                   onChange={setAmpm}
                   infinite={false}
+                  flushRef={ampmFlushRef}
                   ariaLabel="AM/PM"
                 />
               </div>
