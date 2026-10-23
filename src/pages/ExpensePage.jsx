@@ -1109,7 +1109,7 @@ function ExpensePage() {
                 </div>
                 {aiError ? (
                   <div className="ai-suggest-hint">
-                    複製 curl 不含照片，只測 Gemini / GAS。複製 prompt 可貼到其他 AI，圖另外附上。
+                    複製 curl 不含照片。Windows 用 curl.exe（PowerShell 的 curl 會 411）。
                   </div>
                 ) : null}
                 {aiMeta.prompt ? (

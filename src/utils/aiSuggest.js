@@ -297,15 +297,9 @@ export function formatAiFallbackCopy({ model, prompt, error } = {}) {
     .trim();
 }
 
-function curlJsonHeredoc(json, tag) {
-  const delim = tag || 'JSON';
-  return [`--data-binary @- <<'${delim}'`, json, delim].join('\n');
-}
-
-function pingPrompt(prompt) {
-  const text = String(prompt || '').trim();
-  if (!text) return 'ping';
-  return text.length > 800 ? `${text.slice(0, 800)}\n…(prompt truncated for endpoint ping)` : text;
+/** One-line -d so Content-Length is set. Bash heredoc breaks in PowerShell → Google 411. */
+function curlDashD(obj) {
+  return `-d ${JSON.stringify(JSON.stringify(obj || {}))}`;
 }
 
 function stripPhotoFromPayload(payload) {
@@ -319,34 +313,32 @@ function stripPhotoFromPayload(payload) {
 }
 
 /** Endpoint ping only — no image bytes. Key is never included. */
-export function formatGeminiCurl({ model, prompt } = {}) {
+export function formatGeminiCurl({ model } = {}) {
   const m = String(model || '').trim() || 'gemini-3.8-flash';
   const body = {
-    contents: [{ parts: [{ text: pingPrompt(prompt) }] }],
+    contents: [{ parts: [{ text: 'ping' }] }],
     generationConfig: {
       temperature: 0.2,
       responseMimeType: 'application/json',
     },
   };
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent?key=\${GEMINI_API_KEY}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent?key=YOUR_GEMINI_API_KEY`;
   return [
-    `# Gemini generateContent ping（不含照片，測 model / key）`,
-    `# model: ${m}`,
-    `# 先：export GEMINI_API_KEY='KeyValueConfig group AI 的 APIKey'`,
-    `curl -sS -X POST "${url}" \\`,
-    `  -H 'Content-Type: application/json' \\`,
-    curlJsonHeredoc(JSON.stringify(body), 'GEMINI_JSON'),
+    `# Gemini ping（Windows 用 curl.exe，不要用 PowerShell 的 curl 別名 → 會 411）`,
+    `# model: ${m} · 把 YOUR_GEMINI_API_KEY 換成 KeyValueConfig AI / APIKey`,
+    `curl.exe -sS -L -H "Content-Type: application/json" ${curlDashD(body)} ${JSON.stringify(url)}`,
   ].join('\n');
 }
 
 export function formatGasAnalyzeCurl({ url, payload } = {}) {
   const endpoint = String(url || API_ENDPOINTS.GSHEET_SUBMIT);
-  const body = stripPhotoFromPayload(payload);
+  const src = stripPhotoFromPayload(payload);
+  const body = { action: src.action || 'analyzeReceipt' };
+  if (src.access) body.access = src.access;
+  if (src.k) body.k = src.k;
   return [
-    `# Apps Script analyzeReceipt ping（不含 base64。Content-Type 必須是 text/plain）`,
-    `curl -sS -L -X POST ${JSON.stringify(endpoint)} \\`,
-    `  -H 'Content-Type: text/plain;charset=utf-8' \\`,
-    curlJsonHeredoc(JSON.stringify(body), 'GAS_JSON'),
+    `# GAS ping（-d 會帶 Content-Length；不要 -X POST，302 才能改 GET）`,
+    `curl.exe -sS -L -H "Content-Type: text/plain;charset=utf-8" ${curlDashD(body)} ${JSON.stringify(endpoint)}`,
   ].join('\n');
 }
 
@@ -363,7 +355,7 @@ export function formatAiCurlCopy({
     `# 不含照片 base64，只測 endpoint`,
     error ? `# error: ${error}` : '',
     '',
-    formatGeminiCurl({ model: usedModel, prompt }),
+    formatGeminiCurl({ model: usedModel }),
     '',
     formatGasAnalyzeCurl({ url: gasUrl, payload: gasPayload }),
   ];
