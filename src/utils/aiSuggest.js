@@ -297,11 +297,6 @@ export function formatAiFallbackCopy({ model, prompt, error } = {}) {
     .trim();
 }
 
-/** One-line -d so Content-Length is set. Bash heredoc breaks in PowerShell → Google 411. */
-function curlDashD(obj) {
-  return `-d ${JSON.stringify(JSON.stringify(obj || {}))}`;
-}
-
 function stripPhotoFromPayload(payload) {
   if (!payload || typeof payload !== 'object') return { action: 'analyzeReceipt' };
   const next = { ...payload };
@@ -310,6 +305,17 @@ function stripPhotoFromPayload(payload) {
   delete next.inlineData;
   delete next.inline_data;
   return next;
+}
+
+/** PowerShell here-string + curl.exe so Content-Length is real. Inline -d "{\\"...\\"}" gets eaten → Google 411. */
+function formatPowershellCurlPost(url, contentType, body) {
+  const json = JSON.stringify(body || {});
+  return [
+    `$curlBody = @'`,
+    json,
+    `'@`,
+    `curl.exe -sS -L -H ${JSON.stringify(`Content-Type: ${contentType}`)} --data-binary $curlBody ${JSON.stringify(url)}`,
+  ].join('\n');
 }
 
 /** Endpoint ping only — no image bytes. Key is never included. */
@@ -324,21 +330,25 @@ export function formatGeminiCurl({ model } = {}) {
   };
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent?key=YOUR_GEMINI_API_KEY`;
   return [
-    `# Gemini ping（Windows 用 curl.exe，不要用 PowerShell 的 curl 別名 → 會 411）`,
+    `# Gemini ping · 貼到 PowerShell · curl.exe（不要用 curl 別名）`,
     `# model: ${m} · 把 YOUR_GEMINI_API_KEY 換成 KeyValueConfig AI / APIKey`,
-    `curl.exe -sS -L -H "Content-Type: application/json" ${curlDashD(body)} ${JSON.stringify(url)}`,
+    formatPowershellCurlPost(url, 'application/json', body),
   ].join('\n');
 }
 
 export function formatGasAnalyzeCurl({ url, payload } = {}) {
   const endpoint = String(url || API_ENDPOINTS.GSHEET_SUBMIT);
+  const ping = new URL(endpoint);
+  ping.searchParams.set('action', 'calendarPing');
   const src = stripPhotoFromPayload(payload);
   const body = { action: src.action || 'analyzeReceipt' };
   if (src.access) body.access = src.access;
   if (src.k) body.k = src.k;
   return [
-    `# GAS ping（-d 會帶 Content-Length；不要 -X POST，302 才能改 GET）`,
-    `curl.exe -sS -L -H "Content-Type: text/plain;charset=utf-8" ${curlDashD(body)} ${JSON.stringify(endpoint)}`,
+    `# GAS ping GET（無 POST，不會 411）`,
+    `curl.exe -sS -L ${JSON.stringify(ping.toString())}`,
+    `# GAS analyzeReceipt ping（不含照片）`,
+    formatPowershellCurlPost(endpoint, 'text/plain;charset=utf-8', body),
   ].join('\n');
 }
 

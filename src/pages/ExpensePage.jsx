@@ -1109,7 +1109,7 @@ function ExpensePage() {
                 </div>
                 {aiError ? (
                   <div className="ai-suggest-hint">
-                    複製 curl 不含照片。Windows 用 curl.exe（PowerShell 的 curl 會 411）。
+                    複製 curl 不含照片。整段貼到 PowerShell 用 curl.exe（單行 -d 仍會 411）。
                   </div>
                 ) : null}
                 {aiMeta.prompt ? (
