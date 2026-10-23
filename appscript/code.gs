@@ -1113,9 +1113,10 @@ function splitGeminiModels_(raw) {
 }
 
 function geminiFallbackModels_(preferred, extra) {
-  var chain = [preferred]
+  // lite first: 3.8-flash often hangs 60s on 503; UrlFetch cannot abort.
+  var chain = ['gemini-3.5-flash-lite', preferred]
     .concat(splitGeminiModels_(extra))
-    .concat(['gemini-3.8-flash', 'gemini-3.5-flash-lite']);
+    .concat(['gemini-3.8-flash']);
   var out = [];
   var i;
   for (i = 0; i < chain.length; i++) {
@@ -1288,7 +1289,9 @@ function callGeminiVision_(apiKey, model, mimeType, base64, prompt, extraFallbac
   var tried = [];
   var lastErr = '';
   var i;
+  var t0 = Date.now();
   for (i = 0; i < models.length; i++) {
+    if (i > 0 && Date.now() - t0 > 22000) break;
     var m = models[i];
     tried.push(m);
     var url = 'https://generativelanguage.googleapis.com/v1beta/models/' +

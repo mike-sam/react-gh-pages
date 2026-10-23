@@ -2,11 +2,11 @@ import imageCompression from 'browser-image-compression';
 import { API_ENDPOINTS, EXPENSE_TAGS, SECONDARY_TAGS } from '../config';
 
 export const RECEIPT_COMPRESS = {
-  maxSizeMB: 0.18,
-  maxWidthOrHeight: 1280,
+  maxSizeMB: 0.08,
+  maxWidthOrHeight: 960,
   useWebWorker: true,
   fileType: 'image/jpeg',
-  initialQuality: 0.72,
+  initialQuality: 0.62,
 };
 
 const FIELD = (key, label, hint) => ({ key, label, hint });
@@ -121,18 +121,30 @@ function splitDataUrl(dataUrl) {
   return { preview: raw, base64: raw.slice(i + 1) };
 }
 
+async function compressOnce(file, opts) {
+  try {
+    return await imageCompression(file, opts);
+  } catch {
+    return await imageCompression(file, { ...opts, useWebWorker: false });
+  }
+}
+
 export async function compressReceiptFile(file) {
   if (!file) return null;
   let out = file;
   try {
-    out = await imageCompression(file, RECEIPT_COMPRESS);
-  } catch {
-    try {
-      out = await imageCompression(file, { ...RECEIPT_COMPRESS, useWebWorker: false });
-    } catch {
-      if (file.size > 400 * 1024) throw new Error('圖片壓縮失敗，請換一張較小的圖');
-      out = file;
+    out = await compressOnce(file, RECEIPT_COMPRESS);
+    if ((out.size || 0) > 100 * 1024) {
+      out = await compressOnce(out, {
+        ...RECEIPT_COMPRESS,
+        maxSizeMB: 0.05,
+        maxWidthOrHeight: 800,
+        initialQuality: 0.5,
+      });
     }
+  } catch {
+    if (file.size > 400 * 1024) throw new Error('圖片壓縮失敗，請換一張較小的圖');
+    out = file;
   }
   const dataUrl = await fileToDataUrl(out);
   const { preview, base64 } = splitDataUrl(dataUrl);
@@ -421,7 +433,7 @@ export async function analyzeReceiptPhoto(photo, { tag, title, promptTemplate, w
   };
   const prompt = fillReceiptPrompt(payload.promptTemplate, payload);
   try {
-    const data = await postGasJson(payload, 90000);
+    const data = await postGasJson(payload, 55000);
     if (!data || data.success !== true) {
       throw attachAiMeta(new Error(data?.error || 'AI 建議失敗'), {
         model: data?.model || '',

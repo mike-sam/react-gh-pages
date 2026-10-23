@@ -207,8 +207,8 @@ function ExpensePage() {
         tried: err?.tried || m.tried || [],
       }));
       setAiError(
-        err?.name === 'AbortError'
-          ? '逾時'
+        err?.name === 'AbortError' || /逾時/.test(String(err.message || ''))
+          ? `逾時（壓縮後 ${formatFileSize(photo.compressedSize || photo.base64?.length || 0)}，不是圖太大；GAS→Gemini 排隊）`
           : String(err.message || 'AI 失敗')
               .split('\n')[0]
               .slice(0, 240)
