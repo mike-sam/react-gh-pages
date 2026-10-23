@@ -1,3 +1,4 @@
+// REPLACE the existing .gs file (Select all → paste). Do not add a second file — sheetId/doGet are globals.
 const sheetId = '1ZAFWV5aIVcA66qJEMPGGsg3azPY415_Clwe--JinQ7w'; // https://docs.google.com/spreadsheets/d/1ZAFWV5aIVcA66qJEMPGGsg3azPY415_Clwe--JinQ7w/edit#gid=0
 
 const doGet = (event) => {
@@ -2263,13 +2264,17 @@ function ensureAccessHashRow() {
   var sheet = getKeyValueSheet();
   var data = sheet.getDataRange().getValues();
   var searchKey = ACCESS_HASH_KEY.toUpperCase();
+  var foundAny = '';
   for (var i = 1; i < data.length; i++) {
     var groupStr = data[i][0] ? String(data[i][0]).trim() : '';
     var keyStr = data[i][1] ? String(data[i][1]).trim().toUpperCase() : '';
-    if (groupStr === 'KeyValue' && keyStr === searchKey) {
-      return data[i][2] != null ? String(data[i][2]) : '';
-    }
+    if (keyStr !== searchKey) continue;
+    var val = data[i][2] != null ? String(data[i][2]).trim() : '';
+    if (!val) continue;
+    if (groupStr.toLowerCase() === 'keyvalue') return val;
+    if (!foundAny) foundAny = val;
   }
+  if (foundAny) return foundAny;
   sheet.appendRow([
     'KeyValue',
     ACCESS_HASH_KEY,
