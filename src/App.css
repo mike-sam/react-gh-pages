@@ -2039,6 +2039,98 @@
 .ai-suggest-panel {
   margin-top: 10px;
 }
+.ai-suggest-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+.ai-suggest-model {
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--text, #24292f);
+  word-break: break-all;
+}
+.ai-suggest-copy {
+  appearance: none;
+  border: 1px solid var(--border, #d0d7de);
+  background: var(--bg-elevated, #fff);
+  color: var(--text, #24292f);
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.ai-suggest-hint {
+  font-size: 12px;
+  color: var(--text-muted, #6c757d);
+  margin: 0 0 6px;
+}
+.ai-suggest-prompt-wrap {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: var(--text-muted, #6c757d);
+}
+.ai-suggest-prompt-wrap summary {
+  cursor: pointer;
+}
+.ai-photo-prompt {
+  margin: 8px 0 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--accent, #3d9cf0);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent, #3d9cf0) 10%, var(--bg-elevated, #fff));
+}
+.ai-photo-prompt summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  cursor: pointer;
+  color: var(--text, #24292f);
+}
+.ai-photo-prompt-title {
+  font-weight: 650;
+  font-size: 13px;
+}
+.ai-photo-prompt-sub {
+  font-size: 11px;
+  color: var(--text-muted, #6c757d);
+}
+.ai-photo-prompt-chip {
+  font-size: 11px;
+  color: #c5221f;
+}
+.ai-suggest-tpl {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin: 6px 0;
+  min-height: 140px;
+  padding: 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border, #d0d7de);
+  background: var(--bg, #f6f8fa);
+  color: var(--text, #24292f);
+  font-size: 11px;
+  line-height: 1.4;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  resize: vertical;
+}
+.ai-suggest-prompt {
+  margin: 6px 0 0;
+  max-height: 160px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 11px;
+  line-height: 1.4;
+  padding: 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border, #d0d7de);
+  background: var(--bg, #f6f8fa);
+}
 .ai-suggest-head {
   font-size: 12px;
   color: var(--text-muted, #6c757d);

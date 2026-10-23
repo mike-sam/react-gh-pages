@@ -15,12 +15,19 @@ import { useOfflineQueue } from '../context/QueueContext';
 import {
   analyzeReceiptPhoto,
   applyAiSuggestion,
+  DEFAULT_RECEIPT_PROMPT_TEMPLATE,
+  formatAiFallbackCopy,
+  formatWhen,
+  loadAiPrompt,
   recordAiSuggestion,
+  receiptPromptFor,
+  saveAiPrompt,
   suggestionSummary,
 } from '../utils/aiSuggest';
+import { copyText } from '../utils/platform';
 import { useSmartLocation } from '../hooks/useSmartLocation';
 import { toMapsUrl } from '../utils/locationStorage';
-import { rememberNamedPoint } from '../utils/landmarkRegions';
+import { pinMerchantIfNearHere, rememberNamedPoint } from '../utils/landmarkRegions';
 import { getBuildVersion } from '../utils/buildInfo';
 import {
   loadExpenseHistory,
@@ -29,10 +36,10 @@ import {
 } from '../utils/expenseHistory';
 import SectionHead from '../components/SectionHead';
 import {
-  DEFAULT_PAYMENT_OPTIONS,
   ensureAppBootstrap,
   readPaymentOptionsCache,
   subscribeAppBootstrap,
+  transformPaymentOptions,
 } from '../utils/appBootstrap';
 import { useUnsavedGuard } from '../hooks/useUnsavedGuard';
 import { applyHash, getHashPath, ROUTES } from '../utils/routing';
@@ -88,7 +95,7 @@ function ExpensePage() {
   /** Tax/service addons — do not mutate main amount input */
   const [taxAddons, setTaxAddons] = useState([]);
   const [paymentOptions, setPaymentOptions] = useState(
-    () => readPaymentOptionsCache({ allowStale: true }) || DEFAULT_PAYMENT_OPTIONS
+    () => transformPaymentOptions(readPaymentOptionsCache({ allowStale: true }))
   );
   const [currencyConversions, setCurrencyConversions] = useState([]);
   const [isAmountManuallySet, setIsAmountManuallySet] = useState(false);
@@ -98,8 +105,15 @@ function ExpensePage() {
   const [aiBusyIndex, setAiBusyIndex] = useState(-1);
   const [aiError, setAiError] = useState('');
   const [aiSuggestions, setAiSuggestions] = useState([]);
-  const [aiMeta, setAiMeta] = useState({ model: '', photoHash: '', photoIndex: -1 });
+  const [aiMeta, setAiMeta] = useState({ model: '', prompt: '', photoHash: '', photoIndex: -1 });
   const [aiPicked, setAiPicked] = useState(null);
+  const [aiCopied, setAiCopied] = useState('');
+  const [aiLocMsg, setAiLocMsg] = useState('');
+  const [aiTemplate, setAiTemplate] = useState(DEFAULT_RECEIPT_PROMPT_TEMPLATE);
+  const [aiTemplateSaved, setAiTemplateSaved] = useState(DEFAULT_RECEIPT_PROMPT_TEMPLATE);
+  const [aiTplLoaded, setAiTplLoaded] = useState(false);
+  const [aiTplBusy, setAiTplBusy] = useState(false);
+  const [aiTplMsg, setAiTplMsg] = useState('');
 
   /** Guard reload only for cat / subcat / amount / 備註 — ignore payment, date, plate, etc. */
   const hasUnsavedInput = useMemo(() => {
@@ -116,19 +130,76 @@ function ExpensePage() {
 
   useUnsavedGuard(hasUnsavedInput, { whenPath: ROUTES.EXPENSE });
 
+  const ensureAiPromptLoaded = useCallback(async () => {
+    if (aiTplLoaded) return aiTemplate;
+    setAiTplBusy(true);
+    try {
+      const data = await loadAiPrompt();
+      setAiTemplate(data.template);
+      setAiTemplateSaved(data.template);
+      setAiTplLoaded(true);
+      if (data.model) {
+        setAiMeta((m) => (m.model ? m : { ...m, model: data.model }));
+      }
+      return data.template;
+    } catch (err) {
+      setAiTplLoaded(true);
+      setAiTplMsg(String(err.message || '讀取失敗').slice(0, 80));
+      return aiTemplate;
+    } finally {
+      setAiTplBusy(false);
+    }
+  }, [aiTplLoaded, aiTemplate]);
+
+  const saveAiTemplate = async () => {
+    setAiTplBusy(true);
+    setAiTplMsg('');
+    try {
+      const text = await saveAiPrompt(aiTemplate);
+      setAiTemplate(text);
+      setAiTemplateSaved(text);
+      setAiTplMsg('已儲存');
+      window.setTimeout(() => setAiTplMsg(''), 1600);
+    } catch (err) {
+      setAiTplMsg(String(err.message || '儲存失敗').slice(0, 80));
+    } finally {
+      setAiTplBusy(false);
+    }
+  };
+
   const askAiForPhoto = async (index) => {
     const photo = photos[index];
     if (!photo?.base64 || aiBusyIndex >= 0) return;
+    const tpl = aiTplLoaded ? aiTemplate : await ensureAiPromptLoaded();
+    const whenStr = formatWhen(selectedDateTime);
+    const localPrompt = receiptPromptFor(selectedTag, input, tpl, whenStr);
     setAiBusyIndex(index);
     setAiError('');
     setAiSuggestions([]);
-    setAiMeta({ model: '', photoHash: '', photoIndex: index });
+    setAiCopied('');
+    setAiLocMsg('');
+    setAiMeta({ model: '', prompt: localPrompt, photoHash: '', photoIndex: index });
     try {
-      const result = await analyzeReceiptPhoto(photo, { tag: selectedTag, title: input });
+      const result = await analyzeReceiptPhoto(photo, {
+        tag: selectedTag,
+        title: input,
+        promptTemplate: tpl,
+        when: whenStr,
+      });
       setAiSuggestions(result.suggestions);
-      setAiMeta({ model: result.model, photoHash: result.photoHash, photoIndex: index });
+      setAiMeta({
+        model: result.model,
+        prompt: result.prompt || localPrompt,
+        photoHash: result.photoHash,
+        photoIndex: index,
+      });
       if (!result.suggestions.length) setAiError('沒有建議');
     } catch (err) {
+      setAiMeta((m) => ({
+        ...m,
+        model: err?.model || m.model,
+        prompt: err?.prompt || m.prompt,
+      }));
       setAiError(
         err?.name === 'AbortError'
           ? '逾時'
@@ -139,6 +210,14 @@ function ExpensePage() {
     } finally {
       setAiBusyIndex(-1);
     }
+  };
+
+  const copyAiPrompt = async () => {
+    const text = formatAiFallbackCopy(aiMeta);
+    if (!text) return;
+    const ok = await copyText(text);
+    setAiCopied(ok ? '已複製' : '複製失敗');
+    window.setTimeout(() => setAiCopied(''), 1600);
   };
 
   /** Leaving 交通出行: wipe auto fuel/ODO remark before ItemizedDescription remounts */
@@ -171,8 +250,11 @@ function ExpensePage() {
       setCarPlate,
       setPaymentMethod,
       paymentOptions,
+      selectedDateTime,
+      setSelectedDateTime,
     });
     setAiPicked(s);
+    setAiLocMsg('');
     recordAiSuggestion({
       tag: s.tag || selectedTag || '',
       title: s.title || input || '',
@@ -184,6 +266,32 @@ function ExpensePage() {
     });
     setAiSuggestions([]);
     setAiError('');
+    const merchant = String(s?.merchant || '').trim();
+    if (!merchant) return;
+    (async () => {
+      let here = smartLoc;
+      try {
+        here = (await resolveForAction()) || smartLoc;
+      } catch {
+        here = smartLoc;
+      }
+      const pinned = await pinMerchantIfNearHere({
+        merchant,
+        address: s.merchant_address || s.address || '',
+        here,
+      });
+      if (!pinned?.ok || !here) return;
+      setCachedLocation({
+        lat: here.lat,
+        lng: here.lng,
+        accuracy: here.accuracy ?? null,
+        updatedAt: Date.now(),
+        label: merchant,
+      });
+      setAiLocMsg(
+        `已存地點 · ${merchant}${pinned.km != null ? ` ${pinned.km.toFixed(1)}km` : ''}`
+      );
+    })();
   };
 
   const handleCurrencyConversion = (conversion) => {
@@ -206,8 +314,7 @@ function ExpensePage() {
   useEffect(() => {
     ensureAppBootstrap();
     return subscribeAppBootstrap(() => {
-      const cached = readPaymentOptionsCache({ allowStale: true });
-      if (cached) setPaymentOptions(cached);
+      setPaymentOptions(transformPaymentOptions(readPaymentOptionsCache({ allowStale: true })));
     });
   }, []);
 
@@ -306,7 +413,9 @@ function ExpensePage() {
     setAiBusyIndex(-1);
     setAiError('');
     setAiSuggestions([]);
-    setAiMeta({ model: '', photoHash: '', photoIndex: -1 });
+    setAiCopied('');
+    setAiLocMsg('');
+    setAiMeta({ model: '', prompt: '', photoHash: '', photoIndex: -1 });
     setAiPicked(null);
   };
 
@@ -788,6 +897,47 @@ function ExpensePage() {
                 />
               }
             />
+            <details
+              className="ai-photo-prompt"
+              onToggle={(e) => {
+                if (e.currentTarget.open) ensureAiPromptLoaded();
+              }}
+            >
+              <summary>
+                <span className="ai-photo-prompt-title">📷 AI prompt</span>
+                <span className="ai-photo-prompt-sub">當提供照片給 AI 時用</span>
+                {aiTemplate !== aiTemplateSaved ? (
+                  <span className="ai-photo-prompt-chip">未儲存</span>
+                ) : null}
+              </summary>
+              <div className="ai-suggest-hint">{'{{tag}} {{title}} {{cats}} {{subcats}} {{fields}} {{hints}} {{when}}'}</div>
+              <textarea
+                className="ai-suggest-tpl"
+                rows={10}
+                value={aiTemplate}
+                onChange={(e) => setAiTemplate(e.target.value)}
+                spellCheck={false}
+              />
+              <div className="ai-suggest-meta">
+                <button
+                  type="button"
+                  className="ai-suggest-copy"
+                  disabled={aiTplBusy}
+                  onClick={() => setAiTemplate(DEFAULT_RECEIPT_PROMPT_TEMPLATE)}
+                >
+                  預設
+                </button>
+                <button
+                  type="button"
+                  className="ai-suggest-copy"
+                  disabled={aiTplBusy || aiTemplate === aiTemplateSaved}
+                  onClick={saveAiTemplate}
+                >
+                  {aiTplBusy ? '…' : '儲存'}
+                </button>
+                {aiTplMsg ? <span className="ai-suggest-hint">{aiTplMsg}</span> : null}
+              </div>
+            </details>
             <Remark
               input={input}
               setInput={setInput}
@@ -860,7 +1010,8 @@ function ExpensePage() {
                       if (aiMeta.photoIndex === index) {
                         setAiSuggestions([]);
                         setAiError('');
-                        setAiMeta({ model: '', photoHash: '', photoIndex: -1 });
+                        setAiCopied('');
+                        setAiMeta({ model: '', prompt: '', photoHash: '', photoIndex: -1 });
                       }
                     }}
                   >
@@ -869,26 +1020,56 @@ function ExpensePage() {
                 </div>
               ))}
             </div>
-            {aiError ? <div className="ai-suggest-error">{aiError}</div> : null}
-            {aiSuggestions.length > 0 && (
+            {(aiError || aiMeta.prompt || aiSuggestions.length > 0) && (
               <div className="ai-suggest-panel">
-                <div className="ai-suggest-head">選一筆填入欄位</div>
-                <div className="ai-suggest-list">
-                  {aiSuggestions.map((s, i) => (
-                    <button
-                      key={i}
-                      type="button"
-                      className="ai-suggest-card"
-                      onClick={() => pickAiSuggestion(s)}
-                    >
-                      {suggestionSummary(s)}
+                {aiError ? <div className="ai-suggest-error">{aiError}</div> : null}
+                <div className="ai-suggest-meta">
+                  <span className="ai-suggest-model">
+                    {aiBusyIndex >= 0
+                      ? 'model 辨識中'
+                      : aiMeta.model
+                        ? aiMeta.model
+                        : 'model 未回傳'}
+                  </span>
+                  {aiMeta.prompt ? (
+                    <button type="button" className="ai-suggest-copy" onClick={copyAiPrompt}>
+                      {aiCopied || '複製 prompt'}
                     </button>
-                  ))}
+                  ) : null}
                 </div>
+                {aiError && aiMeta.prompt ? (
+                  <div className="ai-suggest-hint">可貼到其他 AI；圖請另外附上</div>
+                ) : null}
+                {aiMeta.prompt ? (
+                  <details className="ai-suggest-prompt-wrap">
+                    <summary>照片辨識 · 實際送出</summary>
+                    <pre className="ai-suggest-prompt">{aiMeta.prompt}</pre>
+                  </details>
+                ) : null}
+                {aiSuggestions.length > 0 ? (
+                  <>
+                    <div className="ai-suggest-head">選一筆填入欄位</div>
+                    <div className="ai-suggest-list">
+                      {aiSuggestions.map((s, i) => (
+                        <button
+                          key={i}
+                          type="button"
+                          className="ai-suggest-card"
+                          onClick={() => pickAiSuggestion(s)}
+                        >
+                          {suggestionSummary(s)}
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                ) : null}
               </div>
             )}
             {aiPicked && aiSuggestions.length === 0 && !aiError ? (
-              <div className="ai-suggest-picked">已套用{aiPicked.label ? ` · ${aiPicked.label}` : ''}</div>
+              <div className="ai-suggest-picked">
+                已套用{aiPicked.label ? ` · ${aiPicked.label}` : ''}
+                {aiLocMsg ? ` · ${aiLocMsg}` : ''}
+              </div>
             ) : null}
           </div>
         )}

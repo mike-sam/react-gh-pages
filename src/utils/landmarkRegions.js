@@ -1,4 +1,5 @@
 import { API_ENDPOINTS } from '../config';
+import { haversineKm } from './expenseSummary';
 import {
   LEGACY_SEED_REGIONS,
   SEED_REGIONS_APPLIED_KEY,
@@ -619,27 +620,110 @@ export function rememberNamedPoint({ lat, lng, name, source = 'local' } = {}) {
   return created;
 }
 
-export async function searchNominatim(query, limit = 6) {
+export async function searchNominatim(query, limit = 6, near = null) {
   const q = String(query || '').trim();
   if (!q) return [];
-  const url =
-    'https://nominatim.openstreetmap.org/search?' +
-    new URLSearchParams({
-      format: 'json',
-      q,
-      limit: String(limit),
-      addressdetails: '0',
-    }).toString();
+  const params = {
+    format: 'json',
+    q,
+    limit: String(limit),
+    addressdetails: '0',
+  };
+  if (near && Number.isFinite(near.lat) && Number.isFinite(near.lng)) {
+    const latPad = 6 / 111;
+    const lngPad = 6 / (111 * Math.max(0.2, Math.cos((near.lat * Math.PI) / 180)));
+    params.viewbox = `${near.lng - lngPad},${near.lat + latPad},${near.lng + lngPad},${near.lat - latPad}`;
+    params.bounded = '1';
+  }
+  const url = 'https://nominatim.openstreetmap.org/search?' + new URLSearchParams(params).toString();
   const res = await fetch(url, { headers: { Accept: 'application/json' } });
   if (!res.ok) throw new Error('搜尋失敗');
   const data = await res.json();
   if (!Array.isArray(data)) return [];
-  return data.map((item) => ({
-    kind: 'map',
-    lat: parseFloat(item.lat),
-    lng: parseFloat(item.lon),
-    name: item.display_name || q,
-  }));
+  return data
+    .map((item) => ({
+      kind: 'map',
+      lat: parseFloat(item.lat),
+      lng: parseFloat(item.lon),
+      name: item.display_name || q,
+    }))
+    .filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lng));
+}
+
+function namesLooseMatch(a, b) {
+  const na = String(a || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\u4e00-\u9fff]+/g, '');
+  const nb = String(b || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\u4e00-\u9fff]+/g, '');
+  if (!na || !nb) return false;
+  return na === nb || na.includes(nb) || nb.includes(na);
+}
+
+export const MERCHANT_NEAR_KM = 5;
+
+function findLocalMerchantNear(name, here, maxKm) {
+  const all = loadLandmarkRegions();
+  let best = null;
+  for (const r of all || []) {
+    if (!namesLooseMatch(r.name, name)) continue;
+    const c = r.center;
+    if (!c || !Number.isFinite(c.lat) || !Number.isFinite(c.lng)) continue;
+    const km = haversineKm(here.lat, here.lng, c.lat, c.lng);
+    if (km <= maxKm && (!best || km < best.km)) best = { name: r.name, km };
+  }
+  return best;
+}
+
+async function saveNamedLocationRemote(lat, lng, name) {
+  try {
+    await fetch(API_ENDPOINTS.LOCATION, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'saveLocation',
+        latitude: lat,
+        longitude: lng,
+        name,
+      }),
+    });
+  } catch {
+    /* local pin still kept */
+  }
+}
+
+/** If merchant geocodes (or already saved) within 5km of here, name the current GPS pin. */
+export async function pinMerchantIfNearHere({ merchant, address, here, maxKm = MERCHANT_NEAR_KM } = {}) {
+  const name = String(merchant || '').trim();
+  if (!name) return { ok: false, reason: 'no-merchant' };
+  if (!here || !Number.isFinite(here.lat) || !Number.isFinite(here.lng)) {
+    return { ok: false, reason: 'no-gps' };
+  }
+  const local = findLocalMerchantNear(name, here, maxKm);
+  let km = local ? local.km : null;
+  let confirmed = Boolean(local);
+  if (!confirmed) {
+    const q = [name, String(address || '').trim()].filter(Boolean).join(' ');
+    let hits = [];
+    try {
+      hits = await searchNominatim(q, 5, here);
+      if (!hits.length) hits = await searchNominatim(q, 5);
+    } catch {
+      hits = [];
+    }
+    for (const h of hits) {
+      const d = haversineKm(here.lat, here.lng, h.lat, h.lng);
+      if (d <= maxKm && (km == null || d < km)) {
+        confirmed = true;
+        km = d;
+      }
+    }
+  }
+  if (!confirmed) return { ok: false, reason: 'too-far', km };
+  rememberNamedPoint({ lat: here.lat, lng: here.lng, name, source: 'ai-receipt' });
+  saveNamedLocationRemote(here.lat, here.lng, name);
+  return { ok: true, km, name };
 }
 
 function normalizeRegion(raw) {

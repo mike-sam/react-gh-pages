@@ -3,6 +3,7 @@ import { detectPaymentCategory, detectPaymentRegion } from './paymentCategory';
 import { applyParkedByCar, DEFAULT_CAR_PLATES, isParkedFetchFresh } from './locationStorage';
 import { isLandmarkFetchFresh, mergeLandmarkRegionsFromCloud } from './landmarkRegions';
 import { writeFxRates } from './fxRates';
+import { loadExpenseHistory } from './expenseHistory';
 
 export const BOOTSTRAP_FETCH_AT_KEY = 'appBootstrapFetchedAt';
 export const BOOTSTRAP_ATTEMPT_AT_KEY = 'appBootstrapAttemptAt';
@@ -10,7 +11,7 @@ export const BOOTSTRAP_DIRTY_KEY = 'appBootstrapDirty';
 export const BOOTSTRAP_TTL_MS = 60 * 60 * 1000;
 /** F5 / remount without a write: do not hit GAS again inside this window. */
 export const BOOTSTRAP_RETRY_MS = 5 * 60 * 1000;
-export const PAYMENT_OPTIONS_CACHE_VER = 'v3';
+export const PAYMENT_OPTIONS_CACHE_VER = 'v4';
 export const PAYMENT_OPTIONS_TTL_MS = 24 * 60 * 60 * 1000;
 
 export const DEFAULT_PAYMENT_OPTIONS = {
@@ -74,34 +75,62 @@ function consumeBootstrapDirty() {
   return true;
 }
 
+function upsertPaymentOption(acc, id, value) {
+  if (!value?.card_num) return;
+  const draft = {
+    key: value.key,
+    card_num: value.card_num,
+    bank: value.bank || '',
+    shortname: value.shortname || value.bank || '',
+  };
+  const catKey = detectPaymentCategory(draft, id) || 'Card';
+  const short =
+    value.shortname ||
+    value.bank ||
+    (value.key && !['Cash', 'eWallet', 'Card'].includes(value.key) ? value.key : '');
+  const next = {
+    key: catKey,
+    card_num: String(value.card_num).trim(),
+    bank: value.bank || short,
+    shortname: short,
+    region: detectPaymentRegion({ ...draft, shortname: short }),
+  };
+  const existingId = Object.keys(acc).find((k) => String(acc[k].card_num) === next.card_num);
+  acc[existingId || id] = existingId ? { ...acc[existingId], ...next } : next;
+}
+
+function mergeLocalCardFallbacks(acc) {
+  const hasCard = Object.entries(acc).some(([id, o]) => detectPaymentCategory(o, id) === 'Card');
+  if (!hasCard) {
+    try {
+      const prev = JSON.parse(localStorage.getItem('paymentOptions') || '{}');
+      Object.entries(prev).forEach(([id, o]) => {
+        if (detectPaymentCategory(o, id) === 'Card') upsertPaymentOption(acc, id, o);
+      });
+    } catch {
+      /* ignore */
+    }
+  }
+  try {
+    loadExpenseHistory().forEach((entry, i) => {
+      const num = String(entry.payment_method || entry.payment || '').trim();
+      if (!num || !/\d{4}/.test(num.replace(/\s/g, ''))) return;
+      const draft = { key: 'Card', card_num: num };
+      if (detectPaymentCategory(draft) !== 'Card') return;
+      upsertPaymentOption(acc, `HistCard_${i}_${num}`, draft);
+    });
+  } catch {
+    /* ignore */
+  }
+}
+
 export function transformPaymentOptions(raw, defaults = DEFAULT_PAYMENT_OPTIONS) {
-  if (!raw || typeof raw !== 'object') return { ...defaults };
-  return Object.entries(raw)
-    .filter(([, value]) => value?.card_num)
-    .reduce(
-      (acc, [id, value]) => {
-        const draft = {
-          key: value.key,
-          card_num: value.card_num,
-          bank: value.bank || '',
-          shortname: value.shortname || value.bank || '',
-        };
-        const catKey = detectPaymentCategory(draft, id) || 'Card';
-        const short =
-          value.shortname ||
-          value.bank ||
-          (value.key && !['Cash', 'eWallet', 'Card'].includes(value.key) ? value.key : '');
-        acc[id] = {
-          key: catKey,
-          card_num: value.card_num,
-          bank: value.bank || short,
-          shortname: short,
-          region: detectPaymentRegion({ ...draft, shortname: short }),
-        };
-        return acc;
-      },
-      { ...defaults }
-    );
+  const acc = {};
+  const source = raw && typeof raw === 'object' && Object.keys(raw).length ? raw : defaults;
+  Object.entries(source).forEach(([id, value]) => upsertPaymentOption(acc, id, value));
+  Object.entries(defaults).forEach(([id, value]) => upsertPaymentOption(acc, id, value));
+  mergeLocalCardFallbacks(acc);
+  return acc;
 }
 
 export function readPaymentOptionsCache({ allowStale = false } = {}) {
@@ -109,7 +138,8 @@ export function readPaymentOptionsCache({ allowStale = false } = {}) {
     const cached = localStorage.getItem('paymentOptions');
     const cacheTimestamp = localStorage.getItem('paymentOptionsTimestamp');
     const cacheVer = localStorage.getItem('paymentOptionsVer');
-    if (!cached || cacheVer !== PAYMENT_OPTIONS_CACHE_VER) return null;
+    if (!cached) return null;
+    if (!allowStale && cacheVer !== PAYMENT_OPTIONS_CACHE_VER) return null;
     if (
       !allowStale &&
       (!cacheTimestamp || Date.now() - parseInt(cacheTimestamp, 10) >= PAYMENT_OPTIONS_TTL_MS)
@@ -156,16 +186,31 @@ function applyBootstrapPayload(data) {
   return applied;
 }
 
+function paymentCacheNeedsUpgrade() {
+  try {
+    const cached = localStorage.getItem('paymentOptions');
+    const cacheVer = localStorage.getItem('paymentOptionsVer');
+    if (!cached) return false;
+    return cacheVer !== PAYMENT_OPTIONS_CACHE_VER;
+  } catch {
+    return false;
+  }
+}
+
 function needsBootstrap({ force = false } = {}) {
   if (force) return true;
-  const dirty = isBootstrapDirty();
-  if (dirty) return true;
+  if (isBootstrapDirty()) return true;
+  if (paymentCacheNeedsUpgrade()) return true;
+  const paymentsFresh = Boolean(readPaymentOptionsCache());
+  if (!paymentsFresh) {
+    if (isBootstrapAttemptCooling()) return false;
+    return true;
+  }
   if (isBootstrapFresh()) return false;
   if (isBootstrapAttemptCooling()) return false;
-  const paymentsFresh = Boolean(readPaymentOptionsCache());
   const parkedFresh = DEFAULT_CAR_PLATES.every((p) => isParkedFetchFresh(p));
   const landmarksFresh = isLandmarkFetchFresh();
-  return !(paymentsFresh && parkedFresh && landmarksFresh);
+  return !(parkedFresh && landmarksFresh);
 }
 
 /**

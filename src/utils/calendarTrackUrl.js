@@ -260,6 +260,13 @@ export function calendarTrackUrlExamples() {
   const ts = '2026-06-08 07:09:43';
   return [
     {
+      title: 'Ping（瀏覽器打開，確認 GAS 有回應）',
+      note: '應看到 {"success":true,"ping":true,...}。Log 會寫 doGet。沒回應＝URL/部署不對。',
+      params: {
+        op: 'ping',
+      },
+    },
+    {
       title: 'Apple Pay · append',
       note: 'prefix=public transportation。Shortcut 填 Current Date / Location，失敗則同一 URL 重送。',
       params: {

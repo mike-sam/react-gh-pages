@@ -18,6 +18,7 @@ export function fieldsForExpense(tag, subcat) {
     FIELD('amount', '金額', '數字，不含幣符'),
     FIELD('currency', '幣別', 'ISO：MYR/SGD/USD/CNY/TWD/HKD'),
     FIELD('merchant', '商家'),
+    FIELD('merchant_address', '分店/地址', '照片上看得到才填'),
     FIELD('description', '說明'),
     FIELD('payment_method', '付款方式'),
   ];
@@ -35,7 +36,73 @@ export function fieldsForExpense(tag, subcat) {
   } else if (tag === '交通出行') {
     keys.push(FIELD('mileage', 'ODO', '數字'));
   }
+  keys.push(
+    FIELD('items', '明細', '[{name, amount}]，收據有列才填'),
+    FIELD('receipt_time', '照片時間', 'yyyy-MM-dd HH:mm，照片上看得到才填')
+  );
   return keys;
+}
+
+function pad2(n) {
+  return String(n).padStart(2, '0');
+}
+
+export function formatWhen(d) {
+  const dt = d instanceof Date ? d : new Date(d || '');
+  if (Number.isNaN(dt.getTime())) return '';
+  return `${dt.getFullYear()}-${pad2(dt.getMonth() + 1)}-${pad2(dt.getDate())} ${pad2(dt.getHours())}:${pad2(dt.getMinutes())}`;
+}
+
+export function mealTitleForHour(hour) {
+  const h = Number(hour);
+  if (!Number.isFinite(h)) return '';
+  if (h >= 5 && h <= 10) return '早餐';
+  if (h >= 11 && h <= 15) return '午餐';
+  return '晚餐';
+}
+
+export function receiptHints({ tag, when } = {}) {
+  const whenStr = String(when || '').trim();
+  const hm = whenStr.match(/\b(\d{1,2}):(\d{2})\b/);
+  const meal = hm ? mealTitleForHour(Number(hm[1])) : '';
+  const foodSubs = (SECONDARY_TAGS['餐饮美食'] || []).join('、');
+  const lines = [];
+  if (whenStr) lines.push(`記帳時間: ${whenStr}`);
+  lines.push('有品項列則 OCR 到 items:[{name,amount}] 填入明細；沒有列就省略 items。');
+  lines.push('照片若印有日期/時間，填 receipt_time（yyyy-MM-dd HH:mm）；看不清就省略，不要猜。');
+  lines.push('商家名填 merchant；有分店/地址才填 merchant_address。不要填經緯度。');
+  if (!tag || tag === '餐饮美食') {
+    const suggest = meal ? `依時間建議 ${meal}` : '依時間選早/午/晚餐';
+    lines.push(
+      `餐饮美食 title 只能是：${foodSubs}。${suggest}（05–10 早餐、11–15 午餐、16–04 晚餐）；外帶/外送用外卖，明顯多人用聚餐。`
+    );
+  }
+  return lines.join('\n');
+}
+
+export function parseReceiptTime(raw, fallbackDate) {
+  const s = String(raw || '').trim();
+  if (!s) return null;
+  const fallback =
+    fallbackDate instanceof Date && !Number.isNaN(fallbackDate.getTime()) ? fallbackDate : new Date();
+  const asDate = (y, mo, d, hh, mm) => {
+    const dt = new Date(Number(y), Number(mo) - 1, Number(d), Number(hh) || 0, Number(mm) || 0, 0, 0);
+    return Number.isNaN(dt.getTime()) ? null : dt;
+  };
+  let m = s.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:[ T](\d{1,2}):(\d{2}))?/);
+  if (m) return asDate(m[1], m[2], m[3], m[4], m[5]);
+  m = s.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})(?:[ T](\d{1,2}):(\d{2}))?/);
+  if (m) return asDate(m[3], m[2], m[1], m[4], m[5]);
+  m = s.match(/^(\d{1,2}):(\d{2})\s*(am|pm)?$/i);
+  if (m) {
+    let hh = Number(m[1]);
+    const ap = (m[3] || '').toLowerCase();
+    if (ap === 'pm' && hh < 12) hh += 12;
+    if (ap === 'am' && hh === 12) hh = 0;
+    return asDate(fallback.getFullYear(), fallback.getMonth() + 1, fallback.getDate(), hh, m[2]);
+  }
+  const native = new Date(s);
+  return Number.isNaN(native.getTime()) ? null : native;
 }
 
 export function fileToDataUrl(file) {
@@ -106,7 +173,131 @@ async function postGasJson(payload, timeoutMs = 55000) {
   }
 }
 
-export async function analyzeReceiptPhoto(photo, { tag, title } = {}) {
+export const DEFAULT_RECEIPT_PROMPT_TEMPLATE = [
+  '你是記帳助理。根據收據／發票照片填欄位。',
+  '目前分類: {{tag}}',
+  '目前子分類: {{title}}',
+  '允許分類: {{cats}}',
+  '允許子分類:',
+  '{{subcats}}',
+  '需要欄位:',
+  '{{fields}}',
+  '{{hints}}',
+  '規則:',
+  '1. 回傳 JSON：{"suggestions":[{...}]}，1～4 筆。金額有含稅/未稅/折扣時可給多筆。',
+  '2. 每筆含短 label（如「含稅總額」）。數字用 number。未知欄位省略。',
+  '3. currency 用 ISO（MYR/SGD/USD/CNY/TWD/HKD）。fuelType 僅 ron95 或 ron97。',
+  '4. tag/title 必須是允許清單內的值；已選分類優先沿用，除非收據明顯不符。',
+  '5. 只根據照片，不要編造商家名以外的長文。',
+].join('\n');
+
+export function receiptPromptVars({ tag, title, fields, allowedTags, allowedSubcats, when } = {}) {
+  const list = Array.isArray(fields) ? fields : [];
+  let fieldLines = list
+    .map((f) => {
+      if (!f) return '';
+      const key = f.key || '';
+      const label = f.label || key;
+      const hint = f.hint ? ` — ${f.hint}` : '';
+      return `- ${key} (${label})${hint}`;
+    })
+    .filter(Boolean);
+  if (!fieldLines.length) {
+    fieldLines = [
+      '- amount (金額) — 數字，不含幣符',
+      '- currency (幣別) — ISO，如 MYR/SGD/USD',
+      '- merchant (商家)',
+      '- description (說明)',
+      '- tag (分類)',
+      '- title (子分類)',
+    ];
+  }
+  const cats = Array.isArray(allowedTags) ? allowedTags.join('、') : '';
+  const subMap = allowedSubcats && typeof allowedSubcats === 'object' ? allowedSubcats : {};
+  const subLines = Object.keys(subMap).map((k) => {
+    const arr = Array.isArray(subMap[k]) ? subMap[k] : [];
+    return `${k}: ${arr.join('、')}`;
+  });
+  return {
+    tag: tag || '未選',
+    title: title || '未選',
+    cats,
+    subcats: subLines.join('\n'),
+    fields: fieldLines.join('\n'),
+    when: String(when || '').trim(),
+    hints: receiptHints({ tag, when }),
+  };
+}
+
+export function fillReceiptPrompt(template, ctx) {
+  const vars = receiptPromptVars(ctx);
+  let src = String(template || '').trim() || DEFAULT_RECEIPT_PROMPT_TEMPLATE;
+  if (src.length > 8000) src = src.slice(0, 8000);
+  const hasPh = /\{\{\s*[a-z]+\s*\}\}/i.test(src);
+  const hadHints = /\{\{\s*hints\s*\}\}/i.test(src);
+  let out = src
+    .replace(/\{\{\s*tag\s*\}\}/gi, vars.tag)
+    .replace(/\{\{\s*title\s*\}\}/gi, vars.title)
+    .replace(/\{\{\s*cats\s*\}\}/gi, vars.cats)
+    .replace(/\{\{\s*subcats\s*\}\}/gi, vars.subcats)
+    .replace(/\{\{\s*fields\s*\}\}/gi, vars.fields)
+    .replace(/\{\{\s*when\s*\}\}/gi, vars.when)
+    .replace(/\{\{\s*hints\s*\}\}/gi, vars.hints);
+  if (!hasPh) {
+    out += `\n\n目前分類: ${vars.tag}\n目前子分類: ${vars.title}${
+      vars.cats ? `\n允許分類: ${vars.cats}` : ''
+    }${vars.subcats ? `\n允許子分類:\n${vars.subcats}` : ''}\n需要欄位:\n${vars.fields}`;
+  }
+  if (!hadHints && vars.hints) out += `\n${vars.hints}`;
+  return out;
+}
+
+export function receiptPromptFor(tag, title, template, when) {
+  return fillReceiptPrompt(template, {
+    tag: tag || '',
+    title: title || '',
+    when: when || '',
+    fields: fieldsForExpense(tag, title),
+    allowedTags: EXPENSE_TAGS,
+    allowedSubcats: SECONDARY_TAGS,
+  });
+}
+
+export function formatAiFallbackCopy({ model, prompt } = {}) {
+  return [`model: ${model || '未回傳'}`, '請根據收據照片填欄位。圖請另外附上。', '', prompt || ''].join('\n').trim();
+}
+
+function attachAiMeta(err, extra) {
+  const e = err instanceof Error ? err : new Error(String(err?.message || err || 'AI 建議失敗'));
+  if (extra?.model != null) e.model = extra.model;
+  if (extra?.prompt != null) e.prompt = extra.prompt;
+  return e;
+}
+
+export async function loadAiPrompt() {
+  const data = await postGasJson({ action: 'getAiPrompt' }, 20000);
+  if (!data || data.success !== true || data.action !== 'getAiPrompt') {
+    throw new Error(data?.error || '請重新部署 Apps Script');
+  }
+  const stored = String(data.template || '').trim();
+  return {
+    template: stored || data.defaultTemplate || DEFAULT_RECEIPT_PROMPT_TEMPLATE,
+    stored: Boolean(stored),
+    defaultTemplate: data.defaultTemplate || DEFAULT_RECEIPT_PROMPT_TEMPLATE,
+    model: data.model || '',
+  };
+}
+
+export async function saveAiPrompt(template) {
+  const text = (String(template || '').trim() || DEFAULT_RECEIPT_PROMPT_TEMPLATE).slice(0, 8000);
+  const data = await postGasJson({ action: 'setAiPrompt', template: text }, 20000);
+  if (!data || data.success !== true || String(data.group) !== 'AI') {
+    throw new Error(data?.error || '請重新部署 Apps Script');
+  }
+  return text;
+}
+
+export async function analyzeReceiptPhoto(photo, { tag, title, promptTemplate, when } = {}) {
   if (!photo?.base64) throw new Error('沒有圖片');
   const payload = {
     action: 'analyzeReceipt',
@@ -114,20 +305,36 @@ export async function analyzeReceiptPhoto(photo, { tag, title } = {}) {
     mimeType: photo.type || 'image/jpeg',
     tag: tag || '',
     title: title || '',
+    when: when || '',
     fields: fieldsForExpense(tag, title),
     allowedTags: EXPENSE_TAGS,
     allowedSubcats: SECONDARY_TAGS,
+    promptTemplate: String(promptTemplate || '').trim().slice(0, 8000),
   };
-  const data = await postGasJson(payload);
-  if (!data || data.success !== true) {
-    throw new Error(data?.error || 'AI 建議失敗');
+  const prompt = fillReceiptPrompt(payload.promptTemplate, payload);
+  try {
+    const data = await postGasJson(payload);
+    if (!data || data.success !== true) {
+      throw attachAiMeta(new Error(data?.error || 'AI 建議失敗'), {
+        model: data?.model || '',
+        prompt: data?.prompt || prompt,
+      });
+    }
+    const suggestions = Array.isArray(data.suggestions)
+      ? data.suggestions.filter((s) => s && typeof s === 'object')
+      : [];
+    return {
+      suggestions,
+      model: data.model || '',
+      prompt: data.prompt || prompt,
+      photoHash: data.photoHash || '',
+    };
+  } catch (err) {
+    throw attachAiMeta(err, {
+      model: err?.model || '',
+      prompt: err?.prompt || prompt,
+    });
   }
-  const suggestions = Array.isArray(data.suggestions) ? data.suggestions.filter((s) => s && typeof s === 'object') : [];
-  return {
-    suggestions,
-    model: data.model || '',
-    photoHash: data.photoHash || '',
-  };
 }
 
 export function recordAiSuggestion(body) {
@@ -171,6 +378,8 @@ export function suggestionSummary(s) {
   if (s.amount != null && s.amount !== '') bits.push(`${s.amount}${s.currency ? ` ${s.currency}` : ''}`);
   if (s.merchant) bits.push(s.merchant);
   if (s.tag || s.title) bits.push([s.tag, s.title].filter(Boolean).join(' / '));
+  if (Array.isArray(s.items) && s.items.length) bits.push(`${s.items.length}項`);
+  if (s.receipt_time) bits.push(s.receipt_time);
   return bits.join(' · ') || '建議';
 }
 
@@ -210,6 +419,10 @@ export function applyAiSuggestion(s, setters) {
   }
   if (s.fuelPrice != null && s.fuelPrice !== '' && setters.setFuelPrice) setters.setFuelPrice(String(s.fuelPrice));
   if (s.carPlate && setters.setCarPlate) setters.setCarPlate(String(s.carPlate).toUpperCase());
+  if (s.receipt_time && setters.setSelectedDateTime) {
+    const parsed = parseReceiptTime(s.receipt_time, setters.selectedDateTime);
+    if (parsed) setters.setSelectedDateTime(parsed);
+  }
   if ((s.payment_method || s.payment) && setters.setPaymentMethod && setters.paymentOptions) {
     const raw = String(s.payment_method || s.payment).trim();
     const opts = Object.values(setters.paymentOptions || {});

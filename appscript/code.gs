@@ -1,13 +1,31 @@
 const sheetId = '1ZAFWV5aIVcA66qJEMPGGsg3azPY415_Clwe--JinQ7w'; // https://docs.google.com/spreadsheets/d/1ZAFWV5aIVcA66qJEMPGGsg3azPY415_Clwe--JinQ7w/edit#gid=0
 
-const doGet = (event = {}) => {
-  appendLog([event]);
-  const { parameter } = event;
-  const { action } = parameter;
-  if (!isAccessAllowed(action, parameter, null)) return accessDeniedOut();
-  
-  // 处理不同的GET请求
-  switch(action) {
+const doGet = (event) => {
+  try {
+    event = event || {};
+    var parameter = normalizeCalendarShortcut_(event.parameter || {});
+    appendLog([
+      'doGet',
+      event.queryString || flattenParams_(parameter),
+      'action=' + (parameter.action || '')
+    ]);
+    var action = parameter.action;
+    if (!isAccessAllowed(action, parameter, null)) {
+      appendLog(['doGet forbidden', action || '(empty)']);
+      return accessDeniedOut();
+    }
+
+    if (action === 'calendarPing' || parameter.op === 'ping') {
+      return calendarJson({
+        success: true,
+        ping: true,
+        received: parameter,
+        queryString: event.queryString || '',
+        at: new Date().toISOString()
+      });
+    }
+
+    switch(action) {
     case 'getPaymentOptions':
       return getPaymentOptions();
     case 'getMerchants':
@@ -45,14 +63,26 @@ const doGet = (event = {}) => {
     case 'runDailyJobs':
       return runDailyJobs();
     case 'saveLocation':
-      return saveLocation(data);
+      return saveLocation(parameter);
     case 'trackCalendar':
     case 'check_current':
       return handleCalendarTrack(parameter || {});
     default:
-      // 兼容旧版本
+      appendLog(['doGet unknown action', action || '(empty)', flattenParams_(parameter)]);
       const { name, country } = parameter;
-      return ContentService.createTextOutput(JSON.stringify({ name, country })).setMimeType(ContentService.MimeType.JSON);
+      return ContentService.createTextOutput(JSON.stringify({
+        success: false,
+        error: 'Unknown action: ' + (action || '(empty)'),
+        name: name,
+        country: country
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+  } catch (error) {
+    appendLog(['Error in doGet:', error.toString(), error.stack]);
+    return calendarJson({
+      success: false,
+      error: calendarAuthHint(error)
+    });
   }
 };
 const doPost = (request = {}) => {
@@ -62,8 +92,13 @@ const doPost = (request = {}) => {
     var queryParams = parameter || {};
     var typeStr = (type || '').toString();
 
+    queryParams = normalizeCalendarShortcut_(queryParams);
+
     if (!contents) {
-      if (queryParams.action === 'trackCalendar' || queryParams.action === 'check_current') {
+      if (queryParams.action === 'trackCalendar' || queryParams.action === 'check_current' || queryParams.action === 'calendarPing') {
+        if (queryParams.action === 'calendarPing' || queryParams.op === 'ping') {
+          return calendarJson({ success: true, ping: true, received: queryParams, at: new Date().toISOString() });
+        }
         return handleCalendarTrack(queryParams);
       }
       return ContentService.createTextOutput(JSON.stringify({
@@ -84,6 +119,11 @@ const doPost = (request = {}) => {
     try {
       data = JSON.parse(contents);
     } catch (parseError) {
+      var phraseData = calendarPhraseToData_(contents);
+      if (phraseData) {
+        appendLog(['doPost phrase', contents]);
+        return handleCalendarTrack(phraseData);
+      }
       if (queryParams.action === 'trackCalendar' || queryParams.action === 'check_current') {
         return handleCalendarTrack(queryParams);
       }
@@ -94,7 +134,8 @@ const doPost = (request = {}) => {
       })).setMimeType(ContentService.MimeType.JSON);
     }
     
-    appendLog(['Parsed data:', 'action: ' + (data.action || 'N/A')]);
+    data = normalizeCalendarShortcut_(data);
+    appendLog(['Parsed data:', 'action: ' + (data.action || 'N/A'), 'op: ' + (data.op || 'N/A')]);
     if (!isAccessAllowed(data.action, queryParams, data)) return accessDeniedOut();
     
     // 根据action类型分发处理
@@ -160,14 +201,50 @@ const doPost = (request = {}) => {
   }
 };
 
+function logCell_(v) {
+  if (v == null) return '';
+  var t = typeof v;
+  if (t === 'string' || t === 'number' || t === 'boolean') return v;
+  try {
+    return JSON.stringify(v);
+  } catch (e) {
+    return String(v);
+  }
+}
+
+function flattenParams_(parameter) {
+  parameter = parameter || {};
+  var keys = Object.keys(parameter);
+  var parts = [];
+  var i;
+  for (i = 0; i < keys.length; i++) {
+    parts.push(keys[i] + '=' + parameter[keys[i]]);
+  }
+  return parts.join('&');
+}
+
 function appendLog(row, output_to_logger) {
-  if (output_to_logger) { Logger.log(JSON.stringify(row)); }
-  var doc = SpreadsheetApp.openById(sheetId);
-  var sheet = doc.getSheetByName('Log');
-  if (!sheet) return;
   if (!(row instanceof Array)) row = [row];
-  row.unshift(datetimetoYMDHIS(new Date()));
-  sheet.appendRow(row);
+  var cells = row.map(logCell_);
+  cells.unshift(datetimetoYMDHIS(new Date()));
+  try {
+    Logger.log(cells.join(' | '));
+  } catch (eLog) {}
+  if (output_to_logger) return;
+  try {
+    var doc = SpreadsheetApp.openById(sheetId);
+    var sheet = doc.getSheetByName('Log');
+    if (!sheet) sheet = doc.getSheetByName('log');
+    if (!sheet) {
+      sheet = doc.insertSheet('Log');
+      sheet.appendRow(['timestamp', 'message']);
+    }
+    sheet.appendRow(cells);
+  } catch (eSheet) {
+    try {
+      Logger.log('appendLog sheet failed: ' + eSheet);
+    } catch (e2) {}
+  }
 }
 const makeHttpGetRequest = () => {
   const queryString = '?name=Amit+Agarwal&country=India';
@@ -2213,7 +2290,9 @@ function verifyAccess(parameter) {
 
 var ACCESS_OPEN_ACTIONS = {
   verifyAccess: true,
-  trackCalendar: true
+  trackCalendar: true,
+  calendarPing: true,
+  check_current: true
 };
 
 function submittedAccess(parameter, data) {
@@ -3161,13 +3240,101 @@ function trailPrefix(raw, fallback) {
   return s;
 }
 
+var CALENDAR_TITLE_ALIASES_ = {
+  driving: 'Driving',
+  work: 'Work',
+  commute: 'Commute',
+  trip: 'Trip',
+  sleep: 'Sleep'
+};
+
+function calendarPhraseKey_(s) {
+  return String(s || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[_+]+/g, ' ')
+    .replace(/\s+/g, ' ');
+}
+
+/** Map Shortcut phrase / action / op → trackCalendar fields. Null if unrelated. */
+function calendarPhraseToData_(raw) {
+  var key = calendarPhraseKey_(raw);
+  if (!key) return null;
+  if (key === 'ping' || key === 'calendaping' || key === 'calendar ping') {
+    return { action: 'calendarPing', op: 'ping' };
+  }
+  if (key === 'end all' || key === 'endall' || key === 'end + all' || key === 'end+all') {
+    return { action: 'trackCalendar', op: 'end', all: '1', endAny: '1' };
+  }
+  if (key === 'end') {
+    return { action: 'trackCalendar', op: 'end' };
+  }
+  if (key === 'start' || key === 'append' || key === 'home' || key === 'check') {
+    return { action: 'trackCalendar', op: key };
+  }
+  if (CALENDAR_TITLE_ALIASES_[key]) {
+    return {
+      action: 'trackCalendar',
+      op: 'start',
+      title: CALENDAR_TITLE_ALIASES_[key],
+      endExisting: '1'
+    };
+  }
+  var m = key.match(/^(start|end)\s+(.+)$/);
+  if (m && CALENDAR_TITLE_ALIASES_[m[2]]) {
+    if (m[1] === 'end') {
+      return { action: 'trackCalendar', op: 'end', title: CALENDAR_TITLE_ALIASES_[m[2]] };
+    }
+    return {
+      action: 'trackCalendar',
+      op: 'start',
+      title: CALENDAR_TITLE_ALIASES_[m[2]],
+      endExisting: '1'
+    };
+  }
+  return null;
+}
+
+function applyCalendarPhrase_(out, phrase) {
+  if (!out || !phrase) return out;
+  if (phrase.action) out.action = phrase.action;
+  if (phrase.op) out.op = phrase.op;
+  if (phrase.title && !out.title) out.title = phrase.title;
+  if (phrase.all) out.all = phrase.all;
+  if (phrase.endAny) out.endAny = phrase.endAny;
+  if (phrase.endExisting != null && (out.endExisting === undefined || out.endExisting === '')) {
+    out.endExisting = phrase.endExisting;
+  }
+  return out;
+}
+
+function normalizeCalendarShortcut_(data) {
+  data = data || {};
+  var out = {};
+  var keys = Object.keys(data);
+  var i;
+  for (i = 0; i < keys.length; i++) out[keys[i]] = data[keys[i]];
+  var actionKey = calendarPhraseKey_(out.action);
+  if (actionKey && actionKey !== 'trackcalendar' && actionKey !== 'check_current' && actionKey !== 'calendaping') {
+    applyCalendarPhrase_(out, calendarPhraseToData_(out.action));
+  }
+  applyCalendarPhrase_(out, calendarPhraseToData_(out.op));
+  if (!out.op) {
+    applyCalendarPhrase_(out, calendarPhraseToData_(out.title));
+    applyCalendarPhrase_(out, calendarPhraseToData_(out.text || out.txt || out.input || out.phrase));
+  }
+  return out;
+}
+
 function resolveCalendarOp(data) {
   data = data || {};
   var action = String(data.action || '').trim();
-  var op = String(data.op || '').trim().toLowerCase();
+  var op = calendarPhraseKey_(data.op);
   if (action === 'check_current' || op === 'check' || op === 'check_current') return 'check';
+  if (op === 'end all' || op === 'endall' || op === 'end + all' || op === 'end+all') return 'end';
   if (op === 'start' || op === 'append' || op === 'end' || op === 'home') return op;
-  var prefix = String(data.prefix || '').trim().toLowerCase();
+  if (CALENDAR_TITLE_ALIASES_[op]) return 'start';
+  var prefix = calendarPhraseKey_(data.prefix);
   if (prefix === 'start' || prefix === 'end') return prefix;
   return 'append';
 }
@@ -3436,7 +3603,7 @@ function eventSummaries(events) {
  */
 function handleCalendarTrack(data) {
   try {
-    data = data || {};
+    data = normalizeCalendarShortcut_(data || {});
     appendLog(['handleCalendarTrack called', JSON.stringify(data)]);
 
     var op = resolveCalendarOp(data);
@@ -3445,6 +3612,8 @@ function handleCalendarTrack(data) {
       data.timestampMs != null ? data.timestampMs : data.timestamp_ms
     );
     var title = (data.title || '').toString().trim();
+    var rawOp = calendarPhraseKey_(data.op);
+    if (!title && CALENDAR_TITLE_ALIASES_[rawOp]) title = CALENDAR_TITLE_ALIASES_[rawOp];
     var coords = parseCalendarCoords(data);
     var lat = coords.lat;
     var lng = coords.lng;
@@ -3454,7 +3623,12 @@ function handleCalendarTrack(data) {
     var startHome = calendarFlag(data.startHome, false);
     var all = calendarFlag(data.all, false);
     var endAny = calendarFlag(data.endAny, false);
+    if (rawOp === 'end all' || rawOp === 'endall' || rawOp === 'end + all' || rawOp === 'end+all') {
+      all = true;
+      endAny = true;
+    }
     var lookbackMs = calendarLookbackMs(data);
+    appendLog(['handleCalendarTrack resolved', op, 'title=' + title, 'all=' + all, 'endAny=' + endAny]);
     var ts = formatCalendarStamp(when);
     var calendar = openTrackingCalendar();
     var starts = findEventsByFirstLine(calendar, CALENDAR_START_MARKER, when, lookbackMs);
@@ -3628,10 +3802,11 @@ function handleCalendarTrack(data) {
       var closedEnd = closeEvents(endTargets, when, endPrefix, placeName, lat, lng);
       result = {
         success: true,
-        mode: 'ended',
+        mode: closedEnd.length ? 'ended' : 'noop',
         op: op,
         closed: closedEnd,
-        placeName: placeName
+        placeName: placeName,
+        warning: closedEnd.length ? '' : 'no matching open events in lookback window'
       };
       appendLog(['Calendar events ended:', JSON.stringify(result)]);
       return calendarJson(result);

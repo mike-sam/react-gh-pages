@@ -125,6 +125,28 @@ function CalendarTracker() {
     return next;
   };
 
+  const pingGas = async () => {
+    setMessage('測試連線中…');
+    try {
+      const url = buildCalendarTrackUrl({ op: 'ping' });
+      const res = await fetch(url);
+      const text = await res.text();
+      let data;
+      try {
+        data = JSON.parse(text);
+      } catch {
+        data = null;
+      }
+      if (data?.ping) {
+        setMessage(`GAS 通了 · ${data.at || ''}`);
+        return;
+      }
+      setMessage(`GAS 回應異常：${(data && data.error) || text.slice(0, 180) || `HTTP ${res.status}`}`);
+    } catch (err) {
+      setMessage(`無法連 GAS：${err.message || err}`);
+    }
+  };
+
   const handleOp = (op, flags = {}, days = lookbackDays) => {
     if ((op === 'start' || flags.requireTitle) && !resolvedTitle) {
       setMessage('請選擇或輸入 Event 標題');
@@ -237,6 +259,7 @@ function CalendarTracker() {
         <section className="calendar-field">
           <div className="calendar-field-head">
             <span className="entry-field-label">Event</span>
+            <span className="calendar-lookback-caption">點標題只是選取；開始請按 Start New / End+Start</span>
           </div>
           <div className="entry-chip-row calendar-title-chips">
             {CALENDAR_TITLES.map((item) => (
@@ -363,6 +386,14 @@ function CalendarTracker() {
             disabled={isChecking}
           >
             {isChecking ? '更新中…' : '重新整理'}
+          </button>
+          <button
+            type="button"
+            className="calendar-status-refresh"
+            onClick={() => pingGas()}
+            title="GET ping，確認這支 GAS 有被打到"
+          >
+            測試連線
           </button>
         </div>
         {status.starts.length === 0 && status.homes.length === 0 ? (
