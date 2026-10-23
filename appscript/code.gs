@@ -4,6 +4,7 @@ const doGet = (event = {}) => {
   appendLog([event]);
   const { parameter } = event;
   const { action } = parameter;
+  if (!isAccessAllowed(action, parameter, null)) return accessDeniedOut();
   
   // 处理不同的GET请求
   switch(action) {
@@ -90,6 +91,7 @@ const doPost = (request = {}) => {
     }
     
     appendLog(['Parsed data:', 'action: ' + (data.action || 'N/A')]);
+    if (!isAccessAllowed(data.action, queryParams, data)) return accessDeniedOut();
     
     // 根据action类型分发处理
     switch(data.action) {
@@ -1251,10 +1253,34 @@ function ensureAccessHashRow() {
 
 function verifyAccess(parameter) {
   parameter = parameter || {};
-  var submitted = String(parameter.hash || parameter.access || parameter.value || '').trim();
+  var submitted = String(parameter.hash || parameter.access || parameter.value || parameter.k || '').trim();
   var expected = String(ensureAccessHashRow() || '').trim();
   var ok = submitted !== '' && expected !== '' && submitted === expected;
   return jsonOut({ success: true, ok: ok });
+}
+
+var ACCESS_OPEN_ACTIONS = {
+  verifyAccess: true,
+  trackCalendar: true
+};
+
+function submittedAccess(parameter, data) {
+  parameter = parameter || {};
+  data = data || {};
+  return String(parameter.access || parameter.k || data.access || data.k || '').trim();
+}
+
+function accessDeniedOut() {
+  return jsonOut({ success: false, ok: false, error: 'Forbidden', access: false });
+}
+
+/** HTTP requests (except verify / calendar shortcut) must carry the sheet hash. */
+function isAccessAllowed(action, parameter, data) {
+  if (ACCESS_OPEN_ACTIONS[String(action || '')]) return true;
+  var expected = String(ensureAccessHashRow() || '').trim();
+  if (!expected) return true;
+  var submitted = submittedAccess(parameter, data);
+  return submitted !== '' && submitted === expected;
 }
 
 function getKeyValueSheet() {
@@ -3658,38 +3684,37 @@ function getExpenseSummary(parameter) {
     parameter = parameter || {};
     var ym = String(parameter.yearmonth || '').trim();
     if (!ym) ym = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM');
+    var force = /^(1|true|yes)$/i.test(String(parameter.force || ''));
     var props = PropertiesService.getScriptProperties();
-    if (props.getProperty(EXPENSE_SUMMARY_BOOTSTRAP) !== '1') {
-      refreshExpenseSummaryCache();
-    }
     var cacheKey = EXPENSE_SUMMARY_PREFIX + ym;
-    var live = computeExpenseSummary(ym);
-    var cachedRaw = props.getProperty(cacheKey);
-    if (cachedRaw) {
-      try {
-        var cached = JSON.parse(cachedRaw);
-        if (cached && cached.fingerprint === live.fingerprint) {
-          live = cached;
-          live.cached = true;
-          if (!live.updatedAt) {
-            live.updatedAt = formatRfc2822(new Date());
-            props.setProperty(cacheKey, JSON.stringify(live));
+    var live = null;
+    var fromCache = false;
+    if (!force) {
+      var cachedRaw = props.getProperty(cacheKey);
+      if (cachedRaw) {
+        try {
+          var cached = JSON.parse(cachedRaw);
+          if (cached && Array.isArray(cached.byTag)) {
+            live = cached;
+            fromCache = true;
           }
-        } else {
-          live.updatedAt = formatRfc2822(new Date());
-          props.setProperty(cacheKey, JSON.stringify(live));
-          live.cached = false;
+        } catch (parseErr) {
+          live = null;
         }
-      } catch (parseErr) {
-        live.updatedAt = formatRfc2822(new Date());
-        props.setProperty(cacheKey, JSON.stringify(live));
-        live.cached = false;
       }
-    } else {
-      live.updatedAt = formatRfc2822(new Date());
-      props.setProperty(cacheKey, JSON.stringify(live));
-      live.cached = false;
     }
+    if (!live) {
+      live = computeExpenseSummary(ym);
+      live.updatedAt = formatRfc2822(new Date());
+      try {
+        props.setProperty(cacheKey, JSON.stringify(live));
+      } catch (writeErr) {
+        appendLog(['getExpenseSummary cache write', ym, writeErr.toString()]);
+      }
+    }
+    live.yearmonth = live.yearmonth || ym;
+    live.cached = fromCache;
+    live.source = fromCache ? 'cache' : 'live';
     var wantId = String(parameter.id || '').trim();
     if (wantId) {
       var hit = null;
