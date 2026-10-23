@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { CircleMarker, MapContainer, Popup, TileLayer, ZoomControl, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { DEFAULT_ZOOM, MapInvalidateOn, TILES } from './map/LeafletBits';
+import { DEFAULT_ZOOM, MapInvalidateOn, tilesFor } from './map/LeafletBits';
 import { DEFAULT_MAP_CENTER } from '../utils/mapDefaults';
 import { colorForTag, formatMoney, parseRecordCoords, recordTag } from '../utils/expenseSummary';
 import { fromMyr } from '../utils/fxRates';
@@ -31,6 +31,7 @@ function FitPoints({ points, token }) {
 }
 
 function HeatMapBody({ records, slices, cats, sub, fx }) {
+  const tile = tilesFor('street');
   const wantCats = cats || [];
   const wantSub = String(sub || '').trim();
   const points = useMemo(() => {
@@ -83,7 +84,7 @@ function HeatMapBody({ records, slices, cats, sub, fx }) {
         zoomControl={false}
         className="expense-heat-leaflet"
       >
-        <TileLayer url={TILES.street.url} attribution={TILES.street.attribution} />
+        <TileLayer url={tile.url} attribution={tile.attribution} subdomains={tile.subdomains} />
         <ZoomControl position="bottomright" />
         <MapInvalidateOn token={fitToken} />
         <FitPoints points={points} token={fitToken} />

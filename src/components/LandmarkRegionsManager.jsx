@@ -13,21 +13,39 @@ import {
   SHAPE_POINT,
   SHAPE_POLYGON,
   SHAPE_RECT,
-  deleteLandmarkRegionLocal,
   deleteLandmarkRegionRemote,
+  deleteSavedLocationRemote,
+  distanceMeters,
   fetchLandmarkRegionsFromCloud,
+  fetchSavedLocations,
+  absorbPointTwins,
+  filterLivePlaces,
+  forgetPlace,
+  landmarkFetchHint,
+  landmarkFetchedAt,
+  loadSheetPlaces,
+  mergePlaceCatalog,
   finalizeDraft,
   formatCoverage,
+  formatDist,
   inferShape,
+  isNamedPoint,
+  isSheetPlace,
   insertPolygonVertex,
   commitPolygonVertexMove,
   loadLandmarkRegions,
   matchLandmarksAt,
   mergeLandmarkRegionsFromCloud,
   newLandmarkId,
+  PIN_ICON_DEFAULT,
+  PIN_ICONS,
+  pruneTombstonesAgainst,
+  regionContains,
   regionOverlapsView,
   rectVerticesFromCenter,
   searchLocalLandmarks,
+  saveSavedLocationRemote,
+  saveSheetPlaces,
   searchNominatim,
   shapeMeta,
   upsertLandmarkRegionLocal,
@@ -40,19 +58,28 @@ import {
   MapEditClick,
   MapInvalidateOn,
   MAX_ZOOM,
+  MoveGhost,
   OffMarkerWatcher,
+  PinGlyph,
+  RangeHalo,
   ProbeDot,
   Recenter,
   RegionShape,
   ReturnPinButton,
-  TILES,
+  tilesFor,
   VertexMarkers,
   openInGoogleMaps,
 } from './map/LeafletBits';
+import { getMergedQueryParams } from '../utils/expenseQuickUrl';
+import { applyHash, hrefFor, ROUTES } from '../utils/routing';
 
-function ModeToggle({ value, options, onChange, ariaLabel }) {
+function ModeToggle({ value, options, onChange, ariaLabel, className }) {
   return (
-    <div className="mode-toggle" role="tablist" aria-label={ariaLabel}>
+    <div
+      className={`mode-toggle${className ? ` ${className}` : ''}`}
+      role="tablist"
+      aria-label={ariaLabel}
+    >
       {options.map((opt) => (
         <button
           key={opt.id}
@@ -78,7 +105,23 @@ function LandmarkRegionsManager() {
     hasLoc ? location.lng : DEFAULT_MAP_CENTER.lng,
   ]);
   const [regions, setRegions] = useState(() => loadLandmarkRegions());
+  const [sheetPlaces, setSheetPlaces] = useState(() => loadSheetPlaces());
   const [tab, setTab] = useState('browse');
+  const [kind, setKind] = useState(() =>
+    String(getMergedQueryParams().get('kind') || '').toLowerCase() === 'point' ? 'point' : 'region'
+  );
+
+  useEffect(() => {
+    const syncKind = () => {
+      const next =
+        String(getMergedQueryParams().get('kind') || '').toLowerCase() === 'point'
+          ? 'point'
+          : 'region';
+      setKind((k) => (k === next ? k : next));
+    };
+    window.addEventListener('hashchange', syncKind);
+    return () => window.removeEventListener('hashchange', syncKind);
+  }, []);
   const [editMode, setEditMode] = useState(null);
   const [editDraft, setEditDraft] = useState(null);
   const [selectedVertex, setSelectedVertex] = useState(null);
@@ -97,9 +140,10 @@ function LandmarkRegionsManager() {
   const [probe, setProbe] = useState(null);
   const [hereHits, setHereHits] = useState([]);
   const [dragPreview, setDragPreview] = useState(null);
-  const [canUndo, setCanUndo] = useState(false);
   const [ringChoice, setRingChoice] = useState(null);
-  const undoRef = useRef([]);
+  const [editOrigin, setEditOrigin] = useState(null);
+  const [inspectedId, setInspectedId] = useState(null);
+  const inspectGuardUntil = useRef(0);
   const returnBtnRef = useRef(null);
   const ringChipRef = useRef(null);
   const wrapRef = useRef(null);
@@ -107,32 +151,10 @@ function LandmarkRegionsManager() {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [sizeToken, setSizeToken] = useState(0);
 
-  const clearUndo = useCallback(() => {
-    undoRef.current = [];
-    setCanUndo(false);
-  }, []);
-
-  const rememberDraft = useCallback((d) => {
-    if (!d) return;
-    undoRef.current.push({
-      shape: d.shape,
-      center: d.center ? { lat: d.center.lat, lng: d.center.lng } : null,
-      radiusM: d.radiusM,
-      vertices: (d.vertices || []).map((v) => ({ lat: v.lat, lng: v.lng })),
-    });
-    if (undoRef.current.length > 40) undoRef.current.shift();
-    queueMicrotask(() => setCanUndo(true));
-  }, []);
-
-  const undoEdit = useCallback(() => {
-    const prev = undoRef.current.pop();
-    if (!prev) return;
-    setCanUndo(undoRef.current.length > 0);
-    setSelectedVertex(null);
-    setDragPreview(null);
-    setRingChoice(null);
-    setEditDraft((d) => (d ? { ...d, ...prev } : d));
-  }, []);
+  const catalog = useMemo(
+    () => mergePlaceCatalog(regions, sheetPlaces),
+    [regions, sheetPlaces]
+  );
 
   const reloadLocal = () => {
     const next = loadLandmarkRegions();
@@ -140,13 +162,21 @@ function LandmarkRegionsManager() {
     return next;
   };
 
-  const syncFromCloud = useCallback(async ({ force = false } = {}) => {
+  const syncFromCloud = useCallback(async () => {
     setSyncing(true);
-    if (!force) setNote('同步中…');
+    setNote('同步中…');
     try {
       const cloud = await fetchLandmarkRegionsFromCloud();
       const merged = mergeLandmarkRegionsFromCloud(cloud);
       setRegions(merged);
+      try {
+        const pins = await fetchSavedLocations();
+        pruneTombstonesAgainst(pins);
+        const live = saveSheetPlaces(filterLivePlaces(pins));
+        setSheetPlaces(live);
+      } catch {
+        setSheetPlaces((list) => filterLivePlaces(list));
+      }
       setNote(`已同步 ${merged.length} 個`);
       return merged;
     } catch (err) {
@@ -159,7 +189,9 @@ function LandmarkRegionsManager() {
   }, []);
 
   useEffect(() => {
-    syncFromCloud({ force: false });
+    if (landmarkFetchedAt()) return undefined;
+    syncFromCloud();
+    return undefined;
   }, [syncFromCloud]);
 
   useEffect(() => {
@@ -265,23 +297,14 @@ function LandmarkRegionsManager() {
     }
   };
 
-  useEffect(() => {
-    if (tab !== 'create') return undefined;
-    const onKey = (e) => {
-      if (!(e.ctrlKey || e.metaKey) || String(e.key).toLowerCase() !== 'z') return;
-      const tag = e.target && e.target.tagName;
-      if (tag && /INPUT|TEXTAREA|SELECT/.test(tag)) return;
-      e.preventDefault();
-      undoEdit();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [tab, undoEdit]);
-
   const handleChange = (lat, lng) => {
+    if (editDraft && inferShape(editDraft) === SHAPE_POINT) {
+      setPosition([lat, lng]);
+      setEditDraft((d) => (d ? { ...d, center: { lat, lng } } : d));
+      return;
+    }
     setPosition([lat, lng]);
     if (editDraft && inferShape(editDraft) === SHAPE_RECT) {
-      rememberDraft(editDraft);
       setEditDraft((d) =>
         d
           ? {
@@ -298,8 +321,11 @@ function LandmarkRegionsManager() {
   };
 
   const handleBrowseClick = (lat, lng) => {
+    setInspectedId(null);
     setProbe({ lat, lng });
-    const hits = matchLandmarksAt({ lat, lng }, { regions });
+    const hits = matchLandmarksAt({ lat, lng }, { regions: catalog }).filter((r) =>
+      kind === 'point' ? isNamedPoint(r) : !isNamedPoint(r)
+    );
     setHereHits(hits);
     setFilterMode('here');
   };
@@ -349,14 +375,23 @@ function LandmarkRegionsManager() {
 
   const returnToPin = () => setFocusNonce((n) => n + 1);
 
+  const clearSearch = () => {
+    setQuery('');
+    setResults([]);
+    setSearchError('');
+  };
+
   const handleSearch = async (e) => {
     e?.preventDefault?.();
     const q = query.trim();
-    if (!q) return;
+    if (!q) {
+      clearSearch();
+      return;
+    }
     setSearching(true);
     setSearchError('');
     setResults([]);
-    const local = searchLocalLandmarks(q, regions).map((r) => ({
+    const local = searchLocalLandmarks(q, catalog).map((r) => ({
       kind: 'landmark',
       id: r.id,
       lat: r.center.lat,
@@ -379,7 +414,7 @@ function LandmarkRegionsManager() {
     setSearching(false);
   };
 
-  const startCreateRegion = () => {
+  const startCreateRegion = (nextKind = kind) => {
     const fromProbe = probe && typeof probe.lat === 'number';
     const center = fromProbe
       ? { lat: probe.lat, lng: probe.lng }
@@ -389,24 +424,27 @@ function LandmarkRegionsManager() {
     setEditMode('create');
     setSelectedVertex(null);
     setDragPreview(null);
-    clearUndo();
+    setEditOrigin(null);
+    setInspectedId(null);
+    const asPoint = nextKind === 'point';
     setEditDraft({
       id: newLandmarkId(),
       name: '',
       center,
-      radiusM: DEFAULT_REGION_RADIUS_M,
+      radiusM: asPoint ? DEFAULT_POINT_NEARBY_M : DEFAULT_REGION_RADIUS_M,
       vertices: [],
-      shape: SHAPE_CIRCLE,
+      shape: asPoint ? SHAPE_POINT : SHAPE_CIRCLE,
+      icon: PIN_ICON_DEFAULT,
     });
   };
 
   const startEditRegion = (region) => {
     const shape = inferShape(region);
+    setKind(shape === SHAPE_POINT ? 'point' : 'region');
     setTab('create');
     setEditMode('edit');
     setSelectedVertex(null);
     setDragPreview(null);
-    clearUndo();
     setEditDraft({
       ...region,
       shape,
@@ -414,7 +452,25 @@ function LandmarkRegionsManager() {
       vertices: [...(region.vertices || [])],
     });
     setPosition([region.center.lat, region.center.lng]);
+    setEditOrigin({ lat: region.center.lat, lng: region.center.lng });
+    setInspectedId(null);
     setFocusNonce((n) => n + 1);
+  };
+
+  const inspectRegion = (region, { fly = false } = {}) => {
+    if (!region) return;
+    inspectGuardUntil.current = Date.now() + 450;
+    setInspectedId(region.id);
+    setProbe(null);
+    if (fly && region.center) {
+      setPosition([region.center.lat, region.center.lng]);
+      setFocusNonce((n) => n + 1);
+    }
+  };
+
+  const requestEdit = (region) => {
+    if (Date.now() < inspectGuardUntil.current) return;
+    startEditRegion(region);
   };
 
   const goBrowse = () => {
@@ -423,15 +479,58 @@ function LandmarkRegionsManager() {
     setEditDraft(null);
     setSelectedVertex(null);
     setDragPreview(null);
-    clearUndo();
     setFilterMode('view');
     setProbe(null);
     setHereHits([]);
+    setEditOrigin(null);
+    setInspectedId(null);
   };
 
-  const switchTab = (next) => {
-    if (next === 'browse') goBrowse();
-    else if (tab !== 'create') startCreateRegion();
+  const cancelEdit = () => {
+    const draft = editDraft;
+    const origin = editOrigin;
+    const keep =
+      editMode === 'edit' && draft
+        ? catalog.find((r) => r.id === draft.id) || {
+            ...draft,
+            center: origin ? { ...origin } : draft.center,
+          }
+        : null;
+    goBrowse();
+    if (keep) inspectRegion(keep, { fly: true });
+  };
+
+  const switchKind = (next) => {
+    if (next === kind) return;
+    setInspectedId(null);
+    setKind(next);
+    applyHash(hrefFor(ROUTES.REGIONS, next === 'point' ? { kind: 'point' } : {}), {
+      replace: true,
+      skipGuard: true,
+    });
+    if (tab !== 'create' || !editDraft) return;
+    setSelectedVertex(null);
+    setDragPreview(null);
+    setEditDraft((d) => {
+      if (!d) return d;
+      const center = { lat: position[0], lng: position[1] };
+      if (next === 'point') {
+        return {
+          ...d,
+          center,
+          shape: SHAPE_POINT,
+          vertices: [],
+          radiusM: DEFAULT_POINT_NEARBY_M,
+        };
+      }
+      return {
+        ...d,
+        center,
+        shape: SHAPE_CIRCLE,
+        vertices: [],
+        radiusM: d.radiusM || DEFAULT_REGION_RADIUS_M,
+      };
+    });
   };
 
   const pickResult = (item) => {
@@ -439,14 +538,16 @@ function LandmarkRegionsManager() {
     setResults([]);
     setFocusNonce((n) => n + 1);
     if (item.kind === 'landmark') {
-      const region = regions.find((r) => r.id === item.id);
-      if (region) startEditRegion(region);
+      const region = catalog.find((r) => r.id === item.id);
+      if (region) {
+        if (tab === 'browse') inspectRegion(region, { fly: true });
+        else startEditRegion(region);
+      }
     }
   };
 
   const setDraftShape = (shape) => {
     setSelectedVertex(null);
-    if (editDraft) rememberDraft(editDraft);
     setEditDraft((d) => {
       if (!d) return d;
       const center = { lat: position[0], lng: position[1] };
@@ -485,7 +586,6 @@ function LandmarkRegionsManager() {
       if (!d || inferShape(d) !== SHAPE_POLYGON) return d;
       const result = insertPolygonVertex(d.vertices || [], { lat, lng });
       if (result.index < 0 || result.snapped) return d;
-      rememberDraft(d);
       queueMicrotask(() => {
         setSelectedVertex(result.index);
         setRingChoice(null);
@@ -499,7 +599,6 @@ function LandmarkRegionsManager() {
       if (!d) return d;
       const result = commitPolygonVertexMove(d.vertices || [], index, lat, lng);
       if (!result.changed) return d;
-      rememberDraft(d);
       queueMicrotask(() => setSelectedVertex(result.index));
       if (result.reordered && result.original) {
         queueMicrotask(() =>
@@ -513,7 +612,7 @@ function LandmarkRegionsManager() {
       }
       return { ...d, vertices: result.vertices };
     });
-  }, [rememberDraft]);
+  }, []);
 
   const keepOriginalRing = useCallback(() => {
     setRingChoice((choice) => {
@@ -527,7 +626,6 @@ function LandmarkRegionsManager() {
   const removePolygonVertex = useCallback((index) => {
     setEditDraft((d) => {
       if (!d) return d;
-      rememberDraft(d);
       return { ...d, vertices: (d.vertices || []).filter((_, i) => i !== index) };
     });
     setSelectedVertex((cur) => {
@@ -536,7 +634,7 @@ function LandmarkRegionsManager() {
       if (cur > index) return cur - 1;
       return cur;
     });
-  }, [rememberDraft]);
+  }, []);
 
   const selectPolygonVertex = useCallback((index) => {
     setSelectedVertex((cur) => (cur === index ? null : index));
@@ -547,7 +645,21 @@ function LandmarkRegionsManager() {
     if (p) setRingChoice(null);
   }, []);
 
-  const saveEditDraft = async () => {
+  const fireRemote = (task, failNote) => {
+    window.setTimeout(() => {
+      try {
+        Promise.resolve()
+          .then(task)
+          .catch(() => {
+            if (failNote) setNote(failNote);
+          });
+      } catch {
+        if (failNote) setNote(failNote);
+      }
+    }, 0);
+  };
+
+  const saveEditDraft = () => {
     if (!editDraft) return;
     const name = (editDraft.name || '').trim();
     if (!name) {
@@ -559,36 +671,74 @@ function LandmarkRegionsManager() {
       setNote(finalized.error);
       return;
     }
+    const sheet = isSheetPlace(editDraft);
+    const prevDraft = editDraft;
     const payload = {
       ...finalized,
       name,
       updatedAt: Date.now(),
-      source: 'local',
+      source: sheet ? 'sheet' : editDraft.source || 'local',
+      id: prevDraft.id || finalized.id,
     };
+    if (sheet || inferShape(payload) === SHAPE_POINT) {
+      absorbPointTwins(payload, prevDraft.center || editOrigin);
+      setSheetPlaces(loadSheetPlaces());
+      reloadLocal();
+      goBrowse();
+      setNote('已儲存（本機）');
+      fireRemote(async () => {
+        await saveSavedLocationRemote(payload);
+        if (
+          prevDraft.center &&
+          (prevDraft.center.lat !== payload.center.lat ||
+            prevDraft.center.lng !== payload.center.lng ||
+            prevDraft.name !== payload.name)
+        ) {
+          await deleteSavedLocationRemote(prevDraft);
+        }
+        setNote('已儲存並同步');
+      }, '已存本機，雲端同步失敗');
+      return;
+    }
     upsertLandmarkRegionLocal(payload);
     reloadLocal();
     goBrowse();
     setNote('已儲存（本機）');
-    try {
+    fireRemote(async () => {
       await upsertLandmarkRegionRemote(payload);
       setNote('已儲存並同步');
+    }, '已存本機，雲端同步失敗');
+  };
+
+  const removeRegion = (id) => {
+    if (!id) return;
+    if (!window.confirm('確定刪除？')) return;
+    try {
+      const row = catalog.find((r) => r.id === id) || editDraft;
+      if (editDraft?.id === id) goBrowse();
+      if (inspectedId === id) setInspectedId(null);
+      const sheet = isSheetPlace(row);
+      forgetPlace(row || { id });
+      setSheetPlaces(loadSheetPlaces());
+      reloadLocal();
+      setNote('已刪除');
+      fireRemote(async () => {
+        const tasks = [];
+        if (sheet || (row && inferShape(row) === SHAPE_POINT)) {
+          tasks.push(deleteSavedLocationRemote(row));
+        }
+        if (!sheet) tasks.push(deleteLandmarkRegionRemote(id));
+        await Promise.allSettled(tasks);
+      }, '已刪本機，雲端同步失敗');
     } catch (err) {
       console.warn(err);
-      setNote('已存本機，雲端同步失敗');
+      setNote('已刪本機');
     }
   };
 
-  const removeRegion = async (id) => {
-    if (!id) return;
-    if (!window.confirm('確定刪除？')) return;
-    deleteLandmarkRegionLocal(id);
-    reloadLocal();
-    if (editDraft?.id === id) goBrowse();
-    try {
-      await deleteLandmarkRegionRemote(id);
-    } catch (err) {
-      console.warn(err);
-    }
+  const requestDelete = (region) => {
+    if (!region?.id) return;
+    removeRegion(region.id);
   };
 
   const liveDraft = useMemo(() => {
@@ -612,61 +762,112 @@ function LandmarkRegionsManager() {
     );
   }, [liveDraft, dragPreview]);
   const draftShape = liveDraft ? liveDraft.shape : SHAPE_CIRCLE;
-  const tile = TILES[basemap] || TILES.street;
+  const tile = tilesFor(basemap);
   const coverageText = liveDraft ? formatCoverage(liveDraft) : '';
 
   const shapesToShow = useMemo(() => {
+    const sameKind = catalog.filter((r) =>
+      kind === 'point' ? isNamedPoint(r) : !isNamedPoint(r)
+    );
+    const focus =
+      tab === 'create' && liveDraft
+        ? { ...liveDraft, center: { lat: position[0], lng: position[1] } }
+        : tab === 'browse' && inspectedId
+          ? catalog.find((r) => r.id === inspectedId)
+          : null;
+    const toneOf = (r) => {
+      const selected = Boolean(focus && r.id === focus.id);
+      const affected = Boolean(
+        focus && !selected && r.center && regionContains(focus, r.center)
+      );
+      const probeHit = Boolean(
+        !focus && probe && regionContains(r, probe)
+      );
+      return {
+        selected,
+        affected: affected || probeHit,
+        muted: Boolean(focus || probe) && !selected && !affected && !probeHit,
+        nearby: tab === 'create' && !selected && !affected,
+        hit: false,
+        editing: false,
+      };
+    };
+    const others = sameKind
+      .filter((r) => !(liveDraft && r.id === liveDraft.id))
+      .map((r) => ({ ...r, ...toneOf(r) }));
     if (tab === 'create' && liveDraft) {
+      if (inferShape(liveDraft) === SHAPE_POINT) return others;
       return [
+        ...others,
         {
           ...liveDraft,
           vertices: liveDraft.shape === SHAPE_POLYGON ? polyVertices : liveDraft.vertices,
           id: 'edit-draft',
           editing: true,
+          selected: true,
+          affected: false,
+          muted: false,
+          nearby: false,
           hit: false,
         },
       ];
     }
-    const hitIds = new Set(hereHits.map((h) => h.id));
-    return regions.map((r) => ({
-      ...r,
-      editing: false,
-      nearby: false,
-      hit: hitIds.has(r.id),
-    }));
-  }, [tab, liveDraft, regions, hereHits, polyVertices]);
+    return sameKind.map((r) => ({ ...r, ...toneOf(r) }));
+  }, [tab, liveDraft, catalog, polyVertices, kind, inspectedId, position, probe]);
 
   const listedRegions = useMemo(() => {
-    if (tab !== 'browse') return regions;
-    if (filterMode === 'here') return hereHits;
-    if (filterMode === 'view' && mapBounds) {
-      return regions.filter((r) => regionOverlapsView(r, mapBounds));
+    const pool = (tab !== 'browse' ? catalog : filterMode === 'here' ? hereHits : catalog).filter(
+      (r) => (kind === 'point' ? isNamedPoint(r) : !isNamedPoint(r))
+    );
+    if (tab === 'browse' && filterMode === 'view' && mapBounds) {
+      return pool.filter((r) => regionOverlapsView(r, mapBounds));
     }
-    return regions;
-  }, [tab, regions, filterMode, hereHits, mapBounds]);
+    return pool;
+  }, [tab, catalog, filterMode, hereHits, mapBounds, kind]);
 
-  const hitIdSet = useMemo(() => new Set(hereHits.map((h) => h.id)), [hereHits]);
+  const inspectedRow = tab === 'browse' ? catalog.find((r) => r.id === inspectedId) : null;
+  const listOrigin =
+    inspectedRow?.center ||
+    (probe && Number.isFinite(probe.lat) && Number.isFinite(probe.lng) ? probe : null);
+  const listMeta = (r) => {
+    if (!listOrigin || !r?.center) return shapeMeta(r);
+    if (inspectedRow && r.id === inspectedRow.id) return '目前';
+    const d = Number.isFinite(r.distanceM) ? r.distanceM : distanceMeters(listOrigin, r.center);
+    return Number.isFinite(d) ? formatDist(d) : shapeMeta(r);
+  };
 
   return (
     <div className="entry-card landmark-regions-card">
       <div className="entry-card-header landmark-regions-head">
         <ModeToggle
-          ariaLabel="模式"
-          value={tab}
-          onChange={switchTab}
+          ariaLabel="類型"
+          value={kind}
+          onChange={switchKind}
           options={[
-            { id: 'create', label: '新增' },
-            { id: 'browse', label: '瀏覽' },
+            { id: 'region', label: '區域' },
+            { id: 'point', label: '地標' },
           ]}
         />
-        <button
-          type="button"
-          className="calendar-status-refresh"
-          onClick={() => syncFromCloud({ force: true })}
-          disabled={syncing}
-        >
-          {syncing ? '同步中…' : '同步'}
-        </button>
+        <div className="landmark-head-actions">
+          {tab !== 'create' ? (
+            <button
+              type="button"
+              className="landmark-add-btn"
+              onClick={() => startCreateRegion(kind)}
+            >
+              {kind === 'point' ? '新增地標' : '新增區域'}
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="calendar-status-refresh"
+            onClick={() => syncFromCloud()}
+            disabled={syncing}
+            title={landmarkFetchHint()}
+          >
+            {syncing ? '同步中…' : '同步'}
+          </button>
+        </div>
       </div>
 
       {note && <div className="location-gps-hint">{note}</div>}
@@ -675,9 +876,21 @@ function LandmarkRegionsManager() {
         <input
           className="entry-text-input location-search-input"
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          onChange={(e) => {
+            const v = e.target.value;
+            setQuery(v);
+            if (!v.trim()) {
+              setResults([]);
+              setSearchError('');
+            }
+          }}
           placeholder="搜尋地圖或地標"
         />
+        {query.trim() || results.length > 0 || searchError ? (
+          <button type="button" className="location-search-clear" onClick={clearSearch}>
+            清空
+          </button>
+        ) : null}
         <button type="submit" className="location-search-btn" disabled={searching}>
           {searching ? '…' : '搜尋'}
         </button>
@@ -756,6 +969,7 @@ function LandmarkRegionsManager() {
         </div>
 
         <MapContainer
+          className={basemap === 'satellite' ? 'is-satellite' : undefined}
           center={position}
           zoom={DEFAULT_ZOOM}
           maxZoom={MAX_ZOOM}
@@ -780,12 +994,18 @@ function LandmarkRegionsManager() {
           <MapInvalidateOn token={sizeToken} />
           {shapesToShow.map((c) => (
             <RegionShape
-              key={c.id}
+              key={`${c.id}-${c.icon || 'place'}-${c.selected ? 's' : c.affected ? 'a' : c.muted ? 'm' : 'n'}`}
               region={c}
               editing={c.editing}
               nearby={c.nearby}
-              hit={c.hit}
-              interactive={false}
+              selected={c.selected || inspectedId === c.id}
+              affected={c.affected}
+              muted={c.muted}
+              interactive={tab === 'browse'}
+              popupOpen={tab === 'browse' && inspectedId === c.id}
+              onClick={tab === 'browse' && !c.editing ? () => inspectRegion(c) : undefined}
+              onEdit={tab === 'browse' && !c.editing ? () => requestEdit(c) : undefined}
+              onDelete={tab === 'browse' && !c.editing ? () => requestDelete(c) : undefined}
             />
           ))}
           {polygonMode && (
@@ -797,12 +1017,25 @@ function LandmarkRegionsManager() {
               onDragLive={onVertexDragLive}
             />
           )}
+          {tab === 'create' && draftShape === SHAPE_POINT && editOrigin ? (
+            <MoveGhost
+              from={editOrigin}
+              to={{ lat: position[0], lng: position[1] }}
+            />
+          ) : null}
           {tab === 'create' && !polygonMode && (
             <DraggableMarker position={position} onChange={handleChange} />
           )}
-          {tab === 'browse' && probe && (
-            <ProbeDot lat={probe.lat} lng={probe.lng} />
-          )}
+          {tab === 'browse' && probe ? (
+            <>
+              <RangeHalo
+                center={probe}
+                radiusM={DEFAULT_POINT_NEARBY_M}
+                color="#1a73e8"
+              />
+              <ProbeDot lat={probe.lat} lng={probe.lng} />
+            </>
+          ) : null}
           <MapEditClick
             polygonMode={polygonMode}
             onPin={tab === 'browse' ? handleBrowseClick : handleChange}
@@ -839,14 +1072,23 @@ function LandmarkRegionsManager() {
       <div ref={dockRef} className="landmark-fs-dock">
       <div className="landmark-fs-tabs">
         <ModeToggle
-          ariaLabel="模式"
-          value={tab}
-          onChange={switchTab}
+          ariaLabel="類型"
+          value={kind}
+          onChange={switchKind}
           options={[
-            { id: 'create', label: '新增' },
-            { id: 'browse', label: '瀏覽' },
+            { id: 'region', label: '區域' },
+            { id: 'point', label: '地標' },
           ]}
         />
+        {tab !== 'create' ? (
+          <button
+            type="button"
+            className="landmark-add-btn"
+            onClick={() => startCreateRegion(kind)}
+          >
+            {kind === 'point' ? '新增地標' : '新增區域'}
+          </button>
+        ) : null}
       </div>
       {tab === 'create' || probe ? (
         <div className="coordinates-display">
@@ -858,19 +1100,26 @@ function LandmarkRegionsManager() {
       {tab === 'create' && liveDraft ? (
         <div className="landmark-edit-panel">
           <div className="landmark-edit-title">
-            {editMode === 'edit' ? '編輯區域' : '新增區域'}
+            {kind === 'point'
+              ? editMode === 'edit'
+                ? '編輯地標'
+                : '新增地標'
+              : editMode === 'edit'
+                ? '編輯區域'
+                : '新增區域'}
           </div>
+          {kind === 'region' ? (
           <ModeToggle
             ariaLabel="形狀"
-            value={draftShape}
+            value={draftShape === SHAPE_POINT ? SHAPE_CIRCLE : draftShape}
             onChange={setDraftShape}
             options={[
-              { id: SHAPE_POINT, label: '點' },
               { id: SHAPE_CIRCLE, label: '圓' },
               { id: SHAPE_RECT, label: '方' },
               { id: SHAPE_POLYGON, label: '多邊形' },
             ]}
           />
+          ) : null}
           {coverageText && draftShape !== SHAPE_POINT ? (
             <div className="landmark-coverage">{coverageText}</div>
           ) : null}
@@ -881,7 +1130,26 @@ function LandmarkRegionsManager() {
             placeholder="名稱"
           />
           {draftShape === SHAPE_POINT ? (
-            <p className="landmark-edit-hint">拖曳標記，填名稱</p>
+            <ModeToggle
+              className="pin-icon-toggle"
+              ariaLabel="圖示"
+              value={editDraft.icon || PIN_ICON_DEFAULT}
+              onChange={(icon) => setEditDraft((d) => (d ? { ...d, icon } : d))}
+              options={PIN_ICONS.map((p) => ({
+                id: p.id,
+                label: (
+                  <>
+                    <PinGlyph icon={p.id} size={13} />
+                    {p.label}
+                  </>
+                ),
+              }))}
+            />
+          ) : null}
+          {draftShape === SHAPE_POINT ? (
+            <p className="landmark-edit-hint">
+              {editOrigin ? '拖曳標記。空心橙點是原本位置，取消即回到該點。' : '拖曳標記，填名稱'}
+            </p>
           ) : draftShape === SHAPE_POLYGON ? (
             <div className="landmark-poly-tools">
               <p className="landmark-edit-hint">
@@ -913,7 +1181,6 @@ function LandmarkRegionsManager() {
                   max={REGION_RADIUS_MAX_M}
                   step={10}
                   value={liveDraft.radiusM}
-                  onPointerDown={() => rememberDraft(editDraft)}
                   onChange={(e) =>
                     setEditDraft((d) => {
                       if (!d) return d;
@@ -934,26 +1201,9 @@ function LandmarkRegionsManager() {
             </>
           )}
           <div className="landmark-edit-actions">
-            <button
-              type="button"
-              className="landmark-undo-btn"
-              onClick={undoEdit}
-              disabled={!canUndo}
-            >
-              復原
-            </button>
-            <button type="button" className="cancel-btn" onClick={goBrowse}>
+            <button type="button" className="cancel-btn" onClick={cancelEdit}>
               取消
             </button>
-            {editMode === 'edit' && (
-              <button
-                type="button"
-                className="landmark-delete-btn"
-                onClick={() => removeRegion(editDraft.id)}
-              >
-                刪除
-              </button>
-            )}
             <button type="button" className="confirm-btn" onClick={saveEditDraft}>
               儲存
             </button>
@@ -961,6 +1211,35 @@ function LandmarkRegionsManager() {
         </div>
       ) : (
         <>
+          {inspectedRow ? (
+            <div className="landmark-inspect-bar">
+              <div className="landmark-inspect-bar-copy">
+                <span className="landmark-inspect-bar-name">
+                  {isNamedPoint(inspectedRow) ? (
+                    <PinGlyph icon={inspectedRow.icon} size={15} />
+                  ) : null}
+                  {inspectedRow.name || '未命名'}
+                </span>
+                <span className="landmark-match-meta">{shapeMeta(inspectedRow)}</span>
+              </div>
+              <div className="landmark-inspect-bar-actions">
+                <button
+                  type="button"
+                  className="location-search-btn"
+                  onClick={() => startEditRegion(inspectedRow)}
+                >
+                  編輯
+                </button>
+                <button
+                  type="button"
+                  className="landmark-delete-btn"
+                  onClick={() => removeRegion(inspectedRow.id)}
+                >
+                  刪除
+                </button>
+              </div>
+            </div>
+          ) : null}
           <div className="entry-chip-row landmark-list-filter">
             <button
               type="button"
@@ -983,22 +1262,33 @@ function LandmarkRegionsManager() {
             ) : null}
           </div>
           <ul className="landmark-region-list">
-            {regions.length === 0 ? (
-              <li className="landmark-region-empty">尚無區域或地點</li>
+            {catalog.filter((r) => (kind === 'point' ? isNamedPoint(r) : !isNamedPoint(r))).length ===
+            0 ? (
+              <li className="landmark-region-empty">{kind === 'point' ? '尚無地標' : '尚無區域'}</li>
             ) : listedRegions.length === 0 ? (
               <li className="landmark-region-empty">
-                {filterMode === 'here' ? '此處沒有區域' : '此畫面沒有區域'}
+                {filterMode === 'here'
+                  ? kind === 'point'
+                    ? '此處沒有地標'
+                    : '此處沒有區域'
+                  : kind === 'point'
+                    ? '此畫面沒有地標'
+                    : '此畫面沒有區域'}
               </li>
             ) : (
               listedRegions.map((r) => (
                 <li key={r.id}>
                   <button
                     type="button"
-                    className={`landmark-all-item${hitIdSet.has(r.id) ? ' is-active' : ''}`}
-                    onClick={() => startEditRegion(r)}
+                    className={`landmark-all-item${inspectedId === r.id ? ' is-current' : ''}`}
+                    aria-current={inspectedId === r.id ? 'true' : undefined}
+                    onClick={() => inspectRegion(r, { fly: true })}
                   >
-                    <span>{r.name}</span>
-                    <span className="landmark-match-meta">{shapeMeta(r)}</span>
+                    <span className="landmark-all-item-name">
+                      {isNamedPoint(r) ? <PinGlyph icon={r.icon} size={14} /> : null}
+                      {r.name}
+                    </span>
+                    <span className="landmark-match-meta">{listMeta(r)}</span>
                   </button>
                 </li>
               ))

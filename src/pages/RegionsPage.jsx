@@ -5,7 +5,7 @@ import '../App.css';
 
 function RegionsPage() {
   return (
-    <PageChrome title="常用區域">
+    <PageChrome title="地圖管理">
       <div className="app-container feature-page">
         <LandmarkRegionsManager />
       </div>

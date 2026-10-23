@@ -158,10 +158,10 @@ function LocationPinButton({ compact = false }) {
             className="location-mode-item"
             onClick={() => {
               setMenuOpen(false);
-              navigate(ROUTES.REGIONS);
+              navigate(ROUTES.REGIONS, { query: { kind: 'point' } });
             }}
           >
-            常用區域
+            地圖管理
           </button>
         </div>
       )}

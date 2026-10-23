@@ -3,6 +3,7 @@ import { MapContainer, TileLayer, Marker, ZoomControl, useMap, useMapEvents } fr
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { DEFAULT_MAP_CENTER, withMapFallback } from '../utils/mapDefaults';
+import { tilesFor } from './map/LeafletBits';
 
 const MAX_ZOOM = 19;
 const DEFAULT_ZOOM = 16;
@@ -31,19 +32,6 @@ L.Icon.Default.mergeOptions({
   shadowUrl: require('leaflet/dist/images/marker-shadow.png'),
 });
 
-const TILES = {
-  street: {
-    url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>',
-    subdomains: ['a', 'b', 'c'],
-  },
-  satellite: {
-    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-    attribution:
-      'Tiles &copy; Esri — Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community',
-    subdomains: [],
-  },
-};
 
 const CAR_SVG =
   '<svg class="vehicle-marker-car" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path fill="currentColor" d="M5.2 11.2 6.7 7A1.8 1.8 0 0 1 8.4 5.8h7.2A1.8 1.8 0 0 1 17.3 7l1.5 4.2H20a1 1 0 0 1 1 1V15h-1.2a2.1 2.1 0 0 1-4.2 0H8.4a2.1 2.1 0 0 1-4.2 0H3v-2.8a1 1 0 0 1 1-1h1.2zm2.2-1.6h9.2l-.9-2.5a.4.4 0 0 0-.4-.3H8.7a.4.4 0 0 0-.4.3l-.9 2.5zM7.3 16.1a1.1 1.1 0 1 0 0-2.2 1.1 1.1 0 0 0 0 2.2zm9.4 0a1.1 1.1 0 1 0 0-2.2 1.1 1.1 0 0 0 0 2.2z"/></svg>';
@@ -393,7 +381,7 @@ function ParkingMapPreview({
     }
   };
 
-  const tile = TILES[basemap] || TILES.street;
+  const tile = tilesFor(basemap);
   const hasOrigin =
     showOriginMarker &&
     typeof originLat === 'number' &&
@@ -484,6 +472,7 @@ function ParkingMapPreview({
       </div>
 
       <MapContainer
+        className={basemap === 'satellite' ? 'is-satellite' : undefined}
         center={position}
         zoom={DEFAULT_ZOOM}
         maxZoom={MAX_ZOOM}

@@ -8,6 +8,7 @@ import {
 export const LANDMARK_REGIONS_KEY = 'landmarkRegions';
 export const LANDMARK_FETCH_AT_KEY = 'landmarkRegionsFetchedAt';
 export const LANDMARK_FETCH_TTL_MS = 60 * 60 * 1000;
+export const SHEET_PLACES_KEY = 'landmarkSheetPlaces';
 
 /** Default hit radius for legacy single-point Location rows (metres) */
 export const DEFAULT_POINT_NEARBY_M = 100;
@@ -16,11 +17,213 @@ export const REGION_RADIUS_MIN_M = 30;
 export const REGION_RADIUS_MAX_M = 3000;
 export const NEARBY_LANDMARK_M = 1200;
 
+const TOMBSTONE_KEY = 'landmarkDeletedTombstones';
+
+function isFetchNoise(value) {
+  const msg = String(value?.message || value || '');
+  return /Failed to fetch|NetworkError|Load failed|fetch/i.test(msg);
+}
+
+function dismissDevOverlay() {
+  try {
+    document.getElementById('webpack-dev-server-client-overlay')?.remove();
+    document.querySelector('iframe[id*="webpack-dev-server-client-overlay"]')?.remove();
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Capture-phase: chrome extension fetch wrappers rethrow outside our try/catch. */
+function swallowFetchNoise() {
+  const onErr = (event) => {
+    if (isFetchNoise(event.error) || isFetchNoise(event.message)) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      dismissDevOverlay();
+      return true;
+    }
+    return undefined;
+  };
+  const onRej = (event) => {
+    if (isFetchNoise(event.reason)) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      dismissDevOverlay();
+    }
+  };
+  window.addEventListener('error', onErr, true);
+  window.addEventListener('unhandledrejection', onRej, true);
+  return () => {
+    window.removeEventListener('error', onErr, true);
+    window.removeEventListener('unhandledrejection', onRej, true);
+  };
+}
+
+/**
+ * Never throw into React's click stack. Defer, swallow extension noise,
+ * reject the returned promise instead of window.onerror.
+ */
+function quietFetch(url, opts) {
+  return new Promise((resolve, reject) => {
+    const stop = swallowFetchNoise();
+    const finish = (fn, value) => {
+      window.setTimeout(stop, 2000);
+      fn(value);
+    };
+    window.setTimeout(() => {
+      try {
+        Promise.resolve()
+          .then(() => fetch(url, opts))
+          .then(
+            (res) => finish(resolve, res),
+            (err) => finish(reject, err)
+          );
+      } catch (err) {
+        finish(reject, err);
+      }
+    }, 0);
+  });
+}
+
+async function quietGetJson(url) {
+  const res = await quietFetch(url);
+  if (!res || res.type === 'opaque') return { success: true, opaque: true };
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json().catch(() => ({ success: true, opaque: true }));
+}
+
+async function quietPostOpaque(payload) {
+  await quietFetch(API_ENDPOINTS.LOCATION, {
+    method: 'POST',
+    mode: 'no-cors',
+    redirect: 'follow',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify(payload),
+  });
+  return { success: true, opaque: true };
+}
+
+function loadTombstones() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(TOMBSTONE_KEY) || '{}');
+    return raw && typeof raw === 'object' ? raw : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveTombstones(map) {
+  try {
+    localStorage.setItem(TOMBSTONE_KEY, JSON.stringify(map || {}));
+  } catch {
+    /* ignore */
+  }
+}
+
+function namesMatch(a, b) {
+  return String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
+}
+
+function tombstoneMatches(place, tomb) {
+  if (!place || !tomb) return false;
+  if (place.id && tomb.id && place.id === tomb.id) return true;
+  if (!namesMatch(place.name, tomb.name)) return false;
+  const lat = Number(place.center?.lat ?? place.lat);
+  const lng = Number(place.center?.lng ?? place.lng);
+  const tLat = Number(tomb.lat);
+  const tLng = Number(tomb.lng);
+  if (![lat, lng, tLat, tLng].every(Number.isFinite)) return false;
+  return distanceMeters({ lat, lng }, { lat: tLat, lng: tLng }) <= POINT_DEDUP_M;
+}
+
+export function rememberDeletedPlace(place) {
+  const id = place?.id;
+  if (!id) return;
+  const all = loadTombstones();
+  all[id] = {
+    id,
+    name: place.name || '',
+    lat: place.center?.lat ?? place.lat,
+    lng: place.center?.lng ?? place.lng,
+    at: Date.now(),
+  };
+  saveTombstones(all);
+}
+
+export function isDeletedPlace(id) {
+  return Boolean(id && loadTombstones()[id]);
+}
+
+export function filterLivePlaces(list) {
+  const gone = Object.values(loadTombstones());
+  if (!gone.length) return (list || []).filter(Boolean);
+  return (list || []).filter((p) => p && !gone.some((t) => tombstoneMatches(p, t)));
+}
+
+export function pruneTombstonesAgainst(liveList) {
+  const gone = loadTombstones();
+  let changed = false;
+  Object.keys(gone).forEach((id) => {
+    const stillThere = (liveList || []).some((p) => tombstoneMatches(p, gone[id]));
+    if (!stillThere) {
+      delete gone[id];
+      changed = true;
+    }
+  });
+  if (changed) saveTombstones(gone);
+}
+
 export const SHAPE_CIRCLE = 'circle';
 export const SHAPE_RECT = 'rect';
 export const SHAPE_POLYGON = 'polygon';
 export const SHAPE_POINT = 'point';
 export const POINT_DEDUP_M = 120;
+
+export const PIN_ICON_DEFAULT = 'place';
+export const PIN_ICONS = [
+  {
+    id: 'place',
+    label: '地標',
+    path: 'M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z',
+  },
+  {
+    id: 'food',
+    label: '餐飲',
+    path: 'M11 9H9V2H7v7H5V2H3v7c0 2.12 1.66 3.84 3.75 3.97V22h2.5v-9.03C11.34 12.84 13 11.12 13 9V2h-2v7zm5-3v8h2.5v8H21V2c-2.76 0-5 2.24-5 4z',
+  },
+  {
+    id: 'fuel',
+    label: '油站',
+    path: 'M19.77 7.23l.01-.01-3.72-3.72L15 4.56l2.11 2.11c-.94.36-1.61 1.26-1.61 2.33 0 1.38 1.12 2.5 2.5 2.5.36 0 .69-.08 1-.21v7.21c0 .55-.45 1-1 1s-1-.45-1-1V14c0-1.1-.9-2-2-2h-1V5c0-1.1-.9-2-2-2H6c-1.1 0-2 .9-2 2v16h10v-7.5h1.5v5c0 1.38 1.12 2.5 2.5 2.5s2.5-1.12 2.5-2.5V9c0-.69-.28-1.32-.73-1.77zM12 10H6V5h6v5z',
+  },
+  {
+    id: 'shop',
+    label: '購物',
+    path: 'M18 6h-2c0-2.21-1.79-4-4-4S8 3.79 8 6H6c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm-6-2c1.1 0 2 .9 2 2h-4c0-1.1.9-2 2-2zm6 16H6V8h2v2c0 .55.45 1 1 1s1-.45 1-1V8h4v2c0 .55.45 1 1 1s1-.45 1-1V8h2v12z',
+  },
+  {
+    id: 'med',
+    label: '醫藥',
+    path: 'M20 6h-4V4c0-1.1-.9-2-2-2h-4c-1.1 0-2 .9-2 2v2H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zM10 4h4v2h-4V4zm6 11h-3v3h-2v-3H8v-2h3v-3h2v3h3v2z',
+  },
+];
+
+export function normalizePinIcon(value) {
+  const id = String(value || '').trim();
+  return PIN_ICONS.some((p) => p.id === id) ? id : PIN_ICON_DEFAULT;
+}
+
+export function pinIconMeta(value) {
+  const id = normalizePinIcon(value);
+  return PIN_ICONS.find((p) => p.id === id) || PIN_ICONS[0];
+}
+
+export function pinIconSvgHtml(value, size = 14) {
+  const pin = pinIconMeta(value);
+  const s = Number(size);
+  const px = Number.isFinite(s) && s > 0 ? s : 14;
+  return `<svg class="landmark-pin-svg" viewBox="0 0 24 24" width="${px}" height="${px}" aria-hidden="true"><path fill="currentColor" d="${pin.path}"/></svg>`;
+}
 
 /**
  * @typedef {{ lat: number, lng: number }} LatLng
@@ -71,6 +274,7 @@ function parseVerticesField(raw) {
     return {
       vertices: takeVertices(raw.vertices),
       shape: String(raw.shape || '').trim(),
+      icon: String(raw.icon || '').trim(),
     };
   }
   if (typeof raw === 'string' && raw.trim()) {
@@ -80,7 +284,7 @@ function parseVerticesField(raw) {
       return { vertices: [], shape: '' };
     }
   }
-  return { vertices: [], shape: '' };
+  return { vertices: [], shape: '', icon: '' };
 }
 
 export function inferShape(region) {
@@ -513,8 +717,7 @@ export function formatCoverage(region) {
 export function shapeMeta(region) {
   const shape = inferShape(region);
   if (shape === SHAPE_POINT) {
-    const r = Number(region.radiusM) || DEFAULT_POINT_NEARBY_M;
-    return `點 · 附近 ${formatDist(r)}`;
+    return '地標';
   }
   const cover = formatCoverage(region);
   const kind =
@@ -569,10 +772,6 @@ export function finalizeDraft(draft, pin) {
   };
 }
 
-function namesMatch(a, b) {
-  return String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
-}
-
 function findSimilarNamed(list, name, center, maxM = POINT_DEDUP_M) {
   return (list || []).find(
     (r) => namesMatch(r.name, name) && distanceMeters(center, r.center) <= maxM
@@ -609,6 +808,7 @@ export function rememberNamedPoint({ lat, lng, name, source = 'local' } = {}) {
     radiusM: DEFAULT_POINT_NEARBY_M,
     vertices: [],
     shape: SHAPE_POINT,
+    icon: PIN_ICON_DEFAULT,
     updatedAt: Date.now(),
     source,
   };
@@ -674,16 +874,7 @@ function findLocalMerchantNear(name, here, maxKm) {
 
 async function saveNamedLocationRemote(lat, lng, name) {
   try {
-    await fetch(API_ENDPOINTS.LOCATION, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        action: 'saveLocation',
-        latitude: lat,
-        longitude: lng,
-        name,
-      }),
-    });
+    await saveSavedLocationRemote({ lat, lng, name });
   } catch {
     /* local pin still kept */
   }
@@ -755,6 +946,7 @@ function normalizeRegion(raw) {
     radiusM,
     vertices,
     shape,
+    icon: normalizePinIcon(raw.icon || parsed.icon),
     updatedAt: Number(raw.updatedAt) || Date.now(),
     source: raw.source || 'local',
   };
@@ -852,6 +1044,71 @@ export function isSheetPlace(region) {
   return region?.source === 'sheet' || region?.source === 'legacy';
 }
 
+function isPointTwin(a, b, extraCenter) {
+  if (!a || !b || a.id === b.id) return false;
+  if (!isNamedPoint(a) || !isNamedPoint(b)) return false;
+  if (!namesMatch(a.name, b.name)) return false;
+  if (distanceMeters(a.center, b.center) <= POINT_DEDUP_M) return true;
+  return Boolean(extraCenter && distanceMeters(a.center, extraCenter) <= POINT_DEDUP_M);
+}
+
+/** Hide sheet/local twins so a moved or deleted 地標 does not reappear. */
+export function absorbPointTwins(saved, previousCenter) {
+  if (!saved || !isNamedPoint(saved)) {
+    return upsertLandmarkRegionLocal(saved);
+  }
+  const keep = {
+    ...saved,
+    id: saved.id,
+    updatedAt: Date.now(),
+  };
+  const regions = loadLandmarkRegions().filter((r) => !isPointTwin(r, keep, previousCenter));
+  const idx = regions.findIndex((r) => r.id === keep.id);
+  if (idx >= 0) regions[idx] = { ...regions[idx], ...keep };
+  else regions.push(keep);
+  saveLandmarkRegions(regions);
+
+  const sheetKeep = isSheetPlace(keep) || String(keep.id || '').startsWith('loc_');
+  const sheet = loadSheetPlaces().filter(
+    (p) => p.id !== keep.id && !isPointTwin(p, keep, previousCenter)
+  );
+  if (sheetKeep) sheet.push({ ...keep, source: 'sheet' });
+  saveSheetPlaces(sheet);
+  return keep;
+}
+
+export function forgetPlace(place) {
+  if (!place) return;
+  rememberDeletedPlace(place);
+  const regions = loadLandmarkRegions().filter((r) => {
+    if (r.id === place.id || isPointTwin(r, place)) {
+      if (r.id !== place.id) rememberDeletedPlace(r);
+      return false;
+    }
+    return true;
+  });
+  saveLandmarkRegions(regions);
+  saveSheetPlaces(
+    loadSheetPlaces().filter((p) => {
+      if (p.id === place.id || isPointTwin(p, place)) {
+        if (p.id !== place.id) rememberDeletedPlace(p);
+        return false;
+      }
+      return true;
+    })
+  );
+}
+
+export function mergePlaceCatalog(regions, sheetPlaces) {
+  const local = filterLivePlaces(regions || []);
+  const localPts = local.filter(isNamedPoint);
+  const extra = filterLivePlaces(sheetPlaces || []).filter((p) => {
+    if (local.some((r) => r.id === p.id)) return false;
+    return !localPts.some((r) => isPointTwin(r, p));
+  });
+  return [...local, ...extra];
+}
+
 /**
  * Keep one 地標; delete other checked 地標 locally (sheet rows are deleted by caller).
  * @returns {{ keep: LandmarkRegion, dropped: LandmarkRegion[] } | null}
@@ -879,10 +1136,46 @@ export function markLandmarkRegionsFetched(at = Date.now()) {
   localStorage.setItem(LANDMARK_FETCH_AT_KEY, String(at));
 }
 
+export function landmarkFetchedAt() {
+  return Number(localStorage.getItem(LANDMARK_FETCH_AT_KEY) || 0);
+}
+
 export function isLandmarkFetchFresh(ttlMs = LANDMARK_FETCH_TTL_MS) {
-  const at = Number(localStorage.getItem(LANDMARK_FETCH_AT_KEY) || 0);
+  const at = landmarkFetchedAt();
   if (!at) return false;
   return Date.now() - at < ttlMs;
+}
+
+export function landmarkFetchHint() {
+  const at = landmarkFetchedAt();
+  if (!at) return '尚未從雲端同步';
+  const mins = Math.max(0, Math.round((Date.now() - at) / 60000));
+  if (mins < 1) return '本機 · 剛剛同步';
+  if (mins < 60) return `本機 · ${mins} 分鐘前`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `本機 · ${hrs} 小時前`;
+  return `本機 · ${Math.round(hrs / 24)} 日前`;
+}
+
+export function loadSheetPlaces() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(SHEET_PLACES_KEY) || '[]');
+    return filterLivePlaces((Array.isArray(raw) ? raw : []).map(normalizeRegion).filter(Boolean));
+  } catch {
+    return [];
+  }
+}
+
+export function saveSheetPlaces(list) {
+  const cleaned = filterLivePlaces(
+    (Array.isArray(list) ? list : []).map(normalizeRegion).filter(Boolean)
+  );
+  try {
+    localStorage.setItem(SHEET_PLACES_KEY, JSON.stringify(cleaned));
+  } catch {
+    /* ignore quota */
+  }
+  return cleaned;
 }
 
 /**
@@ -904,7 +1197,7 @@ export function mergeLandmarkRegionsFromCloud(cloud) {
     if (similar) return;
     byId.set(r.id, r);
   });
-  const merged = Array.from(byId.values());
+  const merged = filterLivePlaces(Array.from(byId.values()));
   saveLandmarkRegions(merged);
   markLandmarkRegionsFetched();
   return merged;
@@ -1010,36 +1303,31 @@ export async function fetchLandmarkRegionsFromCloud() {
 export async function upsertLandmarkRegionRemote(region) {
   const body = normalizeRegion(region);
   if (!body) throw new Error('Invalid region');
-  const res = await fetch(API_ENDPOINTS.LOCATION, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      action: 'upsertLandmarkRegion',
-      id: body.id,
-      name: body.name,
-      latitude: body.center.lat,
-      longitude: body.center.lng,
-      radiusM: body.radiusM,
-      vertices: body.vertices || [],
-      shape: body.shape || SHAPE_CIRCLE,
-    }),
+  return quietPostOpaque({
+    action: 'upsertLandmarkRegion',
+    id: body.id,
+    name: body.name,
+    latitude: body.center.lat,
+    longitude: body.center.lng,
+    radiusM: body.radiusM,
+    vertices: body.vertices || [],
+    shape: body.shape || SHAPE_CIRCLE,
+    icon: body.icon || PIN_ICON_DEFAULT,
   });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const data = await res.json();
-  if (!data?.success) throw new Error(data?.error || 'upsert failed');
-  return data;
 }
 
 export async function deleteLandmarkRegionRemote(id) {
-  const res = await fetch(API_ENDPOINTS.LOCATION, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ action: 'deleteLandmarkRegion', id }),
-  });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const data = await res.json();
-  if (!data?.success) throw new Error(data?.error || 'delete failed');
-  return data;
+  if (!id) return null;
+  const url = `${API_ENDPOINTS.LOCATION}?action=deleteLandmarkRegion&id=${encodeURIComponent(id)}`;
+  try {
+    const data = await quietGetJson(url);
+    if (data && data.success === false) {
+      await quietPostOpaque({ action: 'deleteLandmarkRegion', id });
+    }
+    return data;
+  } catch {
+    return quietPostOpaque({ action: 'deleteLandmarkRegion', id });
+  }
 }
 
 export function savedLocationToPoint(loc) {
@@ -1055,6 +1343,7 @@ export function savedLocationToPoint(loc) {
     radiusM: Number(loc.radiusM) || DEFAULT_POINT_NEARBY_M,
     vertices: [],
     shape: SHAPE_POINT,
+    icon: normalizePinIcon(loc.icon),
     updatedAt: created ? Date.parse(created) || 0 : 0,
     source: 'sheet',
     usageCount: Number(loc.usageCount) || 0,
@@ -1093,18 +1382,20 @@ export async function saveSavedLocationRemote(place) {
   const lng = Number(place?.center?.lng ?? place?.lng);
   const name = String(place?.name || '').trim();
   if (!Number.isFinite(lat) || !Number.isFinite(lng) || !name) return null;
-  const res = await fetch(API_ENDPOINTS.LOCATION, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      action: 'saveLocation',
-      latitude: lat,
-      longitude: lng,
-      name,
-    }),
+  const params = new URLSearchParams({
+    action: 'saveLocation',
+    latitude: String(lat),
+    longitude: String(lng),
+    name,
   });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json().catch(() => null);
+  const payload = { action: 'saveLocation', latitude: lat, longitude: lng, name };
+  try {
+    const data = await quietGetJson(`${API_ENDPOINTS.LOCATION}?${params.toString()}`);
+    if (data && data.success === false) await quietPostOpaque(payload);
+    return data;
+  } catch {
+    return quietPostOpaque(payload);
+  }
 }
 
 export async function deleteSavedLocationRemote(place) {
@@ -1112,18 +1403,18 @@ export async function deleteSavedLocationRemote(place) {
   const lng = Number(place?.center?.lng ?? place?.lng);
   const name = String(place?.name || '').trim();
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
-  const res = await fetch(API_ENDPOINTS.LOCATION, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      action: 'deleteLocation',
-      latitude: lat,
-      longitude: lng,
-      name,
-    }),
+  const params = new URLSearchParams({
+    action: 'deleteLocation',
+    latitude: String(lat),
+    longitude: String(lng),
   });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const data = await res.json();
-  if (!data?.success) throw new Error(data?.error || 'deleteLocation failed');
-  return data;
+  if (name) params.set('name', name);
+  const payload = { action: 'deleteLocation', latitude: lat, longitude: lng, name };
+  try {
+    const data = await quietGetJson(`${API_ENDPOINTS.LOCATION}?${params.toString()}`);
+    if (data && data.success === false) await quietPostOpaque(payload);
+    return data;
+  } catch {
+    return quietPostOpaque(payload);
+  }
 }

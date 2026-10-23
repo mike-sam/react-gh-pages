@@ -5,30 +5,18 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { DEFAULT_MAP_CENTER } from '../utils/mapDefaults';
 import {
-  deleteLandmarkRegionLocal,
-  deleteLandmarkRegionRemote,
-  deleteSavedLocationRemote,
-  saveSavedLocationRemote,
   distanceMeters,
-  fetchLandmarkRegionsFromCloud,
-  fetchNearbyLegacyLocations,
-  fetchSavedLocations,
   formatDist,
-  isLandmarkFetchFresh,
   isNamedPoint,
   isSheetPlace,
   landmarksAround,
   loadLandmarkRegions,
-  mergeLandmarkRegionsFromCloud,
-  mergeNamedPointsLocal,
+  loadSheetPlaces,
+  mergePlaceCatalog,
   rememberNamedPoint,
-  renameLandmarkRegionLocal,
-  savedLocationToPoint,
   searchLocalLandmarks,
-  upsertLandmarkRegionRemote,
   searchNominatim,
 } from '../utils/landmarkRegions';
-import { ensureAppBootstrap, isBootstrapAttemptCooling } from '../utils/appBootstrap';
 import { useHistoryOverlay } from '../hooks/useHistoryOverlay';
 import { applyHash, clearHistoryOverlays, getHashPath, hrefFor, ROUTES } from '../utils/routing';
 import {
@@ -40,7 +28,7 @@ import {
   Recenter,
   RegionShape,
   ReturnPinButton,
-  TILES,
+  tilesFor,
   openInGoogleMaps,
 } from './map/LeafletBits';
 
@@ -84,34 +72,21 @@ function LocationMapPickerModal({
   const returnBtnRef = useRef(null);
 
   const [regions, setRegions] = useState(() => loadLandmarkRegions());
-  const [sheetPlaces, setSheetPlaces] = useState([]);
+  const [sheetPlaces, setSheetPlaces] = useState(() => loadSheetPlaces());
   const [matches, setMatches] = useState([]);
   const [selectedMatchId, setSelectedMatchId] = useState(null);
   const [savedQuery, setSavedQuery] = useState('');
   const [savedSort, setSavedSort] = useState('near');
-  const [checkedIds, setCheckedIds] = useState(() => new Set());
-  const [keepId, setKeepId] = useState(null);
-  const [editingId, setEditingId] = useState(null);
-  const [editName, setEditName] = useState('');
   const [manageHint, setManageHint] = useState('');
   const labelTouchedRef = useRef(false);
   const autoFilledIdRef = useRef(null);
   const positionRef = useRef(position);
   positionRef.current = position;
 
-  const pointCatalog = useMemo(() => {
-    const localPts = (regions || []).filter(isNamedPoint);
-    const extra = [];
-    (sheetPlaces || []).forEach((p) => {
-      const near = localPts.some(
-        (r) =>
-          r.name.toLowerCase() === String(p.name || '').toLowerCase() &&
-          distanceMeters(r.center, p.center) < 15
-      );
-      if (!near) extra.push(p);
-    });
-    return [...localPts, ...extra];
-  }, [regions, sheetPlaces]);
+  const pointCatalog = useMemo(
+    () => mergePlaceCatalog(regions, sheetPlaces).filter(isNamedPoint),
+    [regions, sheetPlaces]
+  );
 
   const refreshMatches = useCallback(
     (lat, lng, catalog = pointCatalog) => {
@@ -141,22 +116,6 @@ function LocationMapPickerModal({
     }
   }, []);
 
-  const syncFromCloud = useCallback(async ({ force = false } = {}) => {
-    if (!force) ensureAppBootstrap();
-    if (!force && (isLandmarkFetchFresh() || isBootstrapAttemptCooling())) {
-      return loadLandmarkRegions();
-    }
-    try {
-      const cloud = await fetchLandmarkRegionsFromCloud();
-      const merged = mergeLandmarkRegionsFromCloud(cloud);
-      setRegions(merged);
-      return merged;
-    } catch (err) {
-      console.warn('landmark sync failed', err);
-      return loadLandmarkRegions();
-    }
-  }, []);
-
   useEffect(() => {
     if (!open) return;
     const ready =
@@ -177,16 +136,14 @@ function LocationMapPickerModal({
     setSelectedMatchId(null);
     setSavedQuery('');
     setSavedSort('near');
-    setCheckedIds(new Set());
-    setKeepId(null);
-    setEditingId(null);
-    setEditName('');
     setManageHint('');
     setFocusNonce((n) => n + 1);
 
     const local = loadLandmarkRegions();
+    const sheet = loadSheetPlaces();
     setRegions(local);
-    const localPts = local.filter(isNamedPoint);
+    setSheetPlaces(sheet);
+    const localPts = [...local.filter(isNamedPoint), ...sheet];
     const hits = landmarksAround(
       { lat: nextPos[0], lng: nextPos[1] },
       { regions: localPts, nearbyM: 2500 }
@@ -198,30 +155,7 @@ function LocationMapPickerModal({
       autoFilledIdRef.current = inside[0].id;
       setSelectedMatchId(inside[0].id);
     }
-
-    let cancelled = false;
-    (async () => {
-      await syncFromCloud({ force: false });
-      if (cancelled) return;
-      let sheet = [];
-      try {
-        sheet = await fetchSavedLocations();
-      } catch {
-        try {
-          const nearby = await fetchNearbyLegacyLocations(nextPos[0], nextPos[1], 80);
-          sheet = nearby.map(savedLocationToPoint).filter(Boolean);
-        } catch (err) {
-          console.warn('list locations failed', err);
-        }
-      }
-      if (cancelled) return;
-      setSheetPlaces(sheet);
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [open, initialLat, initialLng, initialLabel, syncFromCloud, applyMatchAutofill]);
+  }, [open, initialLat, initialLng, initialLabel]);
 
   useEffect(() => {
     if (!open) return;
@@ -251,6 +185,7 @@ function LocationMapPickerModal({
       if (coords && typeof coords.lat === 'number' && typeof coords.lng === 'number') {
         labelTouchedRef.current = false;
         autoFilledIdRef.current = null;
+        setSelectedMatchId(null);
         setPosition([coords.lat, coords.lng]);
         setFocusNonce((n) => n + 1);
         setGpsHint('已更新為 GPS 座標，可再拖曳微調');
@@ -270,17 +205,26 @@ function LocationMapPickerModal({
     e?.preventDefault?.();
     const fromHome = getHashPath() === ROUTES.HOME || window.history.state?.fromHome;
     clearHistoryOverlays();
-    applyHash(hrefFor(ROUTES.REGIONS), {
+    applyHash(hrefFor(ROUTES.REGIONS, { kind: 'point' }), {
       replace: true,
       skipGuard: true,
       state: fromHome ? { fromHome: true } : null,
     });
   };
 
+  const clearSearch = () => {
+    setQuery('');
+    setResults([]);
+    setSearchError('');
+  };
+
   const handleSearch = async (e) => {
     e?.preventDefault?.();
     const q = query.trim();
-    if (!q) return;
+    if (!q) {
+      clearSearch();
+      return;
+    }
     setSearching(true);
     setSearchError('');
     setResults([]);
@@ -313,10 +257,12 @@ function LocationMapPickerModal({
     setFocusNonce((n) => n + 1);
     const hits = refreshMatches(item.lat, item.lng);
     if (item.kind === 'landmark') {
-      setLabel(item.name);
-      labelTouchedRef.current = true;
-      autoFilledIdRef.current = item.id;
-      setSelectedMatchId(item.id);
+      const hit = pointCatalog.find((p) => p.id === item.id) || {
+        id: item.id,
+        name: item.name,
+        center: { lat: item.lat, lng: item.lng },
+      };
+      selectPlace(hit);
       return;
     }
     labelTouchedRef.current = false;
@@ -336,162 +282,23 @@ function LocationMapPickerModal({
     setSelectedMatchId(hit.id);
   };
 
-  const goToSaved = (hit) => {
+  const selectPlace = (hit) => {
     if (!hit?.center) return;
     setPosition([hit.center.lat, hit.center.lng]);
     setFocusNonce((n) => n + 1);
     pickMatch(hit);
-    setKeepId(hit.id);
     refreshMatches(hit.center.lat, hit.center.lng);
-    if (checkedIds.size >= 1) {
-      setManageHint(`留下「${hit.name}」，其餘勾選會刪除`);
-    }
-  };
-
-  const syncRegions = (next) => {
-    const list = next || loadLandmarkRegions();
-    setRegions(list);
-    return list;
-  };
-
-  const toggleChecked = (id) => {
-    setCheckedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  };
-
-  const startEdit = (hit) => {
-    setEditingId(hit.id);
-    setEditName(hit.name);
-    setManageHint('');
-  };
-
-  const cancelEdit = () => {
-    setEditingId(null);
-    setEditName('');
-  };
-
-  const saveEdit = (id) => {
-    const nextName = editName.trim();
-    if (!nextName) {
-      setManageHint('名稱不能空白');
-      return;
-    }
-    const hit = pointCatalog.find((r) => r.id === id);
-    if (!hit) {
-      setManageHint('找不到這筆，無法改名');
-      return;
-    }
-    if (isSheetPlace(hit)) {
-      const renamed = {
-        ...hit,
-        name: nextName,
-        id: `loc_${hit.center.lat.toFixed(5)}_${hit.center.lng.toFixed(5)}_${nextName}`,
-      };
-      setSheetPlaces((prev) => prev.map((p) => (p.id === id ? renamed : p)));
-      saveSavedLocationRemote(renamed).catch(() => setManageHint('已改名（本機），雲端同步失敗'));
-      if (keepId === id) setKeepId(renamed.id);
-    } else {
-      const saved = renameLandmarkRegionLocal(id, nextName);
-      if (saved) upsertLandmarkRegionRemote(saved).catch(() => setManageHint('已改名（本機），雲端同步失敗'));
-      syncRegions();
-    }
-    if (selectedMatchId === id || autoFilledIdRef.current === id) {
-      setLabel(nextName);
-    }
-    setEditingId(null);
-    setEditName('');
-    setManageHint('已改名');
-  };
-
-  const forgetPlace = (hit) => {
-    setCheckedIds((prev) => {
-      const next = new Set(prev);
-      next.delete(hit.id);
-      return next;
-    });
-    if (editingId === hit.id) cancelEdit();
-    if (keepId === hit.id) setKeepId(null);
-    if (selectedMatchId === hit.id || autoFilledIdRef.current === hit.id) {
-      setLabel('');
-      labelTouchedRef.current = false;
-      autoFilledIdRef.current = null;
-      setSelectedMatchId(null);
-    }
-  };
-
-  const removeSaved = (hit) => {
-    if (!hit?.id) return;
-    if (!window.confirm(`刪除地標「${hit.name}」？`)) return;
-    if (isSheetPlace(hit)) {
-      setSheetPlaces((prev) => prev.filter((p) => p.id !== hit.id));
-      deleteSavedLocationRemote(hit).catch(() => setManageHint('已刪本機，雲端同步失敗'));
-    } else {
-      deleteLandmarkRegionLocal(hit.id);
-      deleteLandmarkRegionRemote(hit.id).catch(() => setManageHint('已刪本機，雲端同步失敗'));
-      syncRegions();
-    }
-    forgetPlace(hit);
-    setManageHint(`已刪「${hit.name}」`);
-  };
-
-  const mergeChecked = () => {
-    if (!keepId) {
-      setManageHint('請先點選要留下的地標');
-      return;
-    }
-    const dropCount = Array.from(checkedIds).filter((id) => id !== keepId).length;
-    if (dropCount < 1) {
-      setManageHint('勾選附近重複的地標，再點「留下」選要覆蓋的那筆');
-      return;
-    }
-    const keep = pointCatalog.find((r) => r.id === keepId);
-    const keepName = keep?.name || '所選地標';
-    if (!window.confirm(`以「${keepName}」的座標覆蓋：留下這筆，刪除其餘 ${dropCount} 筆附近重複地標？`)) {
-      return;
-    }
-    const result = mergeNamedPointsLocal(pointCatalog, { keepId, checkedIds: Array.from(checkedIds) });
-    if (!result?.keep) {
-      setManageHint('合併失敗，請再點一次要留下的地標');
-      return;
-    }
-    const droppedSheet = [];
-    result.dropped.forEach((r) => {
-      if (isSheetPlace(r)) {
-        droppedSheet.push(r.id);
-        deleteSavedLocationRemote(r).catch(() => {});
-      } else {
-        deleteLandmarkRegionRemote(r.id).catch(() => {});
-      }
-    });
-    if (droppedSheet.length) {
-      setSheetPlaces((prev) => prev.filter((p) => !droppedSheet.includes(p.id)));
-    }
-    setCheckedIds(new Set());
-    setKeepId(result.keep.id);
-    setEditingId(null);
-    setLabel(result.keep.name);
-    labelTouchedRef.current = true;
-    autoFilledIdRef.current = result.keep.id;
-    setSelectedMatchId(result.keep.id);
-    syncRegions();
-    setManageHint(`已留下「${result.keep.name}」，刪除 ${result.dropped.length} 筆重複地標`);
+    setManageHint(`所屬：${hit.name}`);
   };
 
   const handleConfirm = () => {
     const name = label.trim();
-    if (name) {
-      const saved = rememberNamedPoint({
+    if (name && !selectedMatchId) {
+      rememberNamedPoint({
         lat: position[0],
         lng: position[1],
         name,
       });
-      if (saved) {
-        upsertLandmarkRegionRemote(saved).catch(() => {});
-      }
     }
     onSave?.({
       lat: position[0],
@@ -505,13 +312,16 @@ function LocationMapPickerModal({
 
   const shapesToShow = useMemo(
     () =>
-      matches.filter(isNamedPoint).map((m) => ({
-        ...m,
-        editing: false,
-        nearby: !m.inside,
-        legacy: isSheetPlace(m),
-      })),
-    [matches]
+      matches
+        .filter(isNamedPoint)
+        .filter((m) => m.id !== selectedMatchId)
+        .map((m) => ({
+          ...m,
+          editing: false,
+          nearby: !m.inside,
+          legacy: isSheetPlace(m),
+        })),
+    [matches, selectedMatchId]
   );
 
   const savedList = useMemo(() => {
@@ -537,92 +347,24 @@ function LocationMapPickerModal({
   }, [pointCatalog, position, savedQuery, savedSort, matches]);
 
   const visibleSaved = savedQuery.trim() ? savedList : savedList.slice(0, SAVED_LIST_CAP);
-  const dropCount = Array.from(checkedIds).filter((id) => id !== keepId).length;
-  const keepPlace = pointCatalog.find((r) => r.id === keepId);
-  const canMerge = Boolean(keepId && dropCount >= 1);
 
   if (!open) return null;
 
-  const tile = TILES[basemap] || TILES.street;
+  const tile = tilesFor(basemap);
 
   const renderSavedList = (list) => (
     <ul className="landmark-match-list saved-places-list">
       {list.map((m) => (
-        <li
-          key={m.id}
-          className={[
-            editingId === m.id ? 'is-editing' : '',
-            keepId === m.id ? 'is-keep' : '',
-          ]
-            .filter(Boolean)
-            .join(' ')}
-        >
-          <label className="saved-place-check">
-            <input
-              type="checkbox"
-              checked={checkedIds.has(m.id)}
-              onChange={() => toggleChecked(m.id)}
-              aria-label={`勾選 ${m.name}`}
-            />
-          </label>
-          {editingId === m.id ? (
-            <div className="saved-place-edit">
-              <input
-                className="entry-text-input saved-place-edit-input"
-                value={editName}
-                onChange={(e) => setEditName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault();
-                    saveEdit(m.id);
-                  }
-                  if (e.key === 'Escape') cancelEdit();
-                }}
-                autoFocus
-              />
-              <button type="button" className="landmark-match-edit" onClick={() => saveEdit(m.id)}>
-                存
-              </button>
-              <button type="button" className="landmark-match-edit" onClick={cancelEdit}>
-                取消
-              </button>
-            </div>
-          ) : (
-            <>
-              <button
-                type="button"
-                className={`landmark-match-item${keepId === m.id || selectedMatchId === m.id ? ' is-active' : ''}`}
-                onClick={() => goToSaved(m)}
-                title="點選作為留下的地標"
-              >
-                <span className="landmark-match-name">{m.name}</span>
-                <span className="landmark-match-meta">
-                  {keepId === m.id ? '留下' : formatDist(m.distanceM)}
-                </span>
-              </button>
-              <button
-                type="button"
-                className={`landmark-match-edit${keepId === m.id ? ' is-keep-btn' : ''}`}
-                onClick={() => {
-                  pickMatch(m);
-                  setKeepId(m.id);
-                  setManageHint(`留下「${m.name}」`);
-                }}
-              >
-                留下
-              </button>
-              <button type="button" className="landmark-match-edit" onClick={() => startEdit(m)}>
-                改
-              </button>
-              <button
-                type="button"
-                className="landmark-match-edit is-danger"
-                onClick={() => removeSaved(m)}
-              >
-                刪
-              </button>
-            </>
-          )}
+        <li key={m.id}>
+          <button
+            type="button"
+            className={`landmark-match-item${selectedMatchId === m.id ? ' is-active' : ''}`}
+            title="選為所屬地點"
+            onClick={() => selectPlace(m)}
+          >
+            <span className="landmark-match-name">{m.name}</span>
+            <span className="landmark-match-meta">{formatDist(m.distanceM)}</span>
+          </button>
         </li>
       ))}
     </ul>
@@ -651,12 +393,12 @@ function LocationMapPickerModal({
               </button>
             )}
             <a
-              href={hrefFor(ROUTES.REGIONS)}
+              href={hrefFor(ROUTES.REGIONS, { kind: 'point' })}
               className="location-gps-btn"
-              title="編輯多邊形區域"
+              title="地圖管理"
               onClick={jumpToRegions}
             >
-              區域
+              地圖管理
             </a>
             <button type="button" className="close-btn" onClick={onClose}>
               ×
@@ -671,9 +413,21 @@ function LocationMapPickerModal({
             <input
               className="entry-text-input location-search-input"
               value={query}
-              onChange={(e) => setQuery(e.target.value)}
+              onChange={(e) => {
+                const v = e.target.value;
+                setQuery(v);
+                if (!v.trim()) {
+                  setResults([]);
+                  setSearchError('');
+                }
+              }}
               placeholder="搜尋地圖或地標"
             />
+            {query.trim() || results.length > 0 || searchError ? (
+              <button type="button" className="location-search-clear" onClick={clearSearch}>
+                清空
+              </button>
+            ) : null}
             <button type="submit" className="location-search-btn" disabled={searching}>
               {searching ? '…' : '搜尋'}
             </button>
@@ -734,20 +488,21 @@ function LocationMapPickerModal({
                 Google Maps
               </button>
               <a
-                href={hrefFor(ROUTES.REGIONS)}
+                href={hrefFor(ROUTES.REGIONS, { kind: 'point' })}
                 className="parking-map-action-btn"
-                title="編輯多邊形區域"
+                title="地圖管理"
                 onClick={jumpToRegions}
               >
-                常用區域
+                地圖管理
               </a>
             </div>
 
             <MapContainer
+              className={basemap === 'satellite' ? 'is-satellite' : undefined}
               center={position}
               zoom={DEFAULT_ZOOM}
               maxZoom={MAX_ZOOM}
-              style={{ height: 280, width: '100%' }}
+              style={{ height: 320, width: '100%' }}
               key={`pin-map-${open}`}
               zoomControl={false}
               scrollWheelZoom
@@ -769,6 +524,8 @@ function LocationMapPickerModal({
                   region={c}
                   editing={c.editing}
                   nearby={c.nearby}
+                  hit={false}
+                  onClick={() => selectPlace(c)}
                 />
               ))}
               <DraggableMarker position={position} onChange={handleChange} />
@@ -798,15 +555,15 @@ function LocationMapPickerModal({
           <div className="landmark-match-block">
             <div className="landmark-match-head">
               <span className="entry-field-label" style={{ margin: 0 }}>
-                地標
+                附近地點
               </span>
               <span className="landmark-match-count">{savedList.length} 筆</span>
               <a
-                href={hrefFor(ROUTES.REGIONS)}
+                href={hrefFor(ROUTES.REGIONS, { kind: 'point' })}
                 className="landmark-regions-jump"
                 onClick={jumpToRegions}
               >
-                常用區域
+                地圖管理
               </a>
             </div>
             <div className="saved-places-toolbar">
@@ -829,19 +586,9 @@ function LocationMapPickerModal({
                 ))}
               </div>
             </div>
-            {canMerge && (
-              <div className="saved-merge-bar">
-                <span className="saved-merge-copy">
-                  以「{keepPlace?.name || '所選地標'}」覆蓋，刪除其餘 {dropCount} 筆
-                </span>
-                <button type="button" className="location-search-btn" onClick={mergeChecked}>
-                  合併
-                </button>
-              </div>
-            )}
-            {!canMerge && checkedIds.size >= 1 && (
-              <div className="saved-places-hint">勾選附近重複的地標，再點「留下」選要覆蓋的那筆</div>
-            )}
+            {!manageHint ? (
+              <div className="saved-places-hint">點附近地點作為所屬名稱。拖曳標記只調目前座標。</div>
+            ) : null}
             {manageHint && <div className="saved-places-hint">{manageHint}</div>}
             {visibleSaved.length > 0 ? (
               renderSavedList(visibleSaved)
@@ -849,11 +596,11 @@ function LocationMapPickerModal({
               <div className="saved-places-empty">
                 {savedQuery.trim() ? '沒有符合的地標' : '尚無已存地標'}
                 <a
-                  href={hrefFor(ROUTES.REGIONS)}
+                  href={hrefFor(ROUTES.REGIONS, { kind: 'point' })}
                   className="landmark-regions-jump"
                   onClick={jumpToRegions}
                 >
-                  去常用區域
+                  去地圖管理
                 </a>
               </div>
             )}
@@ -875,10 +622,10 @@ function LocationMapPickerModal({
           />
 
           <div className="map-hint">
-            {hasInitial ? '拖曳標記或點擊地圖微調' : '點地圖或搜尋後選點'}
+            {hasInitial ? '拖曳標記或點擊地圖微調目前座標' : '點地圖或搜尋後選點'}
             {' · '}
-            <a href={hrefFor(ROUTES.REGIONS)} className="landmark-regions-jump" onClick={jumpToRegions}>
-              常用區域
+            <a href={hrefFor(ROUTES.REGIONS, { kind: 'point' })} className="landmark-regions-jump" onClick={jumpToRegions}>
+              地圖管理
             </a>
           </div>
         </div>
@@ -887,7 +634,12 @@ function LocationMapPickerModal({
           <button type="button" className="cancel-btn" onClick={onClose}>
             取消
           </button>
-          <button type="button" className="confirm-btn" onClick={handleConfirm}>
+          <button
+            type="button"
+            className="confirm-btn"
+            onClick={handleConfirm}
+            title="把地圖上的點設成目前定位"
+          >
             儲存定位
           </button>
         </div>

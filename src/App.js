@@ -18,7 +18,7 @@ import './App.css';
  *   #/obligations 同上（相容舊連結）
  *   #/calendar   行事曆軌跡
  *   #/vehicles   車輛（#/parking 相容舊連結）
- *   #/regions    常用區域
+ *   #/regions    地圖管理
  */
 function App() {
   const path = useHashRoute();

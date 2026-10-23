@@ -32,8 +32,8 @@ const ACTIONS = [
   {
     path: ROUTES.REGIONS,
     icon: '🗺️',
-    title: '常用區域',
-    desc: '命名範圍，定位時自動帶入',
+    title: '地圖管理',
+    desc: '區域與地標，定位時自動帶入',
     direct: '#/regions',
   },
 ];

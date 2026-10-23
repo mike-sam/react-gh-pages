@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { Circle, CircleMarker, MapContainer, Marker, TileLayer, ZoomControl, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { DEFAULT_ZOOM, MapInvalidateOn, TILES } from './map/LeafletBits';
+import { DEFAULT_ZOOM, MapInvalidateOn, tilesFor } from './map/LeafletBits';
 import { DEFAULT_MAP_CENTER } from '../utils/mapDefaults';
 import { haversineKm } from '../utils/expenseSummary';
 import { ensureEatPlaces, monthsAgoMs, parseEatWhen } from '../utils/eatPlaces';
@@ -108,6 +108,7 @@ function MapDirector({ here, radiusKm, flyPoint, flyNonce, zoomOutToken }) {
 function EatWhatModal({ open, onClose }) {
   useHistoryOverlay(open, onClose);
   const { location, resolveForAction } = useSmartLocation();
+  const tile = tilesFor('street');
   const [places, setPlaces] = useState([]);
   const [err, setErr] = useState('');
   const [loading, setLoading] = useState(false);
@@ -302,7 +303,7 @@ function EatWhatModal({ open, onClose }) {
             zoomControl={false}
             className="expense-heat-leaflet"
           >
-            <TileLayer url={TILES.street.url} attribution={TILES.street.attribution} />
+            <TileLayer url={tile.url} attribution={tile.attribution} subdomains={tile.subdomains} />
             <ZoomControl position="bottomright" />
             <MapInvalidateOn token={`${open}|${radiusKm}|${nearby.length}`} />
             <MapDirector

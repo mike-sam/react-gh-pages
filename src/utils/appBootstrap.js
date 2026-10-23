@@ -1,7 +1,7 @@
 import { API_ENDPOINTS } from '../config';
 import { detectPaymentCategory, detectPaymentRegion } from './paymentCategory';
 import { applyParkedByCar, DEFAULT_CAR_PLATES, isParkedFetchFresh } from './locationStorage';
-import { isLandmarkFetchFresh, mergeLandmarkRegionsFromCloud } from './landmarkRegions';
+import { mergeLandmarkRegionsFromCloud } from './landmarkRegions';
 import { writeFxRates } from './fxRates';
 import { loadExpenseHistory } from './expenseHistory';
 
@@ -285,8 +285,7 @@ function needsBootstrap({ force = false } = {}) {
   if (isBootstrapFresh()) return false;
   if (isBootstrapAttemptCooling()) return false;
   const parkedFresh = DEFAULT_CAR_PLATES.every((p) => isParkedFetchFresh(p));
-  const landmarksFresh = isLandmarkFetchFresh();
-  return !(parkedFresh && landmarksFresh);
+  return !parkedFresh;
 }
 
 /**
