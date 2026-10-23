@@ -15,6 +15,8 @@ const doGet = (event = {}) => {
       return getMileageData(parameter.carPlate, parameter.group);
     case 'getKeyValue':
       return getKeyValue(parameter.key, parameter.group);
+    case 'verifyAccess':
+      return verifyAccess(parameter || {});
     case 'getLastExpense':
       return getLastExpense(parameter.tag, parameter.title);
     case 'processCommitments':
@@ -33,6 +35,10 @@ const doGet = (event = {}) => {
       return getParkedLocations();
     case 'getBootstrap':
       return getBootstrap();
+    case 'getExpenseSummary':
+      return getExpenseSummary(parameter || {});
+    case 'runDailyJobs':
+      return runDailyJobs();
     case 'saveLocation':
       return saveLocation(data);
     case 'trackCalendar':
@@ -95,6 +101,8 @@ const doPost = (request = {}) => {
         return updateMileage(data);
       case 'setKeyValue':
         return setKeyValue(data);
+      case 'verifyAccess':
+        return verifyAccess(data || {});
       case 'saveLocation':
         return saveLocation(data);
       case 'listLandmarkRegions':
@@ -113,6 +121,10 @@ const doPost = (request = {}) => {
         return upsertObligationInstallment(data);
       case 'processDueObligations':
         return processDueObligations();
+      case 'getExpenseSummary':
+        return getExpenseSummary(data || {});
+      case 'runDailyJobs':
+        return runDailyJobs();
       case 'trackCalendar':
       case 'check_current':
         return handleCalendarTrack(data);
@@ -414,6 +426,10 @@ function handleUpsertExpense(data) {
     delete recordsData.day;
     delete recordsData.photos; // 大字段另處理
     delete recordsData.photo;
+    if (!recordsData.description && recordsData.simpleDescription) {
+      recordsData.description = recordsData.simpleDescription;
+    }
+    delete recordsData.simpleDescription;
 
     var upsert = upsertRowById(recordsData, 'Records');
 
@@ -501,13 +517,24 @@ function handleUpsertExpense(data) {
       } catch (e4) {}
     }
 
+    var calendarEventId = '';
+    try {
+      calendarEventId = syncExpenseCalendarEvent(data, upsert) || '';
+    } catch (calErr) {
+      appendLog(['upsertExpense calendar', calErr.toString()]);
+    }
+    try {
+      invalidateExpenseSummary(data.yearmonth);
+    } catch (invErr) {}
+
     return ContentService.createTextOutput(JSON.stringify({
       success: true,
       status: 'success',
       id: upsert.id,
       updated: upsert.updated,
       row: upsert.row,
-      timestamp: data.timestamp
+      timestamp: data.timestamp,
+      calendarEventId: calendarEventId
     })).setMimeType(ContentService.MimeType.JSON);
   } catch (error) {
     appendLog(['Error in handleUpsertExpense:', error.toString(), error.stack]);
@@ -700,6 +727,9 @@ function getBootstrap() {
   } catch (e) {
     out.landmarksError = e.toString();
   }
+  try {
+    ensureAccessHashRow();
+  } catch (e) {}
   return jsonOut(out);
 }
 
@@ -1195,6 +1225,38 @@ function updateMileageToSheet(data) {
  * 使用KeyValueConfig sheet存储key-value对
  * 新列结构：Group | Key | Value | Timestamp | Info
  */
+var ACCESS_HASH_KEY = 'APP_ACCESS_HASH';
+var ACCESS_HASH_DEFAULT = 'change-me-selfmanage';
+
+function ensureAccessHashRow() {
+  var sheet = getKeyValueSheet();
+  var data = sheet.getDataRange().getValues();
+  var searchKey = ACCESS_HASH_KEY.toUpperCase();
+  for (var i = 1; i < data.length; i++) {
+    var groupStr = data[i][0] ? String(data[i][0]).trim() : '';
+    var keyStr = data[i][1] ? String(data[i][1]).trim().toUpperCase() : '';
+    if (groupStr === 'KeyValue' && keyStr === searchKey) {
+      return data[i][2] != null ? String(data[i][2]) : '';
+    }
+  }
+  sheet.appendRow([
+    'KeyValue',
+    ACCESS_HASH_KEY,
+    ACCESS_HASH_DEFAULT,
+    datetimetoYMDHIS(),
+    'app gate hash; change Value'
+  ]);
+  return ACCESS_HASH_DEFAULT;
+}
+
+function verifyAccess(parameter) {
+  parameter = parameter || {};
+  var submitted = String(parameter.hash || parameter.access || parameter.value || '').trim();
+  var expected = String(ensureAccessHashRow() || '').trim();
+  var ok = submitted !== '' && expected !== '' && submitted === expected;
+  return jsonOut({ success: true, ok: ok });
+}
+
 function getKeyValueSheet() {
   const doc = SpreadsheetApp.openById(sheetId);
   let sheet = doc.getSheetByName('KeyValueConfig');
@@ -1228,6 +1290,9 @@ function getKeyValue(key, group) {
         success: false,
         error: 'Key is required'
       })).setMimeType(ContentService.MimeType.JSON);
+    }
+    if (key.toString().trim().toUpperCase() === ACCESS_HASH_KEY) {
+      return jsonOut({ success: false, error: 'Forbidden' });
     }
     
     const sheet = getKeyValueSheet();
@@ -1287,6 +1352,9 @@ function setKeyValue(data) {
         success: false,
         error: 'Key is required'
       })).setMimeType(ContentService.MimeType.JSON);
+    }
+    if (key.toString().trim().toUpperCase() === ACCESS_HASH_KEY) {
+      return jsonOut({ success: false, error: 'Forbidden' });
     }
     
     // 如果没有指定group，默认为'KeyValue'
@@ -1982,15 +2050,31 @@ var CALENDAR_LOOKBACK_DAYS_MIN = 1;
 var CALENDAR_LOOKBACK_DAYS_MAX = 14;
 var CALENDAR_LOOKAHEAD_MS = 60 * 60 * 1000;
 
+function calendarLookbackDaysRaw(data) {
+  if (!data) return null;
+  if (data.days != null && String(data.days).trim() !== '') return data.days;
+  if (data.lookbackDays != null && String(data.lookbackDays).trim() !== '') return data.lookbackDays;
+  return null;
+}
+
+function calendarLookbackDaysParsed(data) {
+  var raw = calendarLookbackDaysRaw(data);
+  if (raw == null) return null;
+  var days = Number(raw);
+  if (isNaN(days)) return null;
+  days = Math.floor(days);
+  if (days < CALENDAR_LOOKBACK_DAYS_MIN || days > CALENDAR_LOOKBACK_DAYS_MAX) return null;
+  return days;
+}
+
 function calendarLookbackMs(data) {
+  var parsed = calendarLookbackDaysParsed(data);
+  if (parsed != null) return parsed * 24 * 60 * 60 * 1000;
   var days = CALENDAR_LOOKBACK_DAYS_DEFAULT;
   try {
     var prop = PropertiesService.getScriptProperties().getProperty('CALENDAR_LOOKBACK_DAYS');
     if (prop != null && String(prop).trim() !== '') days = Number(prop);
   } catch (e) {}
-  if (data && data.lookbackDays != null && String(data.lookbackDays).trim() !== '') {
-    days = Number(data.lookbackDays);
-  }
   if (isNaN(days) || days < CALENDAR_LOOKBACK_DAYS_MIN) days = CALENDAR_LOOKBACK_DAYS_DEFAULT;
   if (days > CALENDAR_LOOKBACK_DAYS_MAX) days = CALENDAR_LOOKBACK_DAYS_MAX;
   return days * 24 * 60 * 60 * 1000;
@@ -2370,7 +2454,7 @@ function eventSummaries(events) {
 
 /**
  * URL / JSON:
- * { action: 'trackCalendar', op, title, prefix, timestamp, lat, lng, endExisting, startHome, all, endAny }
+ * { action: 'trackCalendar', op, title, prefix, timestamp, lat, lng, endExisting, startHome, all, endAny, silent, days }
  */
 function handleCalendarTrack(data) {
   try {
@@ -3287,18 +3371,495 @@ function processDueObligations() {
   }
 }
 
-/** Run once in the Apps Script editor to install daily 00:00 trigger. */
-function setupObligationTrigger() {
-  var triggers = ScriptApp.getProjectTriggers();
-  for (var i = 0; i < triggers.length; i++) {
-    if (triggers[i].getHandlerFunction() === 'processDueObligations') {
-      ScriptApp.deleteTrigger(triggers[i]);
+var APP_PUBLIC_BASE = 'https://mike-sam.github.io/react-gh-pages';
+var EXPENSE_SUMMARY_PREFIX = 'expenseSummary_';
+var EXPENSE_SUMMARY_BOOTSTRAP = 'expenseSummaryBootstrapped';
+var EXPENSE_SUMMARY_MONTHS = 24;
+
+/** PHP date('r') / RFC 2822, English names, offset like +0800. */
+function formatRfc2822(when) {
+  when = when || new Date();
+  var tz = Session.getScriptTimeZone();
+  var days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  var months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  var y = Utilities.formatDate(when, tz, 'yyyy');
+  var m = Number(Utilities.formatDate(when, tz, 'MM'));
+  var d = Utilities.formatDate(when, tz, 'dd');
+  var hms = Utilities.formatDate(when, tz, 'HH:mm:ss');
+  var z = Utilities.formatDate(when, tz, 'Z');
+  var u = Number(Utilities.formatDate(when, tz, 'u'));
+  var day = days[u > 0 ? u - 1 : 0];
+  return day + ', ' + d + ' ' + months[m - 1] + ' ' + y + ' ' + hms + ' ' + z;
+}
+
+function expenseDescShort(raw) {
+  var s = String(raw == null ? '' : raw).trim();
+  if (!s) return '';
+  return s.substring(0, 3);
+}
+
+function expenseCalendarTitle(data) {
+  var subcat = String((data && data.title) || '').trim() || '支出';
+  var shortDesc = expenseDescShort(
+    (data && (data.description || data.simpleDescription || data.remark)) || ''
+  );
+  return shortDesc ? '[' + subcat + '] - ' + shortDesc : '[' + subcat + ']';
+}
+
+function expenseCalendarBody(data, recordId) {
+  var amount = data && data.amount != null ? data.amount : '';
+  var curr = (data && data.currency) || 'MYR';
+  var desc = String((data && (data.description || data.simpleDescription || data.remark)) || '').trim();
+  var lines = [
+    'auto populated by 記賬',
+    '金額: ' + curr + ' ' + amount,
+    '分類: ' + ((data && data.tag) || ''),
+    '項目: ' + ((data && data.title) || '')
+  ];
+  if (desc) lines.push('說明: ' + desc);
+  var ym = (data && data.yearmonth) || '';
+  var qs = 'tab=summary&id=' + encodeURIComponent(recordId || '');
+  if (ym) qs += '&ym=' + encodeURIComponent(ym);
+  lines.push('查看: ' + APP_PUBLIC_BASE + '/#/expense?' + qs);
+  return lines.join('\n');
+}
+
+function parseExpenseWhen(raw) {
+  if (raw == null || String(raw).trim() === '') return null;
+  if (Object.prototype.toString.call(raw) === '[object Date]' && !isNaN(raw.getTime())) return raw;
+  var s = String(raw).trim();
+  var m = s.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/);
+  if (m) {
+    return new Date(
+      Number(m[1]),
+      Number(m[2]) - 1,
+      Number(m[3]),
+      Number(m[4]),
+      Number(m[5]),
+      Number(m[6] || 0)
+    );
+  }
+  var d = new Date(s);
+  return d && !isNaN(d.getTime()) ? d : null;
+}
+
+function ensureSheetHeader(sheet, name) {
+  var lastCol = Math.max(sheet.getLastColumn(), 1);
+  var headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+  for (var i = 0; i < headers.length; i++) {
+    if (String(headers[i]) === name) return i;
+  }
+  var col = sheet.getLastColumn() + 1;
+  sheet.getRange(1, col).setValue(name);
+  return col - 1;
+}
+
+function readSheetCell(sheet, row, headerName) {
+  var idx = ensureSheetHeader(sheet, headerName);
+  return sheet.getRange(row, idx + 1).getValue();
+}
+
+function writeSheetCell(sheet, row, headerName, value) {
+  var idx = ensureSheetHeader(sheet, headerName);
+  sheet.getRange(row, idx + 1).setValue(value);
+}
+
+/** Timed calendar event for an expense with event_start + event_end. Not trail tracking. */
+function syncExpenseCalendarEvent(data, upsert) {
+  data = data || {};
+  upsert = upsert || {};
+  var start = parseExpenseWhen(data.event_start);
+  var end = parseExpenseWhen(data.event_end);
+  if (!start || !end) return '';
+  if (end.getTime() <= start.getTime()) end = new Date(start.getTime() + 60 * 60 * 1000);
+  var sheet = SpreadsheetApp.openById(sheetId).getSheetByName('Records');
+  var existingId = '';
+  if (upsert.row > 1 && sheet) {
+    existingId = String(readSheetCell(sheet, upsert.row, 'calendar_event_id') || '').trim();
+  }
+  var calendar = openTrackingCalendar();
+  var title = expenseCalendarTitle(data);
+  var body = expenseCalendarBody(data, upsert.id);
+  var loc = '';
+  if (data.geolocation) loc = String(data.geolocation);
+  else if (data.latitude && data.longitude) loc = data.latitude + ',' + data.longitude;
+  var ev = null;
+  if (existingId) {
+    try {
+      ev = calendar.getEventById(existingId);
+    } catch (e) {
+      ev = null;
     }
   }
-  ScriptApp.newTrigger('processDueObligations')
-    .timeBased()
-    .atHour(0)
-    .everyDays(1)
-    .create();
-  return 'installed processDueObligations daily at 00:00';
+  if (ev) {
+    ev.setTitle(title);
+    ev.setTime(start, end);
+    ev.setDescription(body);
+    if (loc) ev.setLocation(loc);
+  } else {
+    ev = calendar.createEvent(title, start, end, { description: body, location: loc || undefined });
+  }
+  var eventId = ev && ev.getId ? String(ev.getId()) : '';
+  if (eventId && upsert.row > 1 && sheet) {
+    writeSheetCell(sheet, upsert.row, 'calendar_event_id', eventId);
+  }
+  return eventId;
+}
+
+function invalidateExpenseSummary(yearmonth) {
+  var ym = String(yearmonth || '').trim();
+  if (!ym) {
+    ym = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM');
+  }
+  PropertiesService.getScriptProperties().deleteProperty(EXPENSE_SUMMARY_PREFIX + ym);
+}
+
+function sheetText(v) {
+  if (v == null || v === '') return '';
+  if (Object.prototype.toString.call(v) === '[object Date]' && !isNaN(v.getTime())) {
+    return Utilities.formatDate(v, Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss');
+  }
+  return String(v);
+}
+
+function rowYearMonth(row, col) {
+  var tz = Session.getScriptTimeZone();
+  var ymCell = col.yearmonth != null ? row[col.yearmonth] : '';
+  var yearmonth = '';
+  if (Object.prototype.toString.call(ymCell) === '[object Date]' && !isNaN(ymCell.getTime())) {
+    yearmonth = Utilities.formatDate(ymCell, tz, 'yyyy-MM');
+  } else {
+    yearmonth = String(ymCell != null ? ymCell : '').trim();
+  }
+  if (!yearmonth && col.timestamp != null && row[col.timestamp]) {
+    try {
+      yearmonth = Utilities.formatDate(new Date(row[col.timestamp]), tz, 'yyyy-MM');
+    } catch (e) {}
+  }
+  return yearmonth;
+}
+
+function recordFromSheetRow(row, col, yearmonth) {
+  return {
+    id: sheetText(col.id != null ? row[col.id] : ''),
+    tag: String(col.tag != null && row[col.tag] != null ? row[col.tag] : '').trim() || '其他',
+    title: String(col.title != null && row[col.title] != null ? row[col.title] : '').trim(),
+    amount: Number(col.amount != null ? row[col.amount] : 0) || 0,
+    currency: String(col.currency != null && row[col.currency] != null ? row[col.currency] : 'MYR') || 'MYR',
+    remark: sheetText(col.remark != null ? row[col.remark] : ''),
+    description: sheetText(col.description != null ? row[col.description] : ''),
+    timestamp: sheetText(col.timestamp != null ? row[col.timestamp] : ''),
+    event_start: sheetText(col.event_start != null ? row[col.event_start] : ''),
+    event_end: sheetText(col.event_end != null ? row[col.event_end] : ''),
+    calendar_event_id: sheetText(
+      col.calendar_event_id != null ? row[col.calendar_event_id] : ''
+    ),
+    yearmonth: yearmonth
+  };
+}
+
+/** One pass. allowYm: object set of yyyy-MM, or null for all months. */
+function recordsGroupedByMonth(allowYm) {
+  var grouped = {};
+  var sheet = SpreadsheetApp.openById(sheetId).getSheetByName('Records');
+  if (!sheet || sheet.getLastRow() < 2) return grouped;
+  var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  var col = {};
+  for (var i = 0; i < headers.length; i++) col[String(headers[i])] = i;
+  var values = sheet.getRange(2, 1, sheet.getLastRow() - 1, headers.length).getValues();
+  for (var r = 0; r < values.length; r++) {
+    var yearmonth = rowYearMonth(values[r], col);
+    if (!yearmonth) continue;
+    if (allowYm && !allowYm[yearmonth]) continue;
+    if (!grouped[yearmonth]) grouped[yearmonth] = [];
+    grouped[yearmonth].push(recordFromSheetRow(values[r], col, yearmonth));
+  }
+  return grouped;
+}
+
+function recordsForYearMonth(ym) {
+  var allow = {};
+  if (ym) allow[ym] = true;
+  var grouped = recordsGroupedByMonth(ym ? allow : null);
+  return ym ? grouped[ym] || [] : [].concat.apply([], Object.keys(grouped).map(function (k) {
+    return grouped[k];
+  }));
+}
+
+function listRecentYearMonths(count) {
+  var tz = Session.getScriptTimeZone();
+  var now = new Date();
+  var out = [];
+  for (var i = 0; i < count; i++) {
+    out.push(Utilities.formatDate(new Date(now.getFullYear(), now.getMonth() - i, 1), tz, 'yyyy-MM'));
+  }
+  return out;
+}
+
+/** Fingerprint: 筆數 + 加總（分）。沒變就不用重算. */
+function expenseSummaryFingerprint(rows) {
+  rows = rows || [];
+  var total = 0;
+  for (var i = 0; i < rows.length; i++) total += Number(rows[i].amount) || 0;
+  return rows.length + '|' + Math.round(total * 100);
+}
+
+function buildExpenseSummaryFromRows(ym, rows) {
+  rows = rows ? rows.slice() : [];
+  var total = 0;
+  var byTagMap = {};
+  for (var i = 0; i < rows.length; i++) {
+    var rec = rows[i];
+    total += rec.amount;
+    if (!byTagMap[rec.tag]) byTagMap[rec.tag] = { tag: rec.tag, amount: 0, count: 0 };
+    byTagMap[rec.tag].amount += rec.amount;
+    byTagMap[rec.tag].count += 1;
+  }
+  var byTag = [];
+  for (var t in byTagMap) {
+    if (byTagMap.hasOwnProperty(t)) byTag.push(byTagMap[t]);
+  }
+  byTag.sort(function (a, b) {
+    return b.amount - a.amount;
+  });
+  for (var b = 0; b < byTag.length; b++) {
+    byTag[b].amount = Math.round(byTag[b].amount * 100) / 100;
+  }
+  rows.sort(function (a, c) {
+    return String(c.id).localeCompare(String(a.id));
+  });
+  var recent = rows.slice(0, 24).map(function (r) {
+    return {
+      id: r.id,
+      tag: r.tag,
+      title: r.title,
+      amount: r.amount,
+      currency: r.currency,
+      timestamp: r.timestamp,
+      description: r.description || r.remark
+    };
+  });
+  return {
+    yearmonth: ym,
+    fingerprint: expenseSummaryFingerprint(rows),
+    total: Math.round(total * 100) / 100,
+    count: rows.length,
+    byTag: byTag,
+    recent: recent
+  };
+}
+
+function computeExpenseSummary(ym) {
+  return buildExpenseSummaryFromRows(ym, recordsForYearMonth(ym));
+}
+
+function getExpenseSummary(parameter) {
+  try {
+    parameter = parameter || {};
+    var ym = String(parameter.yearmonth || '').trim();
+    if (!ym) ym = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM');
+    var props = PropertiesService.getScriptProperties();
+    if (props.getProperty(EXPENSE_SUMMARY_BOOTSTRAP) !== '1') {
+      refreshExpenseSummaryCache();
+    }
+    var cacheKey = EXPENSE_SUMMARY_PREFIX + ym;
+    var live = computeExpenseSummary(ym);
+    var cachedRaw = props.getProperty(cacheKey);
+    if (cachedRaw) {
+      try {
+        var cached = JSON.parse(cachedRaw);
+        if (cached && cached.fingerprint === live.fingerprint) {
+          live = cached;
+          live.cached = true;
+          if (!live.updatedAt) {
+            live.updatedAt = formatRfc2822(new Date());
+            props.setProperty(cacheKey, JSON.stringify(live));
+          }
+        } else {
+          live.updatedAt = formatRfc2822(new Date());
+          props.setProperty(cacheKey, JSON.stringify(live));
+          live.cached = false;
+        }
+      } catch (parseErr) {
+        live.updatedAt = formatRfc2822(new Date());
+        props.setProperty(cacheKey, JSON.stringify(live));
+        live.cached = false;
+      }
+    } else {
+      live.updatedAt = formatRfc2822(new Date());
+      props.setProperty(cacheKey, JSON.stringify(live));
+      live.cached = false;
+    }
+    var wantId = String(parameter.id || '').trim();
+    if (wantId) {
+      var hit = null;
+      for (var i = 0; i < (live.recent || []).length; i++) {
+        if (String(live.recent[i].id) === wantId) {
+          hit = live.recent[i];
+          break;
+        }
+      }
+      if (!hit) {
+        var all = recordsForYearMonth(ym);
+        for (var j = 0; j < all.length; j++) {
+          if (String(all[j].id) === wantId) {
+            hit = all[j];
+            break;
+          }
+        }
+      }
+      live.record = hit;
+    }
+    live.success = true;
+    return jsonOut(live);
+  } catch (error) {
+    appendLog(['getExpenseSummary', error.toString()]);
+    return jsonOut({ success: false, error: error.toString() });
+  }
+}
+
+function refreshExpenseSummaryCache() {
+  var props = PropertiesService.getScriptProperties();
+  var bootstrapped = props.getProperty(EXPENSE_SUMMARY_BOOTSTRAP) === '1';
+  var now = new Date();
+  var allowYm = null;
+  var monthList;
+  if (bootstrapped) {
+    monthList = listRecentYearMonths(EXPENSE_SUMMARY_MONTHS);
+    allowYm = {};
+    for (var i = 0; i < monthList.length; i++) allowYm[monthList[i]] = true;
+  }
+  var grouped = recordsGroupedByMonth(allowYm);
+  if (!bootstrapped) {
+    monthList = Object.keys(grouped).sort();
+  }
+  var rebuilt = [];
+  var skipped = 0;
+  for (var m = 0; m < monthList.length; m++) {
+    var ym = monthList[m];
+    var rows = grouped[ym] || [];
+    if (!rows.length && bootstrapped) {
+      if (!props.getProperty(EXPENSE_SUMMARY_PREFIX + ym)) {
+        skipped++;
+        continue;
+      }
+    }
+    var live = buildExpenseSummaryFromRows(ym, rows);
+    var cachedRaw = props.getProperty(EXPENSE_SUMMARY_PREFIX + ym);
+    if (cachedRaw) {
+      try {
+        var cached = JSON.parse(cachedRaw);
+        if (cached && cached.fingerprint === live.fingerprint) {
+          skipped++;
+          continue;
+        }
+      } catch (parseErr) {}
+    }
+    live.updatedAt = formatRfc2822(now);
+    props.setProperty(EXPENSE_SUMMARY_PREFIX + ym, JSON.stringify(live));
+    rebuilt.push({ yearmonth: ym, count: live.count, total: live.total });
+  }
+  if (!bootstrapped) props.setProperty(EXPENSE_SUMMARY_BOOTSTRAP, '1');
+  return {
+    success: true,
+    bootstrap: !bootstrapped,
+    window: bootstrapped ? EXPENSE_SUMMARY_MONTHS : 'all',
+    rebuilt: rebuilt,
+    skipped: skipped
+  };
+}
+
+function backfillExpenseCalendarEvents() {
+  var tz = Session.getScriptTimeZone();
+  var cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - 45);
+  var ymNow = Utilities.formatDate(new Date(), tz, 'yyyy-MM');
+  var prev = new Date();
+  prev.setMonth(prev.getMonth() - 1);
+  var months = [ymNow, Utilities.formatDate(prev, tz, 'yyyy-MM')];
+  var synced = 0;
+  var errors = 0;
+  for (var m = 0; m < months.length; m++) {
+    var rows = recordsForYearMonth(months[m]);
+    for (var i = 0; i < rows.length && synced < 40; i++) {
+      var rec = rows[i];
+      if (!rec.event_start || !rec.event_end || rec.calendar_event_id) continue;
+      var start = parseExpenseWhen(rec.event_start);
+      if (start && start < cutoff) continue;
+      try {
+        var sheet = SpreadsheetApp.openById(sheetId).getSheetByName('Records');
+        var rowNum = -1;
+        if (sheet && sheet.getLastRow() >= 2) {
+          var idCol = ensureSheetHeader(sheet, 'id');
+          var ids = sheet.getRange(2, idCol + 1, sheet.getLastRow() - 1, 1).getValues();
+          for (var r = 0; r < ids.length; r++) {
+            if (String(ids[r][0]) === rec.id) {
+              rowNum = r + 2;
+              break;
+            }
+          }
+        }
+        syncExpenseCalendarEvent(rec, { id: rec.id, row: rowNum });
+        synced++;
+      } catch (e) {
+        errors++;
+        appendLog(['backfillExpenseCalendarEvents', rec.id, e.toString()]);
+      }
+    }
+  }
+  return { success: true, synced: synced, errors: errors };
+}
+
+function runDailyJobs() {
+  var results = {};
+  try {
+    var c = processCommitments();
+    results.commitments = c && c.getContent ? JSON.parse(c.getContent()) : c;
+  } catch (e1) {
+    results.commitments = { success: false, error: e1.toString() };
+  }
+  try {
+    var o = processDueObligations();
+    results.obligations = o && o.getContent ? JSON.parse(o.getContent()) : o;
+  } catch (e2) {
+    results.obligations = { success: false, error: e2.toString() };
+  }
+  try {
+    results.summary = refreshExpenseSummaryCache();
+  } catch (e3) {
+    results.summary = { success: false, error: e3.toString() };
+  }
+  try {
+    results.calendar = backfillExpenseCalendarEvents();
+  } catch (e4) {
+    results.calendar = { success: false, error: e4.toString() };
+  }
+  appendLog(['runDailyJobs', JSON.stringify(results)]);
+  return jsonOut({ success: true, results: results });
+}
+
+/** Run once in the Apps Script editor to install daily 00:00 jobs. */
+function setupDailyTrigger() {
+  var triggers = ScriptApp.getProjectTriggers();
+  var hasDaily = false;
+  for (var i = 0; i < triggers.length; i++) {
+    var name = triggers[i].getHandlerFunction();
+    if (name === 'processDueObligations' || name === 'processCommitments') {
+      ScriptApp.deleteTrigger(triggers[i]);
+    } else if (name === 'runDailyJobs') {
+      hasDaily = true;
+    }
+  }
+  if (!hasDaily) {
+    ScriptApp.newTrigger('runDailyJobs').timeBased().atHour(0).everyDays(1).create();
+  }
+  var summary = refreshExpenseSummaryCache();
+  return (
+    'installed runDailyJobs daily at 00:00; ' +
+    (summary.bootstrap ? 'bootstrapped ' + summary.rebuilt.length + ' months' : 'refreshed')
+  );
+}
+
+function setupObligationTrigger() {
+  return setupDailyTrigger();
 }
