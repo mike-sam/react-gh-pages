@@ -3424,10 +3424,19 @@ function appendDescriptionLine(desc, line) {
   return text + '\n' + line;
 }
 
-function findEventsByFirstLine(calendar, marker, when, lookbackMs) {
+function calendarSearchBounds_(when, lookbackMs) {
   var back = lookbackMs || CALENDAR_LOOKBACK_DAYS_DEFAULT * 24 * 60 * 60 * 1000;
-  var from = new Date(when.getTime() - back);
-  var to = new Date(when.getTime() + CALENDAR_LOOKAHEAD_MS);
+  var pad = Math.max(CALENDAR_LOOKAHEAD_MS, back);
+  return {
+    from: new Date(when.getTime() - back),
+    to: new Date(when.getTime() + pad)
+  };
+}
+
+function findEventsByFirstLine(calendar, marker, when, lookbackMs) {
+  var bounds = calendarSearchBounds_(when, lookbackMs);
+  var from = bounds.from;
+  var to = bounds.to;
   var events = calendar.getEvents(from, to);
   var out = [];
   for (var i = 0; i < events.length; i++) {
@@ -3469,9 +3478,9 @@ function mergeCalendarEvents(primary, extra) {
  * Skips all-day, already **end** / **home**.
  */
 function findLiveTimedEvents(calendar, when, lookbackMs) {
-  var back = lookbackMs || CALENDAR_LOOKBACK_DAYS_DEFAULT * 24 * 60 * 60 * 1000;
-  var from = new Date(when.getTime() - back);
-  var to = new Date(when.getTime() + CALENDAR_LOOKAHEAD_MS);
+  var bounds = calendarSearchBounds_(when, lookbackMs);
+  var from = bounds.from;
+  var to = bounds.to;
   var events = calendar.getEvents(from, to);
   var t = when.getTime();
   var out = [];
@@ -3635,10 +3644,8 @@ function handleCalendarTrack(data) {
     var homes = findEventsByFirstLine(calendar, CALENDAR_HOME_MARKER, when, lookbackMs);
     var liveEvents = findLiveTimedEvents(calendar, when, lookbackMs);
     var appendable = mergeCalendarEvents(starts, liveEvents);
-    var windowEvents = calendar.getEvents(
-      new Date(when.getTime() - lookbackMs),
-      new Date(when.getTime() + CALENDAR_LOOKAHEAD_MS)
-    );
+    var searchBounds = calendarSearchBounds_(when, lookbackMs);
+    var windowEvents = calendar.getEvents(searchBounds.from, searchBounds.to);
 
     if (op === 'check') {
       var resultCheck = {
@@ -3774,6 +3781,7 @@ function handleCalendarTrack(data) {
         endPool = mergeCalendarEvents(endPool, homes);
       }
       var endTargets = endPool;
+      var titleFallback = false;
       if (!closeAll) {
         if (title) {
           endTargets = [];
@@ -3782,7 +3790,8 @@ function handleCalendarTrack(data) {
           }
         }
         if (!endTargets.length) {
-          var endPrimary = pickPrimaryEvent(endPool, when, title);
+          titleFallback = Boolean(title);
+          var endPrimary = pickPrimaryEvent(endPool, when, '');
           endTargets = endPrimary ? [endPrimary] : [];
         }
       }
@@ -3803,10 +3812,25 @@ function handleCalendarTrack(data) {
       result = {
         success: true,
         mode: closedEnd.length ? 'ended' : 'noop',
-        op: op,
+        op: closeAll ? 'end all' : 'end',
+        all: closeAll,
         closed: closedEnd,
         placeName: placeName,
-        warning: closedEnd.length ? '' : 'no matching open events in lookback window'
+        searched: {
+          starts: starts.length,
+          live: liveEvents.length,
+          homes: homes.length,
+          pool: endPool.length
+        },
+        warning: closedEnd.length
+          ? (titleFallback ? 'ended primary event; title had no match' : '')
+          : ('no matching open events in lookback window (starts=' +
+            starts.length +
+            ' live=' +
+            liveEvents.length +
+            ' homes=' +
+            homes.length +
+            ')')
       };
       appendLog(['Calendar events ended:', JSON.stringify(result)]);
       return calendarJson(result);
