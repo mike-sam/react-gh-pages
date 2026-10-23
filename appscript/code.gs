@@ -322,9 +322,63 @@ function uploadFileToDrive(base64Data, fileName, foldername) {
   }
 }
 
+function normalizeHeaderName(raw) {
+  var s = String(raw == null ? '' : raw).trim();
+  if (!s) return '';
+  if (/^column\s*\d+$/i.test(s)) return '';
+  return s;
+}
+
+/** First matching header wins. Later duplicate columns (upsert leftovers) are ignored. */
+function findHeaderIndex(headers, key) {
+  var want = String(key == null ? '' : key).trim().toLowerCase();
+  if (!want) return -1;
+  for (var i = 0; i < headers.length; i++) {
+    var name = normalizeHeaderName(headers[i]);
+    if (name && name.toLowerCase() === want) return i;
+  }
+  return -1;
+}
+
+function headerIndexMap(headers) {
+  var col = {};
+  for (var i = 0; i < headers.length; i++) {
+    var name = normalizeHeaderName(headers[i]);
+    if (!name) continue;
+    if (col[name] == null) col[name] = i;
+    var lower = name.toLowerCase();
+    if (col[lower] == null) col[lower] = i;
+  }
+  return col;
+}
+
+/** Records: row 1 = day filter, row 2 = headers, row 3+ = values. */
+var RECORDS_HEADER_ROW = 2;
+var RECORDS_DATA_START = 3;
+
+function sheetLayout(sheetOrName) {
+  var name =
+    typeof sheetOrName === 'string'
+      ? sheetOrName
+      : sheetOrName && sheetOrName.getName
+        ? sheetOrName.getName()
+        : '';
+  if (String(name) === 'Records') {
+    return { headerRow: RECORDS_HEADER_ROW, dataStart: RECORDS_DATA_START };
+  }
+  return { headerRow: 1, dataStart: 2 };
+}
+
+function readSheetHeaders(sheet) {
+  var layout = sheetLayout(sheet);
+  var lastCol = Math.max(sheet.getLastColumn(), 1);
+  return sheet.getRange(layout.headerRow, 1, 1, lastCol).getValues()[0];
+}
+
 /**
  * Replace Into：以毫秒 id（或 timestamp_ms）為 Primary Key。
  * 優先找 header「id」欄；若無則使用第 1 欄。
+ * 同名欄只寫第一次出現的那格。Records：表頭第 2 列，資料第 3 列起。
  */
 function upsertRowById(obj, sheetName) {
   sheetName = sheetName || 'Records';
@@ -333,6 +387,7 @@ function upsertRowById(obj, sheetName) {
   if (!sheet) {
     sheet = doc.insertSheet(sheetName);
   }
+  var layout = sheetLayout(sheet);
 
   var id = obj.id !== undefined && obj.id !== null && obj.id !== ''
     ? String(obj.id)
@@ -344,70 +399,55 @@ function upsertRowById(obj, sheetName) {
     obj.id = id;
   }
 
-  var headerRange = sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), 1));
-  var headers = headerRange.getValues()[0];
-  var idCol = -1;
-  for (var h = 0; h < headers.length; h++) {
-    if (headers[h] && headers[h].toString().toLowerCase() === 'id') {
-      idCol = h;
-      break;
-    }
-  }
+  var headers = readSheetHeaders(sheet);
+  var idCol = findHeaderIndex(headers, 'id');
   if (idCol === -1) {
-    // 確保第一欄為 id
-    if (!headers[0] || headers[0].toString().trim() === '') {
-      sheet.getRange(1, 1).setValue('id');
-      headers[0] = 'id';
-    } else if (headers[0].toString().toLowerCase() !== 'id') {
-      sheet.insertColumnBefore(1);
-      sheet.getRange(1, 1).setValue('id');
-      headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
-    }
-    idCol = 0;
+    // Never insert/shift column A (Records row 2 starts with timestamp, not id).
+    var newIdCol = sheet.getLastColumn() + 1;
+    sheet.getRange(layout.headerRow, newIdCol).setValue('id');
+    headers = readSheetHeaders(sheet);
+    idCol = findHeaderIndex(headers, 'id');
+    if (idCol < 0) idCol = newIdCol - 1;
   }
 
   var lastRow = sheet.getLastRow();
   var existingRow = -1;
-  if (lastRow >= 2) {
-    var idValues = sheet.getRange(2, idCol + 1, lastRow, idCol + 1).getValues();
+  if (lastRow >= layout.dataStart) {
+    var nData = lastRow - layout.dataStart + 1;
+    var idValues = sheet.getRange(layout.dataStart, idCol + 1, nData, 1).getValues();
     for (var r = 0; r < idValues.length; r++) {
       if (String(idValues[r][0]) === id) {
-        existingRow = r + 2;
+        existingRow = r + layout.dataStart;
         break;
       }
     }
   }
 
-  // 確保 headers 含所有 keys
   var keys = Object.keys(obj);
   for (var i = 0; i < keys.length; i++) {
     var k = keys[i];
-    var found = false;
-    for (var j = 0; j < headers.length; j++) {
-      if (headers[j] && headers[j].toString() === k) {
-        found = true;
-        break;
-      }
-    }
-    if (!found) {
-      var newCol = sheet.getLastColumn() + 1;
-      sheet.getRange(1, newCol).setValue(k);
-      headers[newCol - 1] = k;
-    }
+    if (findHeaderIndex(headers, k) >= 0) continue;
+    var newCol = sheet.getLastColumn() + 1;
+    sheet.getRange(layout.headerRow, newCol).setValue(k);
+    headers[newCol - 1] = k;
   }
-  headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  headers = readSheetHeaders(sheet);
 
-  var targetRow = existingRow > 0 ? existingRow : sheet.getLastRow() + 1;
-  if (targetRow === 1) targetRow = 2;
+  var targetRow = existingRow > 0 ? existingRow : Math.max(sheet.getLastRow() + 1, layout.dataStart);
+  if (targetRow < layout.dataStart) targetRow = layout.dataStart;
 
-  for (var c = 0; c < headers.length; c++) {
-    var headerName = headers[c] ? headers[c].toString() : '';
-    if (!headerName) continue;
-    if (obj[headerName] !== undefined && obj[headerName] !== null) {
-      var val = obj[headerName];
-      if (typeof val === 'object') val = JSON.stringify(val);
-      sheet.getRange(targetRow, c + 1).setValue(val);
-    }
+  var written = {};
+  for (var ki = 0; ki < keys.length; ki++) {
+    var key = keys[ki];
+    if (obj[key] === undefined || obj[key] === null) continue;
+    var lower = String(key).toLowerCase();
+    if (written[lower]) continue;
+    var idx = findHeaderIndex(headers, key);
+    if (idx < 0) continue;
+    var val = obj[key];
+    if (typeof val === 'object') val = JSON.stringify(val);
+    sheet.getRange(targetRow, idx + 1).setValue(val);
+    written[lower] = true;
   }
 
   return { row: targetRow, updated: existingRow > 0, id: id };
@@ -511,8 +551,7 @@ function handleUpsertExpense(data) {
       try {
         var doc = SpreadsheetApp.openById(sheetId);
         var sheet = doc.getSheetByName('Records');
-        var headerRow = sheet.getRange('1:1').getValues()[0];
-        var photoUrlsIndex = headerRow.indexOf('photo_urls');
+        var photoUrlsIndex = findHeaderIndex(readSheetHeaders(sheet), 'photo_urls');
         if (photoUrlsIndex > -1) {
           sheet.getRange(upsert.row, photoUrlsIndex + 1).setValue(uploadedPhotoUrls.join(', '));
         }
@@ -588,14 +627,12 @@ function insertRowToSheet(obj, sheetName = 'Records'){
     var coorWrite = {};
     var doc = SpreadsheetApp.openById(sheetId);
     var sheet = doc.getSheetByName(sheetName);
-    // insert key to first row
-    var first_row_data = sheet.getRange('1:1').getValues();
-    var last_row_num = sheet.getLastRow();
-    last_row_num = parseInt(last_row_num)+1;
+    var layout = sheetLayout(sheet);
+    var first_row_data = readSheetHeaders(sheet);
+    var last_row_num = Math.max(sheet.getLastRow() + 1, layout.dataStart);
     var obj_key = Object.keys(obj);
     if (debug){ appendLog([obj_key]); appendLog(['first_row_data',first_row_data]); appendLog(['last_row_num',last_row_num]); }
     var first_row_last_column = 1;
-    first_row_data = first_row_data[0];
     for(var i = 0; i < first_row_data.length; i++){
       if(first_row_data[i].toString().trim() != ''){
         first_row_last_column++;
@@ -624,21 +661,21 @@ function insertRowToSheet(obj, sheetName = 'Records'){
         }
       }
       
-      // key exists at first row
-      if(_columnInFirstRow > -1 && last_row_num > 1){
+      // key exists at header row
+      if(_columnInFirstRow > -1 && last_row_num >= layout.dataStart){
         _columnInFirstRow++;
         _tmp = last_row_num +','+_columnInFirstRow;
         coorWrite[_tmp] = _v;
         if (debug){  appendLog(['keys exists in first_row: '+ _tmp+'='+_k]);}
       } else {
-        // append key in first row
-        _tmp = '1,'+first_row_last_column;
+        // append key in header row
+        _tmp = layout.headerRow +','+first_row_last_column;
         coorWrite[_tmp] = _k;
         if (debug){ appendLog(['keys need to insert to first_row: '+ _tmp+'='+_k]);}
 
         /* for value */
-        if(last_row_num == 1){
-          last_row_num++;
+        if(last_row_num < layout.dataStart){
+          last_row_num = layout.dataStart;
         }
         _tmp = last_row_num +','+first_row_last_column;
         coorWrite[_tmp] = _v;
@@ -3398,7 +3435,7 @@ function processDueObligations() {
 }
 
 var APP_PUBLIC_BASE = 'https://mike-sam.github.io/react-gh-pages';
-var EXPENSE_SUMMARY_PREFIX = 'expenseSummary_';
+var EXPENSE_SUMMARY_PREFIX = 'expenseSummary_v3_';
 var EXPENSE_SUMMARY_BOOTSTRAP = 'expenseSummaryBootstrapped';
 var EXPENSE_SUMMARY_MONTHS = 24;
 
@@ -3470,13 +3507,12 @@ function parseExpenseWhen(raw) {
 }
 
 function ensureSheetHeader(sheet, name) {
-  var lastCol = Math.max(sheet.getLastColumn(), 1);
-  var headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
-  for (var i = 0; i < headers.length; i++) {
-    if (String(headers[i]) === name) return i;
-  }
+  var layout = sheetLayout(sheet);
+  var headers = readSheetHeaders(sheet);
+  var idx = findHeaderIndex(headers, name);
+  if (idx >= 0) return idx;
   var col = sheet.getLastColumn() + 1;
-  sheet.getRange(1, col).setValue(name);
+  sheet.getRange(layout.headerRow, col).setValue(name);
   return col - 1;
 }
 
@@ -3500,7 +3536,7 @@ function syncExpenseCalendarEvent(data, upsert) {
   if (end.getTime() <= start.getTime()) end = new Date(start.getTime() + 60 * 60 * 1000);
   var sheet = SpreadsheetApp.openById(sheetId).getSheetByName('Records');
   var existingId = '';
-  if (upsert.row > 1 && sheet) {
+  if (upsert.row >= RECORDS_DATA_START && sheet) {
     existingId = String(readSheetCell(sheet, upsert.row, 'calendar_event_id') || '').trim();
   }
   var calendar = openTrackingCalendar();
@@ -3526,24 +3562,39 @@ function syncExpenseCalendarEvent(data, upsert) {
     ev = calendar.createEvent(title, start, end, { description: body, location: loc || undefined });
   }
   var eventId = ev && ev.getId ? String(ev.getId()) : '';
-  if (eventId && upsert.row > 1 && sheet) {
+  if (eventId && upsert.row >= RECORDS_DATA_START && sheet) {
     writeSheetCell(sheet, upsert.row, 'calendar_event_id', eventId);
   }
   return eventId;
 }
 
-/** Records 存 yyyyMM，報表用 yyyy-MM。讀寫都先正規化。 */
+/** Records 存 202610、2026-10，或 Sheets 日期。一律收成 yyyy-MM。 */
 function normalizeYearMonth(raw) {
   if (raw == null || raw === '') return '';
   if (Object.prototype.toString.call(raw) === '[object Date]' && !isNaN(raw.getTime())) {
-    return Utilities.formatDate(raw, Session.getScriptTimeZone(), 'yyyy-MM');
+    var y = raw.getFullYear();
+    if (y >= 1990 && y <= 2100) {
+      return Utilities.formatDate(raw, Session.getScriptTimeZone(), 'yyyy-MM');
+    }
+    return '';
   }
   var s = String(raw).trim();
-  var m = s.match(/^(\d{4})[-\/]?(\d{1,2})/);
-  if (!m) return '';
-  var month = ('0' + m[2]).slice(-2);
-  if (Number(month) < 1 || Number(month) > 12) return '';
-  return m[1] + '-' + month;
+  if (!s || s === '0') return '';
+  var compact = s.match(/^(\d{4})(\d{2})$/);
+  if (compact) {
+    var cm = Number(compact[2]);
+    if (cm >= 1 && cm <= 12) return compact[1] + '-' + compact[2];
+  }
+  var dashed = s.match(/^(\d{4})[-\/](\d{1,2})/);
+  if (dashed) {
+    var month = ('0' + dashed[2]).slice(-2);
+    if (Number(month) >= 1 && Number(month) <= 12) return dashed[1] + '-' + month;
+  }
+  var n = Number(s);
+  if (n >= 199001 && n <= 210012 && String(Math.floor(n)).length === 6) {
+    return normalizeYearMonth(String(Math.floor(n)));
+  }
+  return '';
 }
 
 function invalidateExpenseSummary(yearmonth) {
@@ -3564,15 +3615,19 @@ function sheetText(v) {
   return String(v);
 }
 
-function rowYearMonth(row, col) {
-  var tz = Session.getScriptTimeZone();
-  var ymCell = col.yearmonth != null ? row[col.yearmonth] : '';
-  var yearmonth = normalizeYearMonth(ymCell);
-  if (!yearmonth && col.timestamp != null && row[col.timestamp]) {
-    try {
-      yearmonth = normalizeYearMonth(row[col.timestamp]) ||
-        Utilities.formatDate(new Date(row[col.timestamp]), tz, 'yyyy-MM');
-    } catch (e) {}
+function rowYearMonth(row, col, displayRow) {
+  var ymIdx = col.yearmonth != null ? col.yearmonth : col.YearMonth;
+  var tsIdx = col.timestamp != null ? col.timestamp : col.Timestamp;
+  var yearmonth = '';
+  if (ymIdx != null) {
+    yearmonth =
+      normalizeYearMonth(displayRow ? displayRow[ymIdx] : '') ||
+      normalizeYearMonth(row[ymIdx]);
+  }
+  if (!yearmonth && tsIdx != null) {
+    yearmonth =
+      normalizeYearMonth(displayRow ? displayRow[tsIdx] : '') ||
+      normalizeYearMonth(row[tsIdx]);
   }
   return yearmonth;
 }
@@ -3596,19 +3651,22 @@ function recordFromSheetRow(row, col, yearmonth) {
   };
 }
 
-/** One pass. allowYm: object set of yyyy-MM, or null for all months. */
+/** Records: header row 2, data from row 3. Duplicate headers on the right are ignored. */
 function recordsGroupedByMonth(allowYm) {
   var grouped = {};
   var sheet = SpreadsheetApp.openById(sheetId).getSheetByName('Records');
-  if (!sheet || sheet.getLastRow() < 2) return grouped;
-  var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
-  var col = {};
-  for (var i = 0; i < headers.length; i++) col[String(headers[i])] = i;
-  var values = sheet.getRange(2, 1, sheet.getLastRow() - 1, headers.length).getValues();
+  if (!sheet || sheet.getLastRow() < RECORDS_DATA_START) return grouped;
+  var lastCol = sheet.getLastColumn();
+  var headers = readSheetHeaders(sheet);
+  var col = headerIndexMap(headers);
+  var nRows = sheet.getLastRow() - RECORDS_DATA_START + 1;
+  var range = sheet.getRange(RECORDS_DATA_START, 1, nRows, lastCol);
+  var values = range.getValues();
+  var displays = range.getDisplayValues();
   for (var r = 0; r < values.length; r++) {
-    var yearmonth = rowYearMonth(values[r], col);
+    var yearmonth = rowYearMonth(values[r], col, displays[r]);
     if (!yearmonth) continue;
-    if (allowYm && !allowYm[yearmonth]) continue;
+    if (allowYm && !allowYm[yearmonth] && !allowYm[String(yearmonth).replace('-', '')]) continue;
     if (!grouped[yearmonth]) grouped[yearmonth] = [];
     grouped[yearmonth].push(recordFromSheetRow(values[r], col, yearmonth));
   }
@@ -3616,12 +3674,33 @@ function recordsGroupedByMonth(allowYm) {
 }
 
 function recordsForYearMonth(ym) {
+  var n = normalizeYearMonth(ym) || String(ym || '').trim();
   var allow = {};
-  if (ym) allow[ym] = true;
-  var grouped = recordsGroupedByMonth(ym ? allow : null);
-  return ym ? grouped[ym] || [] : [].concat.apply([], Object.keys(grouped).map(function (k) {
-    return grouped[k];
-  }));
+  if (n) {
+    allow[n] = true;
+    allow[String(n).replace('-', '')] = true;
+  }
+  var grouped = recordsGroupedByMonth(n ? allow : null);
+  if (!n) {
+    return [].concat.apply([], Object.keys(grouped).map(function (k) {
+      return grouped[k];
+    }));
+  }
+  var a = grouped[n] || [];
+  var compact = String(n).replace('-', '');
+  var b = compact === n ? [] : grouped[compact] || [];
+  if (!b.length) return a;
+  if (!a.length) return b;
+  var seen = {};
+  var out = [];
+  var mix = a.concat(b);
+  for (var i = 0; i < mix.length; i++) {
+    var rid = String(mix[i].id || '');
+    if (rid && seen[rid]) continue;
+    if (rid) seen[rid] = true;
+    out.push(mix[i]);
+  }
+  return out;
 }
 
 function listRecentYearMonths(count) {
@@ -3826,12 +3905,13 @@ function backfillExpenseCalendarEvents() {
       try {
         var sheet = SpreadsheetApp.openById(sheetId).getSheetByName('Records');
         var rowNum = -1;
-        if (sheet && sheet.getLastRow() >= 2) {
+        if (sheet && sheet.getLastRow() >= RECORDS_DATA_START) {
           var idCol = ensureSheetHeader(sheet, 'id');
-          var ids = sheet.getRange(2, idCol + 1, sheet.getLastRow() - 1, 1).getValues();
+          var nIds = sheet.getLastRow() - RECORDS_DATA_START + 1;
+          var ids = sheet.getRange(RECORDS_DATA_START, idCol + 1, nIds, 1).getValues();
           for (var r = 0; r < ids.length; r++) {
             if (String(ids[r][0]) === rec.id) {
-              rowNum = r + 2;
+              rowNum = r + RECORDS_DATA_START;
               break;
             }
           }
