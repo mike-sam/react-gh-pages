@@ -35,6 +35,8 @@ const doGet = (event) => {
       return getMileageData(parameter.carPlate, parameter.group);
     case 'getKeyValue':
       return getKeyValue(parameter.key, parameter.group);
+    case 'getKeyValueGroup':
+      return getKeyValueGroup(parameter.group);
     case 'verifyAccess':
       return verifyAccess(parameter || {});
     case 'getLastExpense':
@@ -1843,6 +1845,12 @@ function getBootstrap() {
     out.fx = { date: '', rates: { MYR: 1 }, source: '' };
   }
   try {
+    out.expenseTags = collectKeyValueGroup('Expense');
+  } catch (e) {
+    out.expenseTagsError = e.toString();
+    out.expenseTags = {};
+  }
+  try {
     ensureAccessHashRow();
   } catch (e) {}
   return jsonOut(out);
@@ -2424,6 +2432,41 @@ function getKeyValueSheet() {
  * @param {string} key - 要获取的key
  * @param {string} group - Group名称，默认为'KeyValue'
  */
+function collectKeyValueGroup(group) {
+  var searchGroup = String(group || '').trim().toUpperCase();
+  var out = {};
+  if (!searchGroup) return out;
+  var sheet = getKeyValueSheet();
+  var data = sheet.getDataRange().getValues();
+  for (var i = 1; i < data.length; i++) {
+    var groupStr = data[i][0] ? String(data[i][0]).trim().toUpperCase() : '';
+    if (groupStr !== searchGroup) continue;
+    var keyStr = data[i][1] ? String(data[i][1]).trim() : '';
+    if (!keyStr) continue;
+    if (keyStr.toUpperCase() === ACCESS_HASH_KEY) continue;
+    out[keyStr] = data[i][2];
+  }
+  return out;
+}
+
+function getKeyValueGroup(group) {
+  try {
+    var searchGroup = String(group || 'Expense').trim() || 'Expense';
+    return jsonOut({
+      success: true,
+      group: searchGroup,
+      values: collectKeyValueGroup(searchGroup)
+    });
+  } catch (error) {
+    appendLog(['Error in getKeyValueGroup:', error.toString(), error.stack]);
+    return jsonOut({
+      success: false,
+      error: error.toString(),
+      values: {}
+    });
+  }
+}
+
 function getKeyValue(key, group) {
   try {
     // 如果没有指定group，默认为'KeyValue'
@@ -2451,7 +2494,7 @@ function getKeyValue(key, group) {
       const keyStr = keyCol ? keyCol.toString().trim().toUpperCase() : '';
       
       // 查找匹配的 Group 和 Key
-      if (groupStr === searchGroup && keyStr === searchKey) {
+      if (groupStr.toUpperCase() === String(searchGroup).toUpperCase() && keyStr === searchKey) {
         appendLog(['Key-Value found:', key, value, 'group:', searchGroup]);
         return ContentService.createTextOutput(JSON.stringify({
           success: true,
@@ -2518,7 +2561,7 @@ function setKeyValue(data) {
       const groupStr = rowGroup ? rowGroup.toString().trim() : '';
       const keyStr = keyCol ? keyCol.toString().trim().toUpperCase() : '';
       
-      if (groupStr === searchGroup && keyStr === searchKey) {
+      if (groupStr.toUpperCase() === String(searchGroup).toUpperCase() && keyStr === searchKey) {
         // 更新现有记录
         sheet.getRange(i + 1, 3).setValue(value); // 更新 Value 列
         sheet.getRange(i + 1, 4).setValue(currentTime); // 更新 Timestamp 列

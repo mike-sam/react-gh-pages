@@ -4,6 +4,7 @@ import { applyParkedByCar, DEFAULT_CAR_PLATES, isParkedFetchFresh } from './loca
 import { mergeLandmarkRegionsFromCloud } from './landmarkRegions';
 import { writeFxRates } from './fxRates';
 import { loadExpenseHistory } from './expenseHistory';
+import { applyExpenseTagsOverlay } from './expenseTags';
 
 export const BOOTSTRAP_FETCH_AT_KEY = 'appBootstrapFetchedAt';
 export const BOOTSTRAP_ATTEMPT_AT_KEY = 'appBootstrapAttemptAt';
@@ -256,6 +257,10 @@ function applyBootstrapPayload(data) {
   }
   if (data.fx && data.fx.rates && typeof data.fx.rates === 'object') {
     writeFxRates(data.fx);
+    applied = true;
+  }
+  if (data.expenseTags && typeof data.expenseTags === 'object') {
+    applyExpenseTagsOverlay(data.expenseTags);
     applied = true;
   }
   if (applied) markBootstrapFetched(Number(data.fetchedAt) || Date.now());

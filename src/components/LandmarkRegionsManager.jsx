@@ -39,6 +39,7 @@ import {
   newLandmarkId,
   PIN_ICON_DEFAULT,
   PIN_ICONS,
+  normalizePinIcon,
   pruneTombstonesAgainst,
   regionContains,
   regionOverlapsView,
@@ -676,6 +677,7 @@ function LandmarkRegionsManager() {
     const payload = {
       ...finalized,
       name,
+      icon: normalizePinIcon(finalized.icon || editDraft.icon),
       updatedAt: Date.now(),
       source: sheet ? 'sheet' : editDraft.source || 'local',
       id: prevDraft.id || finalized.id,
@@ -687,7 +689,10 @@ function LandmarkRegionsManager() {
       goBrowse();
       setNote('已儲存（本機）');
       fireRemote(async () => {
-        await saveSavedLocationRemote(payload);
+        await Promise.allSettled([
+          upsertLandmarkRegionRemote(payload),
+          saveSavedLocationRemote(payload),
+        ]);
         if (
           prevDraft.center &&
           (prevDraft.center.lat !== payload.center.lat ||
@@ -727,7 +732,7 @@ function LandmarkRegionsManager() {
         if (sheet || (row && inferShape(row) === SHAPE_POINT)) {
           tasks.push(deleteSavedLocationRemote(row));
         }
-        if (!sheet) tasks.push(deleteLandmarkRegionRemote(id));
+        if (id) tasks.push(deleteLandmarkRegionRemote(id));
         await Promise.allSettled(tasks);
       }, '已刪本機，雲端同步失敗');
     } catch (err) {

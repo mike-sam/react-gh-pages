@@ -1,7 +1,7 @@
 import React, { useRef, useState } from 'react';
-import { compressReceiptFile } from '../utils/aiSuggest';
+import { compressReceiptFile, formatReceiptSizePair } from '../utils/receiptPhoto';
 
-/** 📷 拍照 / 🖼️ 相冊 → 壓縮後交給記帳表單。AI 建議在照片上另按。 */
+/** 📷 拍照 / 🖼️ 相冊 → 先做成可再裁切／調壓縮的工作圖。 */
 function CameraAICapture({ onPhotoReady }) {
   const cameraRef = useRef(null);
   const albumRef = useRef(null);
@@ -11,17 +11,16 @@ function CameraAICapture({ onPhotoReady }) {
   const processFile = async (file) => {
     if (!file) return;
     setBusy(true);
-    setHint('壓縮中…');
+    setHint('處理中…');
     try {
       const photo = await compressReceiptFile(file);
       onPhotoReady?.(photo);
-      const kb = Math.max(1, Math.round((photo.compressedSize || 0) / 1024));
-      setHint(`${kb} KB`);
+      setHint(`${formatReceiptSizePair(photo.compressedSize, photo.originalSize)} · 可再裁切`);
     } catch (err) {
       setHint(err.message || '處理失敗');
     } finally {
       setBusy(false);
-      setTimeout(() => setHint(''), 2500);
+      setTimeout(() => setHint(''), 2800);
     }
   };
 

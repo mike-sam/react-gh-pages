@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import PageChrome from '../components/PageChrome';
 import TagSelector from '../TagSelector';
 import { useOfflineQueue } from '../context/QueueContext';
-import { EXPENSE_TAGS } from '../config';
 import {
   DIRECTIONS,
   INTEREST_METHODS,
@@ -152,7 +151,6 @@ function ObligationForm({ draft, setDraft, onCancel, onSave, saving }) {
               tag: typeof next === 'function' ? next(d.tag) : next,
             }))
           }
-          tags={EXPENSE_TAGS}
         />
       </div>
       <p className="obligation-empty">到期入帳會用這個主分類／子分類，和「單筆」同一套。</p>

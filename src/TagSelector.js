@@ -1,5 +1,5 @@
 import React, { useState, useRef, useLayoutEffect, useEffect } from 'react';
-import { SECONDARY_TAGS } from './config';
+import { useExpenseTags } from './utils/expenseTags';
 import { createDoubleSpaceHandler, focusElement } from './utils/keyboardNavigation';
 
 const COLLAPSE_MS = 220;
@@ -12,7 +12,11 @@ function TagSelector({
   selectedTag,
   setSelectedTag,
   tags,
+  secondaryTags,
 }) {
+  const live = useExpenseTags();
+  const catList = tags?.length ? tags : live.cats;
+  const subMap = secondaryTags || live.subcats;
   const [showManualInput, setShowManualInput] = useState(false);
   const initiallyComplete = Boolean(selectedTag && String(input || '').trim());
   /** expanded | collapsing | collapsed */
@@ -21,7 +25,7 @@ function TagSelector({
   const collapseTimer = useRef(null);
 
   const secondaryList =
-    selectedTag && SECONDARY_TAGS[selectedTag] ? SECONDARY_TAGS[selectedTag] : [];
+    selectedTag && subMap[selectedTag] ? subMap[selectedTag] : [];
   const hasSecondaryList = secondaryList.length > 0;
   const selectionComplete = Boolean(selectedTag && input && input.trim());
   const isPresetSubcat = hasSecondaryList && secondaryList.includes(input);
@@ -173,7 +177,7 @@ function TagSelector({
       <div className="tag-level tag-level--cat">
         <div className="tag-level-label">主分類</div>
         <div className="tag-container tag-container--cats">
-          {tags.map((tag) => (
+          {catList.map((tag) => (
             <button
               type="button"
               key={tag}

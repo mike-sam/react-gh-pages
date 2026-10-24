@@ -1,12 +1,14 @@
-import imageCompression from 'browser-image-compression';
-import { API_ENDPOINTS, EXPENSE_TAGS, SECONDARY_TAGS } from '../config';
+import { API_ENDPOINTS } from '../config';
+import { getExpenseTagPack } from './expenseTags';
+
+export { compressReceiptFile, fileToDataUrl } from './receiptPhoto';
 
 export const RECEIPT_COMPRESS = {
-  maxSizeMB: 0.08,
-  maxWidthOrHeight: 960,
+  maxSizeMB: 0.32,
+  maxWidthOrHeight: 1600,
   useWebWorker: true,
   fileType: 'image/jpeg',
-  initialQuality: 0.62,
+  initialQuality: 0.78,
 };
 
 export const DEFAULT_OPENAI_MODEL = 'gpt-4o-mini';
@@ -119,7 +121,7 @@ export function receiptHints({ tag, when } = {}) {
   const whenStr = String(when || '').trim();
   const hm = whenStr.match(/\b(\d{1,2}):(\d{2})\b/);
   const meal = hm ? mealTitleForHour(Number(hm[1])) : '';
-  const foodSubs = (SECONDARY_TAGS['餐饮美食'] || []).join('、');
+  const foodSubs = (getExpenseTagPack().subcats['餐饮美食'] || []).join('、');
   const lines = [];
   if (whenStr) lines.push(`記帳時間: ${whenStr}`);
   lines.push(
@@ -161,59 +163,6 @@ export function parseReceiptTime(raw, fallbackDate) {
   }
   const native = new Date(s);
   return Number.isNaN(native.getTime()) ? null : native;
-}
-
-export function fileToDataUrl(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ''));
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-}
-
-function splitDataUrl(dataUrl) {
-  const raw = String(dataUrl || '');
-  const i = raw.indexOf(',');
-  if (i === -1) return { preview: `data:image/jpeg;base64,${raw}`, base64: raw };
-  return { preview: raw, base64: raw.slice(i + 1) };
-}
-
-async function compressOnce(file, opts) {
-  try {
-    return await imageCompression(file, opts);
-  } catch {
-    return await imageCompression(file, { ...opts, useWebWorker: false });
-  }
-}
-
-export async function compressReceiptFile(file) {
-  if (!file) return null;
-  let out = file;
-  try {
-    out = await compressOnce(file, RECEIPT_COMPRESS);
-    if ((out.size || 0) > 100 * 1024) {
-      out = await compressOnce(out, {
-        ...RECEIPT_COMPRESS,
-        maxSizeMB: 0.05,
-        maxWidthOrHeight: 800,
-        initialQuality: 0.5,
-      });
-    }
-  } catch {
-    if (file.size > 400 * 1024) throw new Error('圖片壓縮失敗，請換一張較小的圖');
-    out = file;
-  }
-  const dataUrl = await fileToDataUrl(out);
-  const { preview, base64 } = splitDataUrl(dataUrl);
-  return {
-    preview,
-    base64,
-    filename: (file.name || `photo_${Date.now()}`).replace(/\.[^.]+$/, '') + '.jpg',
-    originalSize: file.size,
-    compressedSize: out.size || file.size,
-    type: 'image/jpeg',
-  };
 }
 
 function fetchErrorMessage(err) {
@@ -352,8 +301,8 @@ export function receiptPromptFor(tag, title, template, when) {
     title: title || '',
     when: when || '',
     fields: fieldsForExpense(tag, title),
-    allowedTags: EXPENSE_TAGS,
-    allowedSubcats: SECONDARY_TAGS,
+    allowedTags: getExpenseTagPack().cats,
+    allowedSubcats: getExpenseTagPack().subcats,
   });
 }
 
@@ -944,8 +893,8 @@ export async function analyzeReceiptPhoto(photo, { tag, title, promptTemplate, w
     title: title || '',
     when: when || '',
     fields: fieldsForExpense(tag, title),
-    allowedTags: EXPENSE_TAGS,
-    allowedSubcats: SECONDARY_TAGS,
+    allowedTags: getExpenseTagPack().cats,
+    allowedSubcats: getExpenseTagPack().subcats,
   });
   const mimeType = photo.type || 'image/jpeg';
   const base64 = photo.base64;
@@ -1040,15 +989,16 @@ function asAmount(v) {
 function matchTag(raw) {
   const s = String(raw || '').trim();
   if (!s) return '';
-  if (EXPENSE_TAGS.includes(s)) return s;
-  const found = EXPENSE_TAGS.find((t) => t === s || s.includes(t) || t.includes(s));
+  const tags = getExpenseTagPack().cats;
+  if (tags.includes(s)) return s;
+  const found = tags.find((t) => t === s || s.includes(t) || t.includes(s));
   return found || '';
 }
 
 function matchTitle(tag, raw) {
   const s = String(raw || '').trim();
   if (!s) return '';
-  const list = SECONDARY_TAGS[tag] || [];
+  const list = getExpenseTagPack().subcats[tag] || [];
   if (list.includes(s)) return s;
   const found = list.find((t) => t === s || s.includes(t) || t.includes(s));
   return found || '';

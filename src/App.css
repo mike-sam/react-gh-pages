@@ -2170,8 +2170,9 @@
 
 .photo-display-img {
   width: 100%;
-  height: 120px;
-  object-fit: cover;
+  height: 160px;
+  object-fit: contain;
+  background: #111;
   border-radius: 6px;
   margin-bottom: 8px;
 }
@@ -2406,7 +2407,7 @@
   }
   
   .photo-display-img {
-    height: 100px;
+    height: 140px;
   }
 }
 
@@ -8984,6 +8985,155 @@ input,textarea {
 }
 .camera-ai-btn:disabled { opacity: 0.6; cursor: not-allowed; }
 .camera-ai-hint { font-size: 11px; color: var(--text-muted); }
+.photo-display-open {
+  appearance: none;
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: zoom-in;
+}
+.photo-display-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+.receipt-editor-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+.receipt-editor-sheet {
+  width: min(560px, 100%);
+  max-height: 96vh;
+  overflow: auto;
+  background: var(--bg-elevated, #fff);
+  color: var(--text, #222);
+  border-radius: 16px 16px 0 0;
+  padding: 12px 14px 20px;
+}
+.receipt-editor-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.receipt-editor-head strong { flex: 1; }
+.receipt-editor-size {
+  font-size: 12px;
+  color: var(--text-muted, #666);
+  white-space: nowrap;
+}
+.receipt-editor-text,
+.receipt-editor-apply,
+.receipt-editor-presets button,
+.receipt-editor-tabs button {
+  appearance: none;
+  border: 1px solid var(--border, #d0d7de);
+  background: var(--bg, #fff);
+  color: var(--text, #222);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.receipt-editor-apply {
+  background: var(--accent, #1a73e8);
+  color: #fff;
+  border-color: transparent;
+}
+.receipt-editor-apply:disabled { opacity: 0.55; }
+.receipt-editor-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.receipt-editor-tabs button.is-on,
+.receipt-editor-presets button.is-on {
+  border-color: var(--accent, #1a73e8);
+  color: var(--accent, #1a73e8);
+  background: var(--accent-soft, #e8f0fe);
+}
+.receipt-crop-stage,
+.receipt-preview-stage {
+  background: #111;
+  border-radius: 10px;
+  min-height: 220px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+.receipt-crop-frame {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+}
+.receipt-crop-frame img,
+.receipt-preview-stage img {
+  display: block;
+  max-width: 100%;
+  max-height: 42vh;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+.receipt-crop-layer {
+  position: absolute;
+  inset: 0;
+  touch-action: none;
+}
+.receipt-crop-box {
+  position: absolute;
+  border: 2px solid #7cbcff;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.42);
+  touch-action: none;
+}
+.receipt-crop-handle {
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  background: #fff;
+  border: 2px solid #1a73e8;
+  border-radius: 3px;
+  z-index: 1;
+}
+.receipt-crop-handle.is-nw { left: -9px; top: -9px; cursor: nwse-resize; }
+.receipt-crop-handle.is-ne { right: -9px; top: -9px; cursor: nesw-resize; }
+.receipt-crop-handle.is-sw { left: -9px; bottom: -9px; cursor: nesw-resize; }
+.receipt-crop-handle.is-se { right: -9px; bottom: -9px; cursor: nwse-resize; }
+.receipt-crop-handle.is-n { left: 50%; top: -9px; margin-left: -9px; cursor: ns-resize; }
+.receipt-crop-handle.is-s { left: 50%; bottom: -9px; margin-left: -9px; cursor: ns-resize; }
+.receipt-crop-handle.is-w { left: -9px; top: 50%; margin-top: -9px; cursor: ew-resize; }
+.receipt-crop-handle.is-e { right: -9px; top: 50%; margin-top: -9px; cursor: ew-resize; }
+.receipt-editor-controls { margin-top: 10px; }
+.receipt-editor-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.receipt-editor-slider {
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-muted, #666);
+  margin-bottom: 8px;
+}
+.receipt-editor-slider input { width: 100%; }
+.receipt-editor-hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted, #666);
+}
+@media (min-width: 720px) {
+  .receipt-editor-overlay { align-items: center; }
+  .receipt-editor-sheet { border-radius: 16px; }
+}
 .expense-footer-meta {
   display: flex; justify-content: flex-end; align-items: center;
   margin-top: 18px; padding-top: 8px; border-top: 1px solid var(--border);

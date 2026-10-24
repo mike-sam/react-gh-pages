@@ -1,7 +1,21 @@
+import { markBootstrapDirty } from './appBootstrap';
+import { clearExpenseTagsCache } from './expenseTags';
+
 /**
  * Clear Cache Storage + unregister Service Workers, then hard-reload with timestamp.
+ * Next load runs bootstrap (分類 KeyValue 一併更新).
  */
 export async function forceReload() {
+  try {
+    clearExpenseTagsCache();
+  } catch {
+    /* ignore */
+  }
+  try {
+    markBootstrapDirty();
+  } catch {
+    /* ignore */
+  }
   try {
     if (typeof caches !== 'undefined' && caches?.keys) {
       const keys = await caches.keys();

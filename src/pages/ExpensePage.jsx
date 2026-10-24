@@ -4,13 +4,13 @@ import Remark from '../Remark';
 import Log from '../Log';
 import Output from '../Output';
 import '../App.css';
-import { EXPENSE_TAGS } from '../config';
 import ExpenseDateTimeRow from '../components/ExpenseDateTimeRow';
 import { focusElement } from '../utils/keyboardNavigation';
 import PageChrome from '../components/PageChrome';
 import AmountTripleRow from '../components/AmountTripleRow';
 import TaxAddonStrip, { computeFinalAmount, formatTaxAddonTags } from '../components/TaxAddonStrip';
 import CameraAICapture from '../components/CameraAICapture';
+import ReceiptPhotoEditor from '../components/ReceiptPhotoEditor';
 import { useOfflineQueue } from '../context/QueueContext';
 import {
   analyzeReceiptPhoto,
@@ -62,6 +62,7 @@ import { ObligationsPanel } from './ObligationsPage';
 import ExpenseSummary from '../components/ExpenseSummary';
 import { invalidateExpenseSummaryCache } from '../utils/expenseSummary';
 import { invalidateEatPlacesCache } from '../utils/eatPlaces';
+import { formatReceiptSize } from '../utils/receiptPhoto';
 
 function ledgerFromLocation() {
   if (getHashPath() === ROUTES.OBLIGATIONS) return 'scheduled';
@@ -85,7 +86,6 @@ function ExpensePage() {
   const [draftReady, setDraftReady] = useState(false);
 
   const [selectedTag, setSelectedTag] = useState(boot?.selectedTag || null);
-  const tags = EXPENSE_TAGS;
   const [input, setInput] = useState(boot?.input || '');
   const [remark, setRemark] = useState(boot?.remark || '');
   const [carPlate, setCarPlate] = useState(boot?.carPlate || '');
@@ -106,6 +106,7 @@ function ExpensePage() {
   const [paymentMethod, setPaymentMethod] = useState(boot?.paymentMethod || '');
   const [simpleDescription, setSimpleDescription] = useState(boot?.simpleDescription || '');
   const [photos, setPhotos] = useState(() => (Array.isArray(boot?.photos) ? boot.photos : []));
+  const [editPhotoIndex, setEditPhotoIndex] = useState(-1);
   /** When set, submit keeps this id → GAS Replace Into（編輯既有筆） */
   const [editingId, setEditingId] = useState(boot?.editingId ?? null);
   /** Tax/service addons — do not mutate main amount input */
@@ -1066,7 +1067,6 @@ function ExpensePage() {
             setAmount={setAmount}
             selectedTag={selectedTag}
             setSelectedTag={handleSetSelectedTag}
-            tags={tags}
           />
         </div>
 
@@ -1111,7 +1111,11 @@ function ExpensePage() {
               leading={
                 <CameraAICapture
                   onPhotoReady={(photoData) => {
-                    setPhotos((prev) => [...prev, photoData]);
+                    setPhotos((prev) => {
+                      const next = [...prev, photoData];
+                      setEditPhotoIndex(next.length - 1);
+                      return next;
+                    });
                   }}
                 />
               }
@@ -1225,30 +1229,48 @@ function ExpensePage() {
                   key={index}
                   className={`photo-display-item${aiBusyIndex === index ? ' is-ai-busy' : ''}${aiPicked && aiMeta.photoIndex === index ? ' is-ai-picked' : ''}`}
                 >
-                  <img src={photo.preview} alt={`照片 ${index + 1}`} className="photo-display-img" />
+                  <button
+                    type="button"
+                    className="photo-display-open"
+                    onClick={() => setEditPhotoIndex(index)}
+                    title="裁切／調壓縮"
+                  >
+                    <img src={photo.preview} alt={`照片 ${index + 1}`} className="photo-display-img" />
+                  </button>
                   <div className="photo-display-info">
                     <span className="photo-display-name">{photo.filename}</span>
                     <span className="photo-display-size">
-                      {`壓縮後 ${formatFileSize(photo.compressedSize || photo.originalSize)}`}
-                      {photo.compressedSize && photo.originalSize
-                        ? ` / 原圖 ${formatFileSize(photo.originalSize)}`
+                      {`送出 ${formatReceiptSize(photo.compressedSize || photo.originalSize)}`}
+                      {photo.originalSize
+                        ? ` · 原圖 ${formatReceiptSize(photo.originalSize)}`
                         : ''}
                     </span>
                   </div>
-                  <button
-                    type="button"
-                    className="photo-ai-btn"
-                    disabled={aiBusyIndex >= 0}
-                    onClick={() => askAiForPhoto(index)}
-                  >
-                    {aiBusyIndex === index ? '辨識中…' : '建議'}
-                  </button>
+                  <div className="photo-display-actions">
+                    <button
+                      type="button"
+                      className="photo-ai-btn"
+                      onClick={() => setEditPhotoIndex(index)}
+                    >
+                      裁切／壓縮
+                    </button>
+                    <button
+                      type="button"
+                      className="photo-ai-btn"
+                      disabled={aiBusyIndex >= 0}
+                      onClick={() => askAiForPhoto(index)}
+                    >
+                      {aiBusyIndex === index ? '辨識中…' : '建議'}
+                    </button>
+                  </div>
                   <button
                     type="button"
                     className="photo-display-remove"
                     onClick={() => {
                       const next = photos.filter((_, i) => i !== index);
                       setPhotos(next);
+                      if (editPhotoIndex === index) setEditPhotoIndex(-1);
+                      else if (editPhotoIndex > index) setEditPhotoIndex((n) => n - 1);
                       if (aiMeta.photoIndex === index) {
                         setAiSuggestions([]);
                         setAiError('');
@@ -1264,6 +1286,16 @@ function ExpensePage() {
             </div>
           </div>
         )}
+        {editPhotoIndex >= 0 && photos[editPhotoIndex] ? (
+          <ReceiptPhotoEditor
+            photo={photos[editPhotoIndex]}
+            onClose={() => setEditPhotoIndex(-1)}
+            onApply={(next) => {
+              setPhotos((list) => list.map((p, i) => (i === editPhotoIndex ? next : p)));
+              setEditPhotoIndex(-1);
+            }}
+          />
+        ) : null}
         {(aiError || aiMeta.prompt || aiSuggestions.length > 0 || aiCalAsk || aiPicked) && (
           <div className="ai-suggest-follow">
             {(aiError || aiMeta.prompt || aiSuggestions.length > 0) && (

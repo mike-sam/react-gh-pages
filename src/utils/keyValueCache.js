@@ -9,14 +9,16 @@ const ONE_DAY = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
  * @param {string} key - 要获取的key
  * @returns {Promise<{success: boolean, value: any, updatedAt: string|null}>}
  */
-export async function getKeyValue(key) {
+export async function getKeyValue(key, group) {
   if (!key) {
     return { success: false, value: null, error: 'Key is required' };
   }
 
+  const groupName = String(group || '').trim();
+  const cacheId = groupName ? `${groupName}::${key}` : key;
   // 检查缓存
-  const cacheKey = CACHE_PREFIX + key;
-  const timestampKey = CACHE_TIMESTAMP_PREFIX + key;
+  const cacheKey = CACHE_PREFIX + cacheId;
+  const timestampKey = CACHE_TIMESTAMP_PREFIX + cacheId;
   const cached = localStorage.getItem(cacheKey);
   const cacheTimestamp = localStorage.getItem(timestampKey);
   const now = new Date().getTime();
@@ -36,6 +38,7 @@ export async function getKeyValue(key) {
     const url = new URL(API_ENDPOINTS.KEY_VALUE);
     url.searchParams.append('action', 'getKeyValue');
     url.searchParams.append('key', key);
+    if (groupName) url.searchParams.append('group', groupName);
 
     const response = await fetch(url.toString());
     const data = await response.json();
@@ -69,11 +72,13 @@ export async function getKeyValue(key) {
  * @param {any} value - 要设置的值
  * @returns {Promise<{success: boolean, value: any, updatedAt: string|null}>}
  */
-export async function setKeyValue(key, value) {
+export async function setKeyValue(key, value, group) {
   if (!key) {
     return { success: false, value: null, error: 'Key is required' };
   }
 
+  const groupName = String(group || '').trim();
+  const cacheId = groupName ? `${groupName}::${key}` : key;
   try {
     const response = await fetch(API_ENDPOINTS.KEY_VALUE, {
       method: 'POST',
@@ -83,7 +88,8 @@ export async function setKeyValue(key, value) {
       body: JSON.stringify({
         action: 'setKeyValue',
         key: key,
-        value: value
+        value: value,
+        ...(groupName ? { group: groupName } : {}),
       })
     });
 
@@ -91,8 +97,8 @@ export async function setKeyValue(key, value) {
 
     if (data.success) {
       // 更新缓存
-      const cacheKey = CACHE_PREFIX + key;
-      const timestampKey = CACHE_TIMESTAMP_PREFIX + key;
+      const cacheKey = CACHE_PREFIX + cacheId;
+      const timestampKey = CACHE_TIMESTAMP_PREFIX + cacheId;
       const now = new Date().getTime();
       localStorage.setItem(cacheKey, JSON.stringify({ value: data.value, updatedAt: data.updatedAt }));
       localStorage.setItem(timestampKey, now.toString());

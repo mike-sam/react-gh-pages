@@ -159,6 +159,8 @@ export function saveExpenseDraft(form) {
   };
   try {
     if (write(snap.photos)) return true;
+    const slim = (snap.photos || []).map(({ sourcePreview, ...rest }) => rest);
+    if (write(slim)) return true;
     return write([]);
   } catch {
     try {

@@ -213,6 +213,13 @@ export function normalizePinIcon(value) {
   return PIN_ICONS.some((p) => p.id === id) ? id : PIN_ICON_DEFAULT;
 }
 
+/** Prefer a chosen icon over the default 地標 glyph. */
+export function preferPinIcon(primary, fallback) {
+  const a = normalizePinIcon(primary);
+  if (a !== PIN_ICON_DEFAULT) return a;
+  return normalizePinIcon(fallback);
+}
+
 export function pinIconMeta(value) {
   const id = normalizePinIcon(value);
   return PIN_ICONS.find((p) => p.id === id) || PIN_ICONS[0];
@@ -1060,6 +1067,7 @@ export function absorbPointTwins(saved, previousCenter) {
   const keep = {
     ...saved,
     id: saved.id,
+    icon: normalizePinIcon(saved.icon),
     updatedAt: Date.now(),
   };
   const regions = loadLandmarkRegions().filter((r) => !isPointTwin(r, keep, previousCenter));
@@ -1182,6 +1190,12 @@ export function saveSheetPlaces(list) {
  * Merge cloud list into local (cloud wins if newer or same id).
  * @param {LandmarkRegion[]} cloud
  */
+function keepRicherIcon(winner, loser) {
+  if (!winner) return loser;
+  if (!loser) return winner;
+  return { ...winner, icon: preferPinIcon(winner.icon, loser.icon) };
+}
+
 export function mergeLandmarkRegionsFromCloud(cloud) {
   const local = loadLandmarkRegions();
   const byId = new Map(local.map((r) => [r.id, r]));
@@ -1190,17 +1204,33 @@ export function mergeLandmarkRegionsFromCloud(cloud) {
     if (!r) return;
     const prev = byId.get(r.id);
     if (prev) {
-      if ((r.updatedAt || 0) >= (prev.updatedAt || 0)) byId.set(r.id, r);
+      const newer = (r.updatedAt || 0) >= (prev.updatedAt || 0) ? r : prev;
+      const older = newer === r ? prev : r;
+      byId.set(r.id, keepRicherIcon(newer, older));
       return;
     }
     const similar = findSimilarNamed(Array.from(byId.values()), r.name, r.center);
-    if (similar) return;
+    if (similar) {
+      byId.set(similar.id, keepRicherIcon(similar, r));
+      return;
+    }
     byId.set(r.id, r);
   });
   const merged = filterLivePlaces(Array.from(byId.values()));
   saveLandmarkRegions(merged);
   markLandmarkRegionsFetched();
   return merged;
+}
+
+/** Location sheet has no icon column — copy a chosen glyph from matching local pins. */
+export function overlayLocalPinIcons(pins) {
+  const local = loadLandmarkRegions().filter(isNamedPoint);
+  return (pins || []).map((p) => {
+    if (!p) return p;
+    const hit = local.find((r) => r.id === p.id || isPointTwin(r, p));
+    if (!hit) return p;
+    return { ...p, icon: preferPinIcon(p.icon, hit.icon) };
+  });
 }
 
 function asLegacyMatch(p, nearbyM) {
@@ -1374,7 +1404,7 @@ export async function fetchSavedLocations() {
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data = await res.json();
   if (!data?.success) return [];
-  return (data.locations || []).map(savedLocationToPoint).filter(Boolean);
+  return overlayLocalPinIcons((data.locations || []).map(savedLocationToPoint).filter(Boolean));
 }
 
 export async function saveSavedLocationRemote(place) {
