@@ -1845,7 +1845,7 @@ function getBootstrap() {
     out.fx = { date: '', rates: { MYR: 1 }, source: '' };
   }
   try {
-    out.expenseTags = collectKeyValueGroup('Expense');
+    out.expenseTags = ensureExpenseTagDefaults_();
   } catch (e) {
     out.expenseTagsError = e.toString();
     out.expenseTags = {};
@@ -2432,6 +2432,48 @@ function getKeyValueSheet() {
  * @param {string} key - 要获取的key
  * @param {string} group - Group名称，默认为'KeyValue'
  */
+/** Keep in sync with src/config.js EXPENSE_TAGS / SECONDARY_TAGS. */
+function defaultExpenseTagRows_() {
+  return {
+    Cats: '餐饮美食,日常购物,医疗保健,交通出行,自我增值,投资金融,休闲娱乐,仪容服饰,旅游放松,水电气网,人情往来,居家生活,宠物,其他',
+    '餐饮美食': '早餐,午餐,晚餐,零食,饮料,外卖,聚餐',
+    '日常购物': '超市,便利店,3C电子产品(含配件),家居用品',
+    '医疗保健': '药品,医疗检查,健康保险',
+    '交通出行': '公共交通,Taxi/Grab,打油,洗车美容,维修保养,停车费,车贷,车险',
+    '自我增值': '教育培训,书籍,订阅服务',
+    '休闲娱乐': '电影,音乐,游戏,运动',
+    '仪容服饰': '理发,服装,化妆品,美容护理',
+    '旅游放松': '旅行,酒店,景点门票',
+    '水电气网': '水费,电费,燃气费,网络费',
+    '投资金融': '股票,基金,债券,理财产品',
+    '人情往来': '礼物,红包',
+    '居家生活': '家具,家电,装修,房贷,房租,物业管理费',
+    '宠物': '宠物食品,宠物用品,宠物医疗'
+  };
+}
+
+function ensureExpenseTagDefaults_() {
+  var existing = collectKeyValueGroup('Expense');
+  var defaults = defaultExpenseTagRows_();
+  var have = {};
+  Object.keys(existing).forEach(function (k) {
+    have[String(k).trim().toUpperCase()] = true;
+  });
+  var missing = [];
+  Object.keys(defaults).forEach(function (key) {
+    if (!have[String(key).trim().toUpperCase()]) missing.push(key);
+  });
+  if (!missing.length) return existing;
+  var sheet = getKeyValueSheet();
+  var now = datetimetoYMDHIS();
+  var rows = missing.map(function (key) {
+    return ['Expense', key, defaults[key], now, 'seed'];
+  });
+  sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, 5).setValues(rows);
+  appendLog(['ensureExpenseTagDefaults_ seeded', missing.join(',')]);
+  return collectKeyValueGroup('Expense');
+}
+
 function collectKeyValueGroup(group) {
   var searchGroup = String(group || '').trim().toUpperCase();
   var out = {};
@@ -2452,10 +2494,14 @@ function collectKeyValueGroup(group) {
 function getKeyValueGroup(group) {
   try {
     var searchGroup = String(group || 'Expense').trim() || 'Expense';
+    var values =
+      String(searchGroup).toUpperCase() === 'EXPENSE'
+        ? ensureExpenseTagDefaults_()
+        : collectKeyValueGroup(searchGroup);
     return jsonOut({
       success: true,
       group: searchGroup,
-      values: collectKeyValueGroup(searchGroup)
+      values: values
     });
   } catch (error) {
     appendLog(['Error in getKeyValueGroup:', error.toString(), error.stack]);
