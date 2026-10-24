@@ -43,6 +43,47 @@ export function isFullCrop(crop) {
   return c.x <= 0.002 && c.y <= 0.002 && c.w >= 0.996 && c.h >= 0.996;
 }
 
+export function normalizeRotation(deg) {
+  const n = Math.round(Number(deg) / 90) * 90;
+  if (!Number.isFinite(n)) return 0;
+  return ((n % 360) + 360) % 360;
+}
+
+/** Crop is in the currently displayed (already rotated) space. */
+export function mapCropForRotate(crop, deltaDeg) {
+  const c = normalizeCrop(crop);
+  const d = normalizeRotation(deltaDeg);
+  if (d === 90) return normalizeCrop({ x: 1 - c.y - c.h, y: c.x, w: c.h, h: c.w });
+  if (d === 180) return normalizeCrop({ x: 1 - c.x - c.w, y: 1 - c.y - c.h, w: c.w, h: c.h });
+  if (d === 270) return normalizeCrop({ x: c.y, y: 1 - c.x - c.w, w: c.h, h: c.w });
+  return c;
+}
+
+function orientedCanvas(img, rotation) {
+  const rot = normalizeRotation(rotation);
+  const nw = img.naturalWidth || img.width;
+  const nh = img.naturalHeight || img.height;
+  const canvas = document.createElement('canvas');
+  canvas.width = rot === 90 || rot === 270 ? nh : nw;
+  canvas.height = rot === 90 || rot === 270 ? nw : nh;
+  const ctx = canvas.getContext('2d');
+  if (rot) {
+    ctx.translate(canvas.width / 2, canvas.height / 2);
+    ctx.rotate((rot * Math.PI) / 180);
+    ctx.drawImage(img, -nw / 2, -nh / 2);
+  } else {
+    ctx.drawImage(img, 0, 0);
+  }
+  return canvas;
+}
+
+export async function orientedReceiptPreview(sourcePreview, rotation) {
+  const rot = normalizeRotation(rotation);
+  if (!rot) return sourcePreview;
+  const img = await loadHtmlImage(sourcePreview);
+  return orientedCanvas(img, rot).toDataURL('image/jpeg', 0.92);
+}
+
 export function loadReceiptPrefs() {
   try {
     const raw = JSON.parse(localStorage.getItem(RECEIPT_PREFS_KEY) || 'null');
@@ -184,6 +225,7 @@ async function blobToPhoto(blob, meta) {
       maxEdge: meta.maxEdge,
       maxBytes: meta.maxBytes,
       crop: normalizeCrop(meta.crop),
+      rotation: normalizeRotation(meta.rotation),
     },
   };
 }
@@ -212,6 +254,7 @@ export async function renderReceiptPhoto({
   originalSize = 0,
   sourceSize = 0,
   crop = FULL_CROP,
+  rotation = 0,
   quality = DEFAULT_RECEIPT_PREFS.quality,
   maxEdge = DEFAULT_RECEIPT_PREFS.maxEdge,
   maxBytes = DEFAULT_RECEIPT_PREFS.maxBytes,
@@ -219,9 +262,11 @@ export async function renderReceiptPhoto({
 } = {}) {
   if (!sourcePreview) throw new Error('沒有原圖');
   const img = await loadHtmlImage(sourcePreview);
+  const rot = normalizeRotation(rotation);
+  const oriented = rot ? orientedCanvas(img, rot) : img;
   const box = normalizeCrop(crop);
-  const nw = img.naturalWidth || img.width;
-  const nh = img.naturalHeight || img.height;
+  const nw = oriented.naturalWidth || oriented.width;
+  const nh = oriented.naturalHeight || oriented.height;
   const sx = Math.round(box.x * nw);
   const sy = Math.round(box.y * nh);
   const sw = Math.max(1, Math.round(box.w * nw));
@@ -235,7 +280,7 @@ export async function renderReceiptPhoto({
   canvas.width = tw;
   canvas.height = th;
   const ctx = canvas.getContext('2d');
-  ctx.drawImage(img, sx, sy, sw, sh, 0, 0, tw, th);
+  ctx.drawImage(oriented, sx, sy, sw, sh, 0, 0, tw, th);
 
   let q = clamp(Number(quality) || DEFAULT_RECEIPT_PREFS.quality, 0.45, 0.92);
   const budget = clamp(Number(maxBytes) || DEFAULT_RECEIPT_PREFS.maxBytes, 80 * 1024, 900 * 1024);
@@ -254,6 +299,7 @@ export async function renderReceiptPhoto({
     maxEdge: cap,
     maxBytes: budget,
     crop: box,
+    rotation: rot,
   });
 }
 
