@@ -8357,6 +8357,66 @@ input,textarea {
   align-items: center;
   padding: 24px 16px;
 }
+.slow-gps-modal {
+  max-width: 360px;
+  border-radius: 16px;
+  gap: 8px;
+}
+.slow-gps-lead {
+  margin: 0 0 4px;
+  font-size: 13px;
+  color: var(--text-muted, #888);
+}
+.slow-gps-block {
+  display: grid;
+  gap: 2px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--bg, #1a1d24);
+  border: 1px solid var(--border, #333);
+  font-size: 13px;
+  color: var(--text, #eee);
+}
+.slow-gps-k {
+  font-size: 11px;
+  color: var(--text-muted, #888);
+}
+.slow-gps-gap {
+  margin: 4px 0 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-muted, #888);
+}
+.slow-gps-gap.is-ready {
+  color: var(--accent, #7cbcff);
+}
+.slow-gps-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+.slow-gps-btn {
+  appearance: none;
+  flex: 1;
+  min-width: 88px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border, #333);
+  background: var(--bg-elevated, #222);
+  color: var(--text, #eee);
+  font-size: 13px;
+  cursor: pointer;
+}
+.slow-gps-btn.is-primary {
+  border-color: var(--accent, #1a73e8);
+  background: var(--accent-soft, #1a73e822);
+  color: var(--accent, #7cbcff);
+}
+.slow-gps-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
 .picker-modal {
   width: 100%;
   max-width: 480px;

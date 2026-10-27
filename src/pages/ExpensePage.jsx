@@ -31,7 +31,7 @@ import { calendarBlockPayload } from '../utils/calendarTrackUrl';
 import { copyText } from '../utils/platform';
 import { useSmartLocation } from '../hooks/useSmartLocation';
 import { formatRelativeTimeShort, toMapsUrl } from '../utils/locationStorage';
-import { pinMerchantIfNearHere, rememberNamedPoint } from '../utils/landmarkRegions';
+import { labelFromCoveringPlace, pinMerchantIfNearHere, rememberNamedPoint } from '../utils/landmarkRegions';
 import {
   asDraftDate,
   clearExpenseDraft,
@@ -57,6 +57,7 @@ import {
   parseExpenseQuickDraft,
   clearExpenseQuickQuery,
   getMergedQueryParams,
+  resolvePaymentMethod,
 } from '../utils/expenseQuickUrl';
 import { ObligationsPanel } from './ObligationsPage';
 import ExpenseSummary from '../components/ExpenseSummary';
@@ -409,6 +410,7 @@ function ExpensePage() {
           end,
           lat: here?.lat ?? null,
           lng: here?.lng ?? null,
+          placeName: here ? labelFromCoveringPlace(here) || here.label || '' : '',
           description: [
             'auto populated by 記賬 / AI',
             ask.merchant ? `商家: ${ask.merchant}` : '',
@@ -533,6 +535,12 @@ function ExpensePage() {
   }, [paymentsReady, paymentOptions, setCachedLocation]);
 
   useEffect(() => {
+    if (!paymentMethod) return;
+    const resolved = resolvePaymentMethod(paymentMethod, paymentOptions);
+    if (resolved && resolved !== paymentMethod) setPaymentMethod(resolved);
+  }, [paymentMethod, paymentOptions]);
+
+  useEffect(() => {
     if (!paymentsReady) return undefined;
     if (!draftReady) {
       setDraftReady(true);
@@ -649,7 +657,11 @@ function ExpensePage() {
     setRemark(entry.remark || '');
     setSimpleDescription(entry.description || entry.remark || '');
     setCurrency(entry.currency || 'MYR');
-    setPaymentMethod(entry.payment_method || '');
+    setPaymentMethod(
+      resolvePaymentMethod(entry.payment_method || '', paymentOptions) ||
+        entry.payment_method ||
+        ''
+    );
     setCarPlate(entry.carPlate || '');
     setMileage(entry.mileage || '');
     setTripInfo(entry.tripInfo || '');

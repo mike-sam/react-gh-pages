@@ -1,8 +1,16 @@
 import React, { useEffect, useMemo, useRef } from 'react';
 import WheelPicker from './WheelPicker';
-import { formatPaymentLabel } from '../utils/paymentLabel';
+import { cardLast4, formatPaymentLabel } from '../utils/paymentLabel';
 
 const CAT_ORDER = ['Cash', 'eWallet', 'Card'];
+
+function optionMatchesPayment(option, paymentMethod) {
+  if (!option || paymentMethod == null || paymentMethod === '') return false;
+  if (String(option.card_num) === String(paymentMethod)) return true;
+  const a = cardLast4(option.card_num);
+  const b = cardLast4(paymentMethod);
+  return Boolean(a) && a === b;
+}
 
 /**
  * ←→ category on whole cell; ↑↓ options.
@@ -17,7 +25,7 @@ function PaymentWheel({ categorized, paymentMethod, setPaymentMethod, onDoubleSe
   const payCat = useMemo(() => {
     if (!paymentMethod) return '';
     for (const cat of CAT_ORDER) {
-      if ((categorized[cat] || []).some((o) => o.card_num === paymentMethod)) return cat;
+      if ((categorized[cat] || []).some((o) => optionMatchesPayment(o, paymentMethod))) return cat;
     }
     if ((categorized.eWallet || []).length) return 'eWallet';
     return 'Cash';
@@ -30,6 +38,11 @@ function PaymentWheel({ categorized, paymentMethod, setPaymentMethod, onDoubleSe
       label: formatPaymentLabel(o),
     }));
   }, [categorized, payCat]);
+
+  const wheelValue = useMemo(() => {
+    const hit = (categorized[payCat] || []).find((o) => optionMatchesPayment(o, paymentMethod));
+    return hit?.card_num ?? paymentMethod;
+  }, [categorized, payCat, paymentMethod]);
 
   const switchCat = (dir) => {
     const available = CAT_ORDER.filter((c) => (categorized[c] || []).length > 0);
@@ -158,7 +171,7 @@ function PaymentWheel({ categorized, paymentMethod, setPaymentMethod, onDoubleSe
           className="payment-wheel-options"
           axis="y"
           options={options.length ? options : [{ value: '', label: '—' }]}
-          value={paymentMethod}
+          value={wheelValue}
           onChange={setPaymentMethod}
           onDoubleSelect={onDoubleSelect}
           infinite={options.length > 2}

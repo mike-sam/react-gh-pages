@@ -135,12 +135,15 @@ export function QueueProvider({ children }) {
           return { queued: true, sent: false };
         }
         const data = await postPayload(body, signal);
-        rememberUnconfirmed({
-          id,
-          action: body.action || 'expense',
-          payload: body,
-          enqueuedAt: Date.now(),
-        });
+        // JSON success is confirmed — do not restore-and-resend on next boot.
+        if (!data || data.success === false) {
+          rememberUnconfirmed({
+            id,
+            action: body.action || 'expense',
+            payload: body,
+            enqueuedAt: Date.now(),
+          });
+        }
         removeFromQueue(id);
         refreshCount();
         markBootstrapDirty();

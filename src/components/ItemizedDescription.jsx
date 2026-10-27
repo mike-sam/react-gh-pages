@@ -4,6 +4,19 @@ import { createDoubleSpaceHandler, focusElement } from '../utils/keyboardNavigat
 const REMARK_MIN_PX = 88;
 const REMARK_MAX_PX = 360;
 
+function sumItemized(itemList) {
+  return (itemList || []).reduce((sum, item) => sum + (Number(item?.subtotal) || 0), 0);
+}
+
+function formatItemizedBlock(itemList) {
+  const rows = (itemList || []).filter((item) => String(item?.name || '').trim());
+  if (!rows.length) return '';
+  const formattedText = rows
+    .map((item) => `${item.name}: ${item.unitPrice} × ${item.quantity} = ${item.subtotal}`)
+    .join('\n');
+  return `${formattedText}\n总计: ${sumItemized(rows).toFixed(2)}`;
+}
+
 const ItemizedDescription = ({ onChange, initialValue = '', totalAmount = 0, onItemizedTotalChange, simpleDescription, setSimpleDescription, onPhotoAdd, hideHeader = false, importedItems = null }) => {
   const [items, setItems] = useState([]);
   const [ocrItemIds, setOcrItemIds] = useState(new Set()); // 跟踪OCR添加的项目ID
@@ -84,10 +97,7 @@ const ItemizedDescription = ({ onChange, initialValue = '', totalAmount = 0, onI
       return;
     }
     setItems(next);
-    const formattedText = next
-      .map((item) => `${item.name}: ${item.unitPrice} × ${item.quantity} = ${item.subtotal}`)
-      .join('\n');
-    const itemizedText = `${formattedText}\n总计: 0.00`;
+    const itemizedText = formatItemizedBlock(next);
     onChange([itemizedText, simpleDescription].filter(Boolean).join('\n\n'));
   }, [importedItems, onChange, simpleDescription]);
 
@@ -255,21 +265,11 @@ const ItemizedDescription = ({ onChange, initialValue = '', totalAmount = 0, onI
     let finalText = '';
     
     if (itemList.length > 0) {
-      const formattedText = itemList
-        .filter(item => item.name.trim())
-        .map(item => `${item.name}: ${item.unitPrice} × ${item.quantity} = ${item.subtotal}`)
-        .join('\n');
-      
-      let total = itemList.reduce((sum, item) => sum + (item.subtotal || 0), 0);
-      total = 0;
-      const itemizedText = formattedText + (formattedText ? `\n总计: ${total.toFixed(2)}` : '');
-      
-      // 只有当明细总额与上级金额有差异时才通知父组件（用于税费建议）
+      const itemizedText = formatItemizedBlock(itemList);
+      const total = sumItemized(itemList.filter((item) => String(item?.name || '').trim()));
       if (onItemizedTotalChange) {
         onItemizedTotalChange(total);
       }
-      
-      // 合并明细和简单描述
       finalText = [itemizedText, description].filter(Boolean).join('\n\n');
     } else {
       finalText = description;

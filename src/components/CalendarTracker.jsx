@@ -16,6 +16,7 @@ import {
   saveCalendarLookbackDays,
   stampCalendarTimestamp,
 } from '../utils/calendarTrackUrl';
+import { labelFromCoveringPlace } from '../utils/landmarkRegions';
 import {
   applyOptimisticCalendarAction,
   fetchCalendarCheck,
@@ -44,7 +45,7 @@ function formatTrackResult(label, data) {
 }
 
 function CalendarTracker() {
-  const { location, hasLocation, locationMode, setLocationMode, refreshLocation } =
+  const { location, hasLocation, locationMode, setLocationMode, resolveForAction } =
     useSmartLocation();
   const { enqueueAndSend } = useOfflineQueue();
   const [title, setTitle] = useState('Work');
@@ -98,6 +99,11 @@ function CalendarTracker() {
     return () => clearInterval(id);
   }, []);
 
+  const placeName = useMemo(
+    () => (location ? labelFromCoveringPlace(location) || location.label || '' : ''),
+    [location]
+  );
+
   const liveUrl = useMemo(() => {
     const params = {
       op: 'append',
@@ -108,12 +114,13 @@ function CalendarTracker() {
       params.lat = location.lat;
       params.lng = location.lng;
     }
+    if (placeName) params.placeName = placeName;
     params.timestamp = stampCalendarTimestamp(actionTime);
     params.timestampMs = actionTime instanceof Date ? actionTime.getTime() : Date.now();
     params.days = lookbackDays;
     params.lookbackDays = lookbackDays;
     return buildCalendarTrackUrl(params);
-  }, [resolvedTitle, prefix, location, actionTime, lookbackDays]);
+  }, [resolvedTitle, prefix, location, placeName, actionTime, lookbackDays]);
 
   const prevTrailAt = useMemo(() => {
     const pool = status.starts || [];
@@ -133,9 +140,10 @@ function CalendarTracker() {
         prefix,
         lat: location?.lat,
         lng: location?.lng,
+        placeName,
         prevWhen: prevTrailAt,
       }),
-    [actionTime, prefix, location, prevTrailAt]
+    [actionTime, prefix, location, placeName, prevTrailAt]
   );
 
   const pickLookbackDays = (n) => {
@@ -179,6 +187,8 @@ function CalendarTracker() {
     const timestamp = stampCalendarTimestamp(when);
     const timestampMs = when.getTime();
     const cached = location;
+    const endScope =
+      flags.endScope || (flags.all ? 'all' : flags.endAny ? 'latest' : '');
     timeEditedRef.current = false;
     editorOpenRef.current = false;
     setActionTime(new Date());
@@ -189,6 +199,7 @@ function CalendarTracker() {
         uiLabel: label,
         all: flags.all === true,
         endAny: flags.endAny === true,
+        endScope,
         startHome: flags.startHome === true,
         queued: true,
         when,
@@ -206,10 +217,12 @@ function CalendarTracker() {
       timestampMs,
       latitude: coords?.lat ?? null,
       longitude: coords?.lng ?? null,
+      placeName: coords ? labelFromCoveringPlace(coords) || coords.label || placeName : placeName,
       endExisting: flags.endExisting !== undefined ? flags.endExisting : true,
       startHome: flags.startHome === true,
       all: flags.all === true,
       endAny: flags.endAny === true,
+      endScope,
       silent: true,
       days,
       lookbackDays: days,
@@ -224,12 +237,10 @@ function CalendarTracker() {
     setPendingCount((n) => n + 1);
     void (async () => {
       let coords = cached;
-      if (locationMode === 'live') {
-        try {
-          coords = (await refreshLocation()) || cached;
-        } catch {
-          coords = cached;
-        }
+      try {
+        coords = (await resolveForAction()) || cached;
+      } catch {
+        coords = cached;
       }
       try {
         const result = await enqueueAndSend(buildPayload(coords));
@@ -313,6 +324,7 @@ function CalendarTracker() {
         <section className="calendar-field">
           <div className="calendar-field-head">
             <span className="entry-field-label">Prefix</span>
+            <span className="calendar-lookback-caption">Start / End 按鈕會自己寫，這裡只需附加說明</span>
           </div>
           <div className="entry-chip-row calendar-prefix-chips">
             <button
@@ -469,9 +481,14 @@ function CalendarTracker() {
           type="button"
           className="entry-btn-start-new"
           onClick={() =>
-            handleOp('start', { endExisting: true, requireTitle: true, uiLabel: 'Start New' })
+            handleOp('start', {
+              endExisting: true,
+              endScope: 'all',
+              requireTitle: true,
+              uiLabel: 'Start New',
+            })
           }
-          title="結束標記中的行程後，用目前標題開新的"
+          title="結束 lookback 內所有 **start** 後，用目前標題開新的"
         >
           Start New
         </button>
@@ -500,28 +517,28 @@ function CalendarTracker() {
             onClick={() =>
               handleOp('start', {
                 endExisting: true,
-                endAny: true,
+                endScope: 'latest',
                 requireTitle: true,
                 uiLabel: 'End+Start',
               })
             }
-            title="結束任何進行中的行程後，用目前標題開新的"
+            title="只結束最近一筆 **start**，再用目前標題開新的"
           >
             End+Start
           </button>
           <button
             type="button"
             className="entry-btn-end"
-            onClick={() => handleOp('end', { uiLabel: 'End' })}
-            title="結束目前所選標題的行程"
+            onClick={() => handleOp('end', { endScope: 'title', uiLabel: 'End' })}
+            title="結束目前所選標題、且仍為 **start** 的行程"
           >
             End
           </button>
           <button
             type="button"
             className="entry-btn-end-all"
-            onClick={() => handleOp('end', { all: true, endAny: true, uiLabel: 'End All' })}
-            title="結束所有進行中的行程"
+            onClick={() => handleOp('end', { all: true, endScope: 'all', uiLabel: 'End All' })}
+            title="不看標題，結束過去指定天數內所有 **start**"
           >
             End All
           </button>

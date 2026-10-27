@@ -182,7 +182,7 @@ function LocationPinButton({ compact = false }) {
         onClose={() => setPickerOpen(false)}
         onRefreshGps={refreshLocation}
         onSave={(next) => {
-          setCachedLocation(next);
+          setCachedLocation({ ...next, manual: true });
           setLocationMode('cache');
           showFlash('定位已儲存（快取）');
         }}

@@ -15,6 +15,7 @@ export const API_ENDPOINTS = {
 // Google Sheets / Drive 链接
 export const GOOGLE_LINKS = {
   SHEETS_URL: 'https://docs.google.com/spreadsheets/d/...../edit',
+  CARD_DETAILS_URL: 'https://docs.google.com/spreadsheets/d/1OSEEghAj9kNTm027giGMcABsEmgvpHJdYen4CfVA0Z0/edit',
   PHOTOS_FOLDER_NAME: 'ExpensePhotos'
 };
 

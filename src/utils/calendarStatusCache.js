@@ -91,7 +91,7 @@ export function applyOptimisticCalendarAction(prev, action) {
       homes = [];
     }
   } else if (action.op === 'end') {
-    if (action.all || action.endAny || !action.title) {
+    if (action.all || action.endScope === 'all' || action.endAny || !action.title) {
       starts = [];
       homes = [];
     } else {

@@ -5,6 +5,7 @@ import { mergeLandmarkRegionsFromCloud } from './landmarkRegions';
 import { writeFxRates } from './fxRates';
 import { loadExpenseHistory } from './expenseHistory';
 import { applyExpenseTagsOverlay } from './expenseTags';
+import { cardDigits, cardLast4, catalogRegion, catalogShortname } from './paymentLabel';
 
 export const BOOTSTRAP_FETCH_AT_KEY = 'appBootstrapFetchedAt';
 export const BOOTSTRAP_ATTEMPT_AT_KEY = 'appBootstrapAttemptAt';
@@ -12,7 +13,7 @@ export const BOOTSTRAP_DIRTY_KEY = 'appBootstrapDirty';
 export const BOOTSTRAP_TTL_MS = 60 * 60 * 1000;
 /** F5 / remount without a write: do not hit GAS again inside this window. */
 export const BOOTSTRAP_RETRY_MS = 5 * 60 * 1000;
-export const PAYMENT_OPTIONS_CACHE_VER = 'v5';
+export const PAYMENT_OPTIONS_CACHE_VER = 'v8';
 export const PAYMENT_OPTIONS_TTL_MS = 24 * 60 * 60 * 1000;
 
 export const DEFAULT_PAYMENT_OPTIONS = {
@@ -76,31 +77,85 @@ function consumeBootstrapDirty() {
   return true;
 }
 
+function findExistingPaymentId(acc, cardNum, catKey) {
+  const exact = Object.keys(acc).find((k) => String(acc[k].card_num) === String(cardNum));
+  if (exact) return exact;
+  if (catKey !== 'Card') return '';
+  const last4 = cardLast4(cardNum);
+  if (!last4) return '';
+  return (
+    Object.keys(acc).find((k) => {
+      const o = acc[k];
+      return detectPaymentCategory(o, k) === 'Card' && cardLast4(o.card_num) === last4;
+    }) || ''
+  );
+}
+
+function pickBetterCardNum(prevNum, nextNum, nextHasName, prevHasName) {
+  if (nextHasName && !prevHasName) return nextNum;
+  if (prevHasName && !nextHasName) return prevNum;
+  const prevD = cardDigits(prevNum);
+  const nextD = cardDigits(nextNum);
+  return nextD.length > prevD.length ? nextNum : prevNum;
+}
+
 function upsertPaymentOption(acc, id, value) {
-  if (!value?.card_num) return;
+  if (!value?.card_num && value?.card_num !== 0) return;
+  const cardNum = String(value.card_num).trim();
+  if (!cardNum) return;
   const draft = {
     key: value.key,
-    card_num: value.card_num,
+    card_num: cardNum,
     bank: value.bank || '',
-    shortname: value.shortname || value.bank || '',
+    shortname: value.shortname || value.bank || value.card || '',
+    card: value.card || '',
   };
   const catKey = detectPaymentCategory(draft, id) || 'Card';
-  const short =
-    value.shortname ||
-    value.bank ||
-    (value.key && !['Cash', 'eWallet', 'Card'].includes(value.key) ? value.key : '');
+  const short = catalogShortname({ ...draft, ...value }, id);
+  const region =
+    detectPaymentRegion({ ...draft, shortname: short }) || catalogRegion({ ...draft, ...value }, id);
   const next = {
     key: catKey,
-    card_num: String(value.card_num).trim(),
+    card_num: cardNum,
     bank: value.bank || short,
     shortname: short,
-    region: detectPaymentRegion({ ...draft, shortname: short }),
+    region,
   };
-  const existingId = Object.keys(acc).find((k) => String(acc[k].card_num) === next.card_num);
-  acc[existingId || id] = existingId ? { ...acc[existingId], ...next } : next;
+  const existingId = findExistingPaymentId(acc, next.card_num, catKey);
+  if (!existingId) {
+    acc[id] = next;
+    return;
+  }
+  const prev = acc[existingId];
+  const nextHasName = Boolean(next.shortname);
+  const prevHasName = Boolean(prev.shortname);
+  acc[existingId] = {
+    ...prev,
+    ...next,
+    card_num: pickBetterCardNum(prev.card_num, next.card_num, nextHasName, prevHasName),
+    bank: next.bank || prev.bank,
+    shortname: next.shortname || prev.shortname,
+    region: next.region || prev.region,
+  };
+}
+
+function isNamedCardOption(o, id) {
+  return detectPaymentCategory(o, id) === 'Card' && Boolean(catalogShortname(o, id));
+}
+
+function pruneUnnamedCards(acc) {
+  const hasNamed = Object.entries(acc).some(([id, o]) => isNamedCardOption(o, id));
+  if (!hasNamed) return acc;
+  Object.keys(acc).forEach((id) => {
+    const o = acc[id];
+    if (detectPaymentCategory(o, id) !== 'Card') return;
+    if (!catalogShortname(o, id)) delete acc[id];
+  });
+  return acc;
 }
 
 function mergeLocalCardFallbacks(acc) {
+  if (Object.entries(acc).some(([id, o]) => isNamedCardOption(o, id))) return;
   const hasCard = Object.entries(acc).some(([id, o]) => detectPaymentCategory(o, id) === 'Card');
   if (!hasCard) {
     try {
@@ -112,6 +167,7 @@ function mergeLocalCardFallbacks(acc) {
       /* ignore */
     }
   }
+  if (Object.entries(acc).some(([id, o]) => isNamedCardOption(o, id))) return;
   try {
     loadExpenseHistory().forEach((entry, i) => {
       const num = String(entry.payment_method || entry.payment || '').trim();
@@ -140,6 +196,7 @@ export function transformPaymentOptions(raw, defaults = DEFAULT_PAYMENT_OPTIONS)
   Object.entries(source).forEach(([id, value]) => upsertPaymentOption(acc, id, value));
   Object.entries(defaults).forEach(([id, value]) => upsertPaymentOption(acc, id, value));
   mergeLocalCardFallbacks(acc);
+  pruneUnnamedCards(acc);
   return acc;
 }
 
@@ -178,21 +235,36 @@ function paymentMapHasCards(map) {
   return Object.entries(map || {}).some(([id, o]) => detectPaymentCategory(o, id) === 'Card');
 }
 
+function paymentMapHasNamedCards(map) {
+  return Object.entries(map || {}).some(([id, o]) => {
+    if (detectPaymentCategory(o, id) !== 'Card') return false;
+    return Boolean(catalogShortname(o, id));
+  });
+}
+
 function parsePaymentOptionsPayload(data) {
   if (!data || typeof data !== 'object') return null;
-  const src =
-    data.paymentOptions && typeof data.paymentOptions === 'object' && !data.paymentOptions.card_num
+  const src = Array.isArray(data)
+    ? Object.fromEntries(data.map((v, i) => [v?.bank || v?.card || String(i), v]))
+    : data.paymentOptions && typeof data.paymentOptions === 'object' && !data.paymentOptions.card_num
       ? data.paymentOptions
-      : data;
+      : data.cards && typeof data.cards === 'object' && !data.cards.card_num
+        ? data.cards
+        : data;
   const raw = {};
   Object.entries(src).forEach(([id, value]) => {
-    if (!value || typeof value !== 'object' || !value.card_num) return;
+    if (!value || typeof value !== 'object') return;
+    const cardNum = String(value.card_num ?? value.cardNum ?? '').trim();
+    if (!cardNum) return;
     if (id === 'success' || id === 'error' || id === 'ok') return;
+    const short = catalogShortname({ ...value, card_num: cardNum }, id);
     raw[id] = {
-      key: value.key || (String(value.card_num) === 'Cash' ? 'Cash' : 'Card'),
-      card_num: value.card_num,
+      key: value.key || (cardNum === 'Cash' ? 'Cash' : 'Card'),
+      card_num: cardNum,
       bank: value.bank || '',
-      shortname: value.shortname || value.bank || id,
+      card: value.card || '',
+      shortname: short,
+      region: catalogRegion({ ...value, card_num: cardNum }, id),
     };
   });
   return Object.keys(raw).length ? raw : null;
@@ -200,10 +272,12 @@ function parsePaymentOptionsPayload(data) {
 
 let paymentsInflight = null;
 
-/** Cards live on a dedicated web app; bootstrap GAS only has cash/wallets. */
+/** Cards live on CardDetails via dedicated PAYMENT_OPTIONS; bootstrap may only have cash/history. */
 export async function ensurePaymentOptions({ force = false } = {}) {
   const cached = readPaymentOptionsCache({ allowStale: true }) || {};
-  if (paymentMapHasCards(cached) && !force) return cached;
+  const freshNamed =
+    paymentMapHasNamedCards(cached) && Boolean(readPaymentOptionsCache({ allowStale: false }));
+  if (freshNamed && !force) return cached;
   if (paymentsInflight) return paymentsInflight;
   paymentsInflight = (async () => {
     try {
@@ -237,10 +311,10 @@ function applyBootstrapPayload(data) {
   let applied = false;
   if (data.paymentOptions && typeof data.paymentOptions === 'object') {
     const prev = readPaymentOptionsCache({ allowStale: true }) || {};
-    const incoming = transformPaymentOptions(data.paymentOptions);
-    writePaymentOptionsCache(
-      paymentMapHasCards(incoming) ? incoming : transformPaymentOptions({ ...prev, ...incoming })
-    );
+    const merged = transformPaymentOptions({ ...data.paymentOptions, ...prev });
+    if (!(paymentMapHasNamedCards(prev) && !paymentMapHasNamedCards(merged))) {
+      writePaymentOptionsCache(merged);
+    }
     applied = true;
   }
   const byCar = data.parked?.byCar;
@@ -323,7 +397,7 @@ export function ensureAppBootstrap({ force = false } = {}) {
         await ensurePaymentOptions({ force: true });
         return 'unsupported';
       }
-      await ensurePaymentOptions();
+      await ensurePaymentOptions({ force: true });
       notifyBootstrap('ok');
       return 'ok';
     } catch (err) {

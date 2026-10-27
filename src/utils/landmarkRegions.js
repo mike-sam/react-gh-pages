@@ -1140,6 +1140,17 @@ export function labelFromLandmarks(point) {
   return hits[0]?.name || '';
 }
 
+/** Smallest 常用區域 covering this point. */
+export function labelFromCoveringRegion(point) {
+  const hits = matchLandmarksAt(point).filter((r) => !isNamedPoint(r));
+  return hits[0]?.name || '';
+}
+
+/** Region name if inside a 常用區域, else nearest named pin. */
+export function labelFromCoveringPlace(point) {
+  return labelFromCoveringRegion(point) || labelFromLandmarks(point);
+}
+
 export function markLandmarkRegionsFetched(at = Date.now()) {
   localStorage.setItem(LANDMARK_FETCH_AT_KEY, String(at));
 }

@@ -214,6 +214,16 @@ export function parseLatLngFromMapsUrl(url) {
   return { lat: parseFloat(match[1]), lng: parseFloat(match[2]) };
 }
 
+/** Human-readable metres / kilometres, e.g. 80 m · 1.2 km */
+export function formatDistanceHuman(meters) {
+  const m = Math.abs(Number(meters));
+  if (!Number.isFinite(m)) return '';
+  if (m < 10) return `${Math.round(m * 10) / 10} m`;
+  if (m < 1000) return `${Math.round(m)} m`;
+  if (m < 10000) return `${(m / 1000).toFixed(1)} km`;
+  return `${Math.round(m / 1000)} km`;
+}
+
 export function formatRelativeTime(updatedAt) {
   if (!updatedAt) return '尚未取得';
   const diffMs = Date.now() - updatedAt;

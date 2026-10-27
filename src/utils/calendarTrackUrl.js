@@ -2,7 +2,7 @@ import { API_ENDPOINTS } from '../config';
 
 export const CALENDAR_TITLES = ['Work', 'Commute', 'Driving', 'Trip', 'Sleep'];
 
-export const CALENDAR_PREFIXES = ['start', 'end', 'public transportation'];
+export const CALENDAR_PREFIXES = ['public transportation'];
 
 export const CALENDAR_LOOKBACK_DAYS_DEFAULT = 3;
 export const CALENDAR_LOOKBACK_DAY_CHOICES = [1, 3, 7];
@@ -41,7 +41,7 @@ export const CALENDAR_TRACK_PARAMS = [
     name: 'op',
     required: 'required',
     example: 'start, append, end, home',
-    note: '按鈕對應 append / start / start+endAny / end / end+all。home 仍可用 URL',
+    note: '按鈕對應 append / start / end / end all。End+Start 用 op=start&endScope=latest',
   },
   {
     name: 'title',
@@ -53,7 +53,7 @@ export const CALENDAR_TRACK_PARAMS = [
     name: 'prefix',
     required: 'optional',
     example: 'public transportation',
-    note: '軌跡標註。空白 → [-no input-]',
+    note: '軌跡標註。空白 → [-no input-]。Start / End 按鈕會自己寫 start、end，不必當 prefix',
   },
   {
     name: 'timestamp',
@@ -86,10 +86,22 @@ export const CALENDAR_TRACK_PARAMS = [
     note: '可取代 lat+lng',
   },
   {
+    name: 'placeName',
+    required: 'optional',
+    example: 'TSX',
+    note: '軌跡地名。空白則 GAS 用常用區域反查',
+  },
+  {
+    name: 'endScope',
+    required: 'optional',
+    example: 'latest',
+    note: 'title＝所選標題（End）；latest＝最近一筆 **start**（End+Start）；today＝今日全部 **start**；all＝lookback 內全部（End All / Start New）',
+  },
+  {
     name: 'endExisting',
     required: 'optional',
     example: '1',
-    note: '預設 1。start 時 0 可重疊',
+    note: '預設 1。start 時 0 可重疊。有 endScope 時以 endScope 為準',
   },
   {
     name: 'startHome',
@@ -101,13 +113,13 @@ export const CALENDAR_TRACK_PARAMS = [
     name: 'all',
     required: 'optional',
     example: '0',
-    note: '預設 0。append 套用每個進行中；end 結束全部進行中（含即時行程與 Home）',
+    note: '舊參數。等同 endScope=all',
   },
   {
     name: 'endAny',
     required: 'optional',
     example: '0',
-    note: '預設 0。start 時 1：結束任何進行中（含既有行程）再開新的',
+    note: '舊參數。現在視為 endScope=latest（只關最近一筆 **start**）',
   },
   {
     name: 'days',
@@ -127,6 +139,7 @@ export function calendarActionPayload({
   endExisting = true,
   all = false,
   endAny = false,
+  endScope = '',
   prefix = '',
   lookbackDays,
   days,
@@ -135,6 +148,7 @@ export function calendarActionPayload({
   timestampEnd,
   timestampEndMs,
   description,
+  placeName = '',
 }) {
   const resolvedDays = Number(days ?? lookbackDays) || CALENDAR_LOOKBACK_DAYS_DEFAULT;
   const body = {
@@ -147,10 +161,12 @@ export function calendarActionPayload({
     timestampMs: (when instanceof Date ? when : new Date()).getTime(),
     latitude: lat ?? null,
     longitude: lng ?? null,
+    placeName: placeName || '',
     endExisting,
     startHome: false,
     all: Boolean(all),
     endAny: Boolean(endAny),
+    endScope: endScope || '',
     silent: silent !== false,
     days: resolvedDays,
     lookbackDays: resolvedDays,
@@ -162,7 +178,15 @@ export function calendarActionPayload({
 }
 
 /** Timed calendar block from start to end. Not a trail start/end marker. */
-export function calendarBlockPayload({ title, start, end, lat = null, lng = null, description = '' }) {
+export function calendarBlockPayload({
+  title,
+  start,
+  end,
+  lat = null,
+  lng = null,
+  description = '',
+  placeName = '',
+}) {
   const s = start instanceof Date ? start : new Date();
   const e = end instanceof Date ? end : new Date();
   return calendarActionPayload({
@@ -171,6 +195,7 @@ export function calendarBlockPayload({ title, start, end, lat = null, lng = null
     when: s,
     lat,
     lng,
+    placeName,
     endExisting: false,
     endAny: false,
     silent: true,
@@ -203,19 +228,21 @@ export function buildCalendarTrailPreview({
   prefix = '',
   lat = null,
   lng = null,
+  placeName = '',
   marker = '**start**',
   prevWhen = null,
 } = {}) {
   const prefixPart = String(prefix || '').trim() || '-no input-';
   const hasCoords =
     lat != null && lng != null && Number.isFinite(Number(lat)) && Number.isFinite(Number(lng));
+  const place = String(placeName || '').trim();
   const maps = hasCoords ? `@http://maps.google.com/maps?q=${lat},${lng}` : '';
   const at = when instanceof Date ? when : new Date();
   const prev = prevWhen instanceof Date && !Number.isNaN(prevWhen.getTime()) ? prevWhen : null;
   const gap = prev ? formatTrailGap(at.getTime() - prev.getTime()) : '';
   return {
     marker,
-    line: `[${stampCalendarTimestamp(at)}][${prefixPart}]${maps}${gap}`,
+    line: `[${stampCalendarTimestamp(at)}][${prefixPart}]${place}${maps}${gap}`,
   };
 }
 
@@ -257,10 +284,12 @@ export function buildCalendarTrackUrlFromPayload(payload, base = calendarTrackEn
       lat: p.lat ?? p.latitude,
       lng: p.lng ?? p.longitude,
       latlong: p.latlong ?? p.latlng,
+      placeName: p.placeName || p.place,
       endExisting: p.endExisting,
       startHome: p.startHome,
       all: p.all,
       endAny: p.endAny,
+      endScope: p.endScope,
       silent: p.silent,
       days: p.days,
       lookbackDays: p.lookbackDays,
@@ -289,10 +318,12 @@ export function buildCalendarTrackUrl(params, base = calendarTrackEndpoint()) {
     'lat',
     'lng',
     'latlong',
+    'placeName',
     'endExisting',
     'startHome',
     'all',
     'endAny',
+    'endScope',
     'silent',
     'days',
     'lookbackDays',
@@ -346,23 +377,23 @@ export function calendarTrackUrlExamples() {
     },
     {
       title: 'End+Start · Work',
-      note: '結束任何進行中後開 Work。days 可省略（預設 3）',
+      note: '只結束最近一筆 **start**，再開 Work。endScope=latest',
       params: {
         op: 'start',
         title: 'Work',
         endExisting: true,
-        endAny: true,
+        endScope: 'latest',
         days: 3,
         timestamp: ts,
       },
     },
     {
       title: 'End All',
-      note: '結束所有進行中。op=end all 即可，不必另帶 all=1。days 可省略（預設 3）',
+      note: '不看標題，結束 lookback 內所有 **start**。op=end all 即可。days 可省略（預設 3）',
       params: {
         op: 'end all',
         all: true,
-        endAny: true,
+        endScope: 'all',
         days: 3,
         timestamp: ts,
       },

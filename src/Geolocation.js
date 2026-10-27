@@ -21,6 +21,7 @@ function Geolocation({ location, setLocation, skipAutoLocation }) {
           ...parsed,
           accuracy: null,
           updatedAt: Date.now(),
+          manual: true,
         });
       }
       return;
@@ -56,6 +57,7 @@ function Geolocation({ location, setLocation, skipAutoLocation }) {
         accuracy: null,
         updatedAt: Date.now(),
         label,
+        manual: true,
       });
     }
   };

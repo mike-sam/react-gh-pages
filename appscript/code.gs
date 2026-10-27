@@ -1,5 +1,6 @@
 // REPLACE the existing .gs file (Select all → paste). Do not add a second file — sheetId/doGet are globals.
 const sheetId = '1ZAFWV5aIVcA66qJEMPGGsg3azPY415_Clwe--JinQ7w'; // https://docs.google.com/spreadsheets/d/1ZAFWV5aIVcA66qJEMPGGsg3azPY415_Clwe--JinQ7w/edit#gid=0
+const CARD_DETAILS_SHEET_ID = '1OSEEghAj9kNTm027giGMcABsEmgvpHJdYen4CfVA0Z0'; // CardDetails: Bank ShortFont / Card / Card Number
 
 const doGet = (event) => {
   try {
@@ -1635,23 +1636,133 @@ function isWalletOrCashName_(s) {
   return /^(tng|tngewallet|grabpay|setel|shopeepay|paylah|paynow)/.test(n);
 }
 
+function cardDigits_(num) {
+  return String(num == null ? '' : num).replace(/\D/g, '');
+}
+
+function cardLast4_(num) {
+  var d = cardDigits_(num);
+  return d.length >= 4 ? d.slice(-4) : d;
+}
+
+function isNamedPaymentShort_(s) {
+  var t = String(s || '').trim();
+  if (!t) return false;
+  var d = cardDigits_(t);
+  return !(d.length >= 4 && d === t.replace(/[\s-]/g, ''));
+}
+
+function findPaymentOptionKey_(out, num, cat) {
+  var keys = Object.keys(out);
+  var i;
+  for (i = 0; i < keys.length; i++) {
+    if (String(out[keys[i]].card_num) === String(num)) return keys[i];
+  }
+  if (String(cat || '') !== 'Card') return '';
+  var last4 = cardLast4_(num);
+  if (!last4) return '';
+  for (i = 0; i < keys.length; i++) {
+    if (String(out[keys[i]].key) === 'Card' && cardLast4_(out[keys[i]].card_num) === last4) {
+      return keys[i];
+    }
+  }
+  return '';
+}
+
 function addPaymentOption_(out, opt) {
   if (!out || !opt) return;
   var num = String(opt.card_num || '').trim();
   if (!num) return;
-  var keys = Object.keys(out);
-  var i;
-  for (i = 0; i < keys.length; i++) {
-    if (String(out[keys[i]].card_num) === num) return;
-  }
   var cat = String(opt.key || 'Card');
+  var shortname = String(opt.shortname || opt.bank || '').trim();
+  var bank = String(opt.bank || opt.shortname || '').trim();
+  var existing = findPaymentOptionKey_(out, num, cat);
+  if (existing) {
+    var prev = out[existing];
+    var nextNamed = isNamedPaymentShort_(shortname);
+    var prevNamed = isNamedPaymentShort_(prev.shortname);
+    var keepNum = prev.card_num;
+    if (nextNamed && !prevNamed) keepNum = num;
+    else if (!prevNamed && cardDigits_(num).length > cardDigits_(prev.card_num).length) keepNum = num;
+    out[existing] = {
+      key: prev.key || cat,
+      card_num: keepNum,
+      bank: nextNamed ? bank : (prev.bank || bank),
+      shortname: nextNamed ? shortname : (prev.shortname || shortname)
+    };
+    return;
+  }
   var id = cat + '_' + num;
   out[id] = {
     key: cat,
     card_num: num,
-    bank: opt.bank || opt.shortname || '',
-    shortname: opt.shortname || opt.bank || ''
+    bank: bank,
+    shortname: shortname
   };
+}
+
+function cardDetailsShortname_(country, bank, shortFont, card) {
+  var font = String(shortFont || '').trim();
+  var bankName = String(bank || '').trim();
+  var cardName = String(card || '').trim();
+  var shortBank = font || bankName;
+  var parts = [];
+  if (shortBank) parts.push(shortBank);
+  if (cardName && cardName !== shortBank && parts.indexOf(cardName) < 0) parts.push(cardName);
+  var shortname = parts.join(' ');
+  var cc = String(country || '').trim();
+  var bankKey = (cc ? '[' + cc + ']' : '') + (shortBank ? '[' + shortBank + '] ' : '') + cardName;
+  return { shortname: shortname, bank: bankKey.trim() || shortname };
+}
+
+function mergeCardDetailsFromDoc_(out, doc) {
+  if (!doc) return false;
+  var sheet = doc.getSheetByName('CardDetails');
+  if (!sheet) return false;
+  var data = sheet.getDataRange().getValues();
+  if (!data || data.length < 2) return false;
+  var headers = data[0];
+  var bankCol = findHeaderIndex(headers, 'Bank');
+  var shortCol = findHeaderIndex(headers, 'Bank ShortFont');
+  var cardCol = findHeaderIndex(headers, 'Card');
+  var numCol = findHeaderIndex(headers, 'Card Number');
+  var countryCol = findHeaderIndex(headers, 'Country');
+  var stmtCol = findHeaderIndex(headers, 'Statement Date');
+  if (numCol < 0 && cardCol < 0) return false;
+  var r;
+  for (r = 1; r < data.length; r++) {
+    var row = data[r];
+    if (stmtCol >= 0 && String(row[stmtCol]) === '0') continue;
+    var num = String(numCol >= 0 ? row[numCol] : '').trim();
+    if (!num) continue;
+    var names = cardDetailsShortname_(
+      countryCol >= 0 ? row[countryCol] : '',
+      bankCol >= 0 ? row[bankCol] : '',
+      shortCol >= 0 ? row[shortCol] : '',
+      cardCol >= 0 ? row[cardCol] : ''
+    );
+    addPaymentOption_(out, {
+      key: 'Card',
+      card_num: num,
+      bank: names.bank,
+      shortname: names.shortname
+    });
+  }
+  return true;
+}
+
+function mergeCardDetailsSheet_(out) {
+  var ids = [CARD_DETAILS_SHEET_ID, sheetId];
+  var seen = {};
+  var i;
+  for (i = 0; i < ids.length; i++) {
+    var id = String(ids[i] || '').trim();
+    if (!id || seen[id]) continue;
+    seen[id] = 1;
+    try {
+      mergeCardDetailsFromDoc_(out, SpreadsheetApp.openById(id));
+    } catch (eCard) {}
+  }
 }
 
 function mergeKvPaymentGroup_(out, groupName, defaultKey) {
@@ -1778,7 +1889,18 @@ function mergeCardsFromKeyValue_(out) {
   }
 }
 
+function paymentMapHasNamedCard_(out) {
+  var keys = Object.keys(out || {});
+  var i;
+  for (i = 0; i < keys.length; i++) {
+    var o = out[keys[i]];
+    if (o && String(o.key) === 'Card' && isNamedPaymentShort_(o.shortname || o.bank)) return true;
+  }
+  return false;
+}
+
 function mergeCardsFromRecords_(out) {
+  if (paymentMapHasNamedCard_(out)) return;
   var doc = SpreadsheetApp.openById(sheetId);
   var sheet = doc.getSheetByName('Records');
   if (!sheet) return;
@@ -1803,6 +1925,9 @@ function mergeCardsFromRecords_(out) {
 
 function getPaymentOptionsMap() {
   var out = defaultPaymentOptionsMap_();
+  try {
+    mergeCardDetailsSheet_(out);
+  } catch (e0) {}
   try {
     mergeKvPaymentGroup_(out, 'Card', 'Card');
     mergeKvPaymentGroup_(out, 'Cards', 'Card');
