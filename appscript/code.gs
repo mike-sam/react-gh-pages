@@ -516,7 +516,7 @@ function upsertRowById(obj, sheetName) {
     var nData = lastRow - layout.dataStart + 1;
     var idValues = sheet.getRange(layout.dataStart, idCol + 1, nData, 1).getValues();
     for (var r = 0; r < idValues.length; r++) {
-      if (String(idValues[r][0]) === id) {
+      if (sheetIdEquals_(idValues[r][0], id)) {
         existingRow = r + layout.dataStart;
         break;
       }
@@ -551,6 +551,16 @@ function upsertRowById(obj, sheetName) {
   }
 
   return { row: targetRow, updated: existingRow > 0, id: id };
+}
+
+function sheetIdEquals_(cell, id) {
+  var a = String(cell == null ? '' : cell).trim();
+  var b = String(id == null ? '' : id).trim();
+  if (!b) return false;
+  if (a === b) return true;
+  var na = Number(a);
+  var nb = Number(b);
+  return isFinite(na) && isFinite(nb) && na === nb;
 }
 
 var FX_CODES = ['USD', 'SGD', 'TWD', 'CNY', 'EUR'];
@@ -913,6 +923,12 @@ function normalizeExpenseAmountToMyr(obj) {
  * 費用寫入：Replace Into + 附帶 Location / Mileage / Photo 副作用
  */
 function handleUpsertExpense(data) {
+  var lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(30000);
+  } catch (lockErr) {
+    appendLog(['upsertExpense lock wait', lockErr.toString()]);
+  }
   try {
     const recordsData = {...data};
     delete recordsData.action;
@@ -928,6 +944,9 @@ function handleUpsertExpense(data) {
       recordsData.description = recordsData.simpleDescription;
     }
     delete recordsData.simpleDescription;
+    if (recordsData.description) {
+      recordsData.description = rewriteItemizedTotal_(recordsData.description);
+    }
     normalizeExpenseAmountToMyr(recordsData);
 
     var upsert = upsertRowById(recordsData, 'Records');
@@ -1040,6 +1059,10 @@ function handleUpsertExpense(data) {
       success: false,
       error: error.toString()
     })).setMimeType(ContentService.MimeType.JSON);
+  } finally {
+    try {
+      lock.releaseLock();
+    } catch (relErr) {}
   }
 }
 
@@ -3418,20 +3441,99 @@ function calendarLookbackMs(data) {
   return days * 24 * 60 * 60 * 1000;
 }
 
+function pointInPolygon_(lat, lng, vertices) {
+  if (!vertices || vertices.length < 3) return false;
+  var inside = false;
+  for (var i = 0, j = vertices.length - 1; i < vertices.length; j = i++) {
+    var yi = Number(vertices[i].lat);
+    var xi = Number(vertices[i].lng);
+    var yj = Number(vertices[j].lat);
+    var xj = Number(vertices[j].lng);
+    if (!isFinite(xi) || !isFinite(yi) || !isFinite(xj) || !isFinite(yj)) continue;
+    var intersect =
+      (yi > lat) !== (yj > lat) &&
+      lng < ((xj - xi) * (lat - yi)) / ((yj - yi) || 1e-12) + xi;
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
+function regionContainsPoint_(region, lat, lng) {
+  if (!region) return false;
+  var shape = String(region.shape || '').toLowerCase();
+  var verts = region.vertices || [];
+  if ((shape === 'polygon' || shape === 'rect') && verts.length >= 3) {
+    return pointInPolygon_(lat, lng, verts);
+  }
+  if (shape === 'point') return false;
+  var dKm = calculateDistance(lat, lng, region.lat, region.lng);
+  return dKm * 1000 <= (Number(region.radiusM) || 150);
+}
+
+function regionApproxAreaM2_(region) {
+  var verts = region && region.vertices ? region.vertices : [];
+  if (verts.length >= 3) {
+    var minLat = verts[0].lat;
+    var maxLat = verts[0].lat;
+    var minLng = verts[0].lng;
+    var maxLng = verts[0].lng;
+    for (var i = 1; i < verts.length; i++) {
+      if (verts[i].lat < minLat) minLat = verts[i].lat;
+      if (verts[i].lat > maxLat) maxLat = verts[i].lat;
+      if (verts[i].lng < minLng) minLng = verts[i].lng;
+      if (verts[i].lng > maxLng) maxLng = verts[i].lng;
+    }
+    var dLat = (maxLat - minLat) * 111320;
+    var dLng = (maxLng - minLng) * 111320 * Math.cos((((minLat + maxLat) / 2) * Math.PI) / 180);
+    return Math.abs(dLat * dLng) || 1;
+  }
+  var r = Number(region && region.radiusM) || 150;
+  return Math.PI * r * r;
+}
+
 /**
- * 地理圍欄反查：落在預設範圍內則回傳地名，否則空字串
+ * 常用區域（多邊形/圓）優先，其次地標點，最後 GEOFENCES。
  */
 function resolvePlaceName(lat, lng) {
   if (lat === undefined || lng === undefined || isNaN(lat) || isNaN(lng)) {
     return '';
   }
-  for (var i = 0; i < GEOFENCES.length; i++) {
-    var g = GEOFENCES[i];
-    if (!g || g.lat === undefined || g.lng === undefined) continue;
-    var distanceKm = calculateDistance(lat, lng, g.lat, g.lng);
-    var radiusKm = (g.radiusM || 100) / 1000;
+  try {
+    var regions = collectLandmarkRegions();
+    var regionHits = [];
+    var pointHits = [];
+    for (var i = 0; i < regions.length; i++) {
+      var r = regions[i];
+      var shape = String(r.shape || '').toLowerCase();
+      if (shape === 'point') {
+        var dKm = calculateDistance(lat, lng, r.lat, r.lng);
+        if (dKm * 1000 <= (Number(r.radiusM) || 100)) {
+          pointHits.push({ name: r.name, d: dKm });
+        }
+        continue;
+      }
+      if (regionContainsPoint_(r, lat, lng)) {
+        regionHits.push({ name: r.name, area: regionApproxAreaM2_(r) });
+      }
+    }
+    regionHits.sort(function (a, b) {
+      return a.area - b.area;
+    });
+    if (regionHits.length && regionHits[0].name) return regionHits[0].name;
+    pointHits.sort(function (a, b) {
+      return a.d - b.d;
+    });
+    if (pointHits.length && pointHits[0].name) return pointHits[0].name;
+  } catch (e) {
+    appendLog(['resolvePlaceName regions', e.toString()]);
+  }
+  for (var g = 0; g < GEOFENCES.length; g++) {
+    var fence = GEOFENCES[g];
+    if (!fence || fence.lat === undefined || fence.lng === undefined) continue;
+    var distanceKm = calculateDistance(lat, lng, fence.lat, fence.lng);
+    var radiusKm = (fence.radiusM || 100) / 1000;
     if (distanceKm <= radiusKm) {
-      return g.name || '';
+      return fence.name || '';
     }
   }
   return '';
@@ -3730,6 +3832,22 @@ function findEventsByFirstLine(calendar, marker, when, lookbackMs) {
   return out;
 }
 
+function descriptionHasStartMarker(desc) {
+  var first = descriptionFirstLine(desc);
+  return first === CALENDAR_START_MARKER || first.indexOf(CALENDAR_START_MARKER) === 0;
+}
+
+/** Lookback 內第一行是 **start** 的事件（不要求現在還在進行中）。 */
+function findStartMarkedEvents(calendar, when, lookbackMs) {
+  var bounds = calendarSearchBounds_(when, lookbackMs);
+  var events = calendar.getEvents(bounds.from, bounds.to);
+  var out = [];
+  for (var i = 0; i < events.length; i++) {
+    if (descriptionHasStartMarker(events[i].getDescription())) out.push(events[i]);
+  }
+  return out;
+}
+
 function eventIdKey(event) {
   try {
     return String(event.getId());
@@ -3777,6 +3895,76 @@ function findLiveTimedEvents(calendar, when, lookbackMs) {
     }
   }
   return out;
+}
+
+function eventRecency_(event) {
+  var trail = lastTrailTimestamp(event.getDescription());
+  var start = event.getStartTime();
+  var t = trail && !isNaN(trail.getTime()) ? trail.getTime() : 0;
+  var s = start && !isNaN(start.getTime()) ? start.getTime() : 0;
+  return Math.max(t, s);
+}
+
+function pickLatestStartEvent_(events) {
+  if (!events || !events.length) return null;
+  var ranked = events.slice();
+  ranked.sort(function (a, b) {
+    return eventRecency_(b) - eventRecency_(a);
+  });
+  return ranked[0];
+}
+
+function isSameLocalDay_(a, b) {
+  if (!a || !b || isNaN(a.getTime()) || isNaN(b.getTime())) return false;
+  return (
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate()
+  );
+}
+
+function pickTodayStartEvents_(events, when) {
+  var out = [];
+  if (!events || !events.length || !when) return out;
+  for (var i = 0; i < events.length; i++) {
+    var t = events[i].getStartTime();
+    var trail = lastTrailTimestamp(events[i].getDescription());
+    if (isSameLocalDay_(t, when) || isSameLocalDay_(trail, when)) out.push(events[i]);
+  }
+  return out;
+}
+
+function resolveEndScope_(data, op, all, endAny, endExisting) {
+  var raw = calendarPhraseKey_(data && (data.endScope || data.end_scope || data.scope));
+  if (raw === 'all' || raw === 'latest' || raw === 'title' || raw === 'today') return raw;
+  if (all) return 'all';
+  if (endAny) return 'latest';
+  if (op === 'start' && endExisting) return 'all';
+  return 'title';
+}
+
+function selectStartsToClose_(starts, scope, title, when) {
+  if (!starts || !starts.length) return [];
+  if (scope === 'all') return starts;
+  if (scope === 'latest') {
+    var latest = pickLatestStartEvent_(starts);
+    return latest ? [latest] : [];
+  }
+  if (scope === 'today') {
+    var today = pickTodayStartEvents_(starts, when);
+    if (today.length) return today;
+    var fallback = pickLatestStartEvent_(starts);
+    return fallback ? [fallback] : [];
+  }
+  if (title) {
+    var named = [];
+    for (var i = 0; i < starts.length; i++) {
+      if (starts[i].getTitle() === title) named.push(starts[i]);
+    }
+    if (named.length) return named;
+  }
+  var primary = pickPrimaryEvent(starts, when, title || '');
+  return primary ? [primary] : [];
 }
 
 function pickPrimaryEvent(events, when, title) {
@@ -3891,7 +4079,7 @@ function eventSummaries(events) {
 
 /**
  * URL / JSON:
- * { action: 'trackCalendar', op, title, prefix, timestamp, lat, lng, endExisting, startHome, all, endAny, silent, days }
+ * { action: 'trackCalendar', op, title, prefix, timestamp, lat, lng, endExisting, startHome, all, endAny, endScope, silent, days }
  */
 function handleCalendarTrack(data) {
   try {
@@ -3910,7 +4098,8 @@ function handleCalendarTrack(data) {
     var lat = coords.lat;
     var lng = coords.lng;
     var hasCoords = !isNaN(lat) && !isNaN(lng);
-    var placeName = hasCoords ? resolvePlaceName(lat, lng) : '';
+    var placeName = (data.placeName || data.place || '').toString().trim();
+    if (!placeName && hasCoords) placeName = resolvePlaceName(lat, lng);
     var endExisting = calendarFlag(data.endExisting, true);
     var startHome = calendarFlag(data.startHome, false);
     var all = calendarFlag(data.all, false);
@@ -3919,11 +4108,19 @@ function handleCalendarTrack(data) {
       all = true;
       endAny = true;
     }
+    var endScope = resolveEndScope_(data, op, all, endAny, endExisting);
     var lookbackMs = calendarLookbackMs(data);
-    appendLog(['handleCalendarTrack resolved', op, 'title=' + title, 'all=' + all, 'endAny=' + endAny]);
+    appendLog([
+      'handleCalendarTrack resolved',
+      op,
+      'title=' + title,
+      'endScope=' + endScope,
+      'all=' + all,
+      'endAny=' + endAny
+    ]);
     var ts = formatCalendarStamp(when);
     var calendar = openTrackingCalendar();
-    var starts = findEventsByFirstLine(calendar, CALENDAR_START_MARKER, when, lookbackMs);
+    var starts = findStartMarkedEvents(calendar, when, lookbackMs);
     var homes = findEventsByFirstLine(calendar, CALENDAR_HOME_MARKER, when, lookbackMs);
     var liveEvents = findLiveTimedEvents(calendar, when, lookbackMs);
     var appendable = mergeCalendarEvents(starts, liveEvents);
@@ -3934,7 +4131,7 @@ function handleCalendarTrack(data) {
       var resultCheck = {
         success: true,
         mode: 'check',
-        starts: eventSummaries(appendable),
+        starts: eventSummaries(starts),
         homes: eventSummaries(homes)
       };
       return calendarJson(resultCheck);
@@ -3953,7 +4150,25 @@ function handleCalendarTrack(data) {
       if (placeName) loc = placeName;
       else if (hasCoords) loc = lat + ',' + lng;
       var blockDesc = String(data.description || data.body || '').trim() || 'auto populated by 記賬 / AI';
-      var blockEv = calendar.createEvent(title || 'Trip', when, endWhen, {
+      var blockTitle = title || 'Trip';
+      var existingBlocks = calendar.getEvents(when, endWhen);
+      for (var bi = 0; bi < existingBlocks.length; bi++) {
+        var be = existingBlocks[bi];
+        if (be.getTitle() !== blockTitle) continue;
+        if (Math.abs(be.getStartTime().getTime() - when.getTime()) > 2000) continue;
+        if (Math.abs(be.getEndTime().getTime() - endWhen.getTime()) > 2000) continue;
+        result = {
+          success: true,
+          mode: 'skipped',
+          reason: 'duplicate',
+          op: 'block',
+          eventId: be.getId(),
+          title: be.getTitle()
+        };
+        appendLog(['Calendar block skipped (duplicate):', JSON.stringify(result)]);
+        return calendarJson(result);
+      }
+      var blockEv = calendar.createEvent(blockTitle, when, endWhen, {
         description: blockDesc,
         location: loc || undefined
       });
@@ -3972,16 +4187,17 @@ function handleCalendarTrack(data) {
     }
 
     if (op === 'start') {
+      var startClose = selectStartsToClose_(starts, endScope, title, when);
+      if (endScope === 'all') {
+        closeEvents(homes, when, 'end', placeName, lat, lng);
+      }
+      if (endExisting || endAny || endScope === 'latest' || endScope === 'today' || endScope === 'all') {
+        closeEvents(startClose, when, 'end', placeName, lat, lng);
+      }
       if (anyEventHasTrail(windowEvents, ts, 'start')) {
         result = { success: true, mode: 'skipped', reason: 'duplicate', op: op, timestamp: ts };
-        appendLog(['Calendar start skipped (duplicate):', ts]);
+        appendLog(['Calendar start skipped (duplicate after close):', ts]);
         return calendarJson(result);
-      }
-      closeEvents(homes, when, 'end', placeName, lat, lng);
-      if (endAny) {
-        closeEvents(mergeCalendarEvents(starts, liveEvents), when, 'end', placeName, lat, lng);
-      } else if (endExisting) {
-        closeEvents(starts, when, 'end', placeName, lat, lng);
       }
       var createdStart = createMarkedEvent(
         calendar,
@@ -4086,26 +4302,15 @@ function handleCalendarTrack(data) {
 
     if (op === 'end') {
       var endPrefix = 'end';
-      // Same pool as check「進行中」: **start** + live unmarked timed events.
-      var endPool = mergeCalendarEvents(starts, liveEvents);
-      var closeAll = all || endAny;
-      if (closeAll) {
-        endPool = mergeCalendarEvents(endPool, homes);
-      }
-      var endTargets = endPool;
+      var closeAll = endScope === 'all';
+      var endTargets = selectStartsToClose_(starts, endScope, title, when);
       var titleFallback = false;
-      if (!closeAll) {
-        if (title) {
-          endTargets = [];
-          for (var e = 0; e < endPool.length; e++) {
-            if (endPool[e].getTitle() === title) endTargets.push(endPool[e]);
-          }
-        }
-        if (!endTargets.length) {
-          titleFallback = Boolean(title);
-          var endPrimary = pickPrimaryEvent(endPool, when, '');
-          endTargets = endPrimary ? [endPrimary] : [];
-        }
+      if (closeAll) {
+        endTargets = mergeCalendarEvents(endTargets, homes);
+      } else if (!endTargets.length && endScope === 'title') {
+        titleFallback = Boolean(title);
+        var endPrimary = pickPrimaryEvent(starts, when, '');
+        endTargets = endPrimary ? [endPrimary] : [];
       }
       if (anyEventHasTrail(endTargets, ts, endPrefix) && endTargets.length) {
         var stillOpen = [];
@@ -4132,7 +4337,8 @@ function handleCalendarTrack(data) {
           starts: starts.length,
           live: liveEvents.length,
           homes: homes.length,
-          pool: endPool.length
+          pool: endTargets.length,
+          endScope: endScope
         },
         warning: closedEnd.length
           ? (titleFallback ? 'ended primary event; title had no match' : '')
@@ -4914,10 +5120,36 @@ function expenseCalendarTitle(data) {
   return title;
 }
 
+function rewriteItemizedTotal_(desc) {
+  var text = String(desc || '');
+  if (!text) return text;
+  var lines = text.split('\n');
+  var sum = 0;
+  var hasItems = false;
+  var totalIdx = -1;
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i];
+    var item = line.match(/:\s*[\d.]+\s*[×xX]\s*[\d.]+\s*=\s*([\d.]+)\s*$/);
+    if (item) {
+      hasItems = true;
+      sum += Number(item[1]) || 0;
+      continue;
+    }
+    if (/^\s*总计\s*[:：]/.test(line)) totalIdx = i;
+  }
+  if (!hasItems) return text;
+  var totalLine = '总计: ' + (Math.round(sum * 100) / 100).toFixed(2);
+  if (totalIdx >= 0) lines[totalIdx] = totalLine;
+  else lines.push(totalLine);
+  return lines.join('\n');
+}
+
 function expenseCalendarBody(data, recordId) {
   var amount = data && data.amount != null ? data.amount : '';
   var curr = (data && data.currency) || 'MYR';
-  var desc = String((data && (data.description || data.simpleDescription || data.remark)) || '').trim();
+  var desc = rewriteItemizedTotal_(
+    String((data && (data.description || data.simpleDescription || data.remark)) || '').trim()
+  );
   var lines = [
     'auto populated by 記賬',
     '金額: ' + curr + ' ' + amount,
