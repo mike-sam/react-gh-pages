@@ -33,6 +33,9 @@ function formatTrackResult(label, data) {
     return `已結束 ${n} 筆${extra}`;
   }
   if (data.mode === 'noop') {
+    if (data.op === 'appendIfExists') {
+      return `沒有開著的「${data.title || '該'}」行程，未追加`;
+    }
     return `沒找到可結束的行程${data.warning ? ` · ${data.warning}` : ''}`;
   }
   if (data.mode === 'skipped') {
@@ -200,6 +203,7 @@ function CalendarTracker() {
         all: flags.all === true,
         endAny: flags.endAny === true,
         endScope,
+        endExisting: flags.endExisting !== undefined ? flags.endExisting : true,
         startHome: flags.startHome === true,
         queued: true,
         when,
@@ -290,7 +294,7 @@ function CalendarTracker() {
         <section className="calendar-field">
           <div className="calendar-field-head">
             <span className="entry-field-label">Event</span>
-            <span className="calendar-lookback-caption">點標題只是選取；開始請按 Start New / End+Start</span>
+            <span className="calendar-lookback-caption">點標題只是選取，不會送出</span>
           </div>
           <div className="entry-chip-row calendar-title-chips">
             {CALENDAR_TITLES.map((item) => (
@@ -473,26 +477,41 @@ function CalendarTracker() {
           type="button"
           className="entry-btn-start"
           onClick={() => handleOp('append', { uiLabel: 'Start/Append' })}
-          title="有進行中的行程就追加；沒有則開始"
+          title="有任何 **start** 就追加到主行程；沒有則用目前標題開新的"
         >
           Start/Append
+        </button>
+        <button
+          type="button"
+          className="entry-btn-start"
+          onClick={() =>
+            handleOp('appendIfExists', { requireTitle: true, uiLabel: '續寫' })
+          }
+          title="標題仍是 **start** 才追加，結束延到 timestamp+30 分；沒有開著的就不做事"
+        >
+          續寫
         </button>
         <button
           type="button"
           className="entry-btn-start-new"
           onClick={() =>
             handleOp('start', {
-              endExisting: true,
-              endScope: 'all',
+              endExisting: false,
+              endScope: 'none',
               requireTitle: true,
               uiLabel: 'Start New',
             })
           }
-          title="結束 lookback 內所有 **start** 後，用目前標題開新的"
+          title="不理過去行程，直接用目前標題開一筆新的"
         >
           Start New
         </button>
       </div>
+
+      <p className="calendar-lookback-caption calendar-op-legend">
+        續寫＝標題開著才追加（不新建）。Start New＝不關舊的，直接開新的。End＝關所選標題並把結束設成時間戳。End+Start＝只關最近一筆
+        **start** 再開新的。End All＝關 lookback 內全部 **start**，結束時間＝時間戳。
+      </p>
 
       <div className="calendar-end-group">
         <div className="calendar-end-group-head">
@@ -538,7 +557,7 @@ function CalendarTracker() {
             type="button"
             className="entry-btn-end-all"
             onClick={() => handleOp('end', { all: true, endScope: 'all', uiLabel: 'End All' })}
-            title="不看標題，結束過去指定天數內所有 **start**"
+            title="不看標題，關掉 lookback 內全部 **start**，結束時間設成目前時間戳"
           >
             End All
           </button>

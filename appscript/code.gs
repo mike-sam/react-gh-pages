@@ -3529,8 +3529,9 @@ var GEOFENCES = [
 var CALENDAR_START_MARKER = '**start**';
 var CALENDAR_END_MARKER = '**end**';
 var CALENDAR_HOME_MARKER = '**home**';
-var CALENDAR_DEFAULT_DURATION_MS = 60 * 60 * 1000; // 新建事件預設 1 小時
-var CALENDAR_EXTEND_MS = 20 * 60 * 1000; // 追加時至少延長到 timestamp+20 分鐘
+var CALENDAR_DEFAULT_DURATION_MS = 60 * 60 * 1000; // start 新建預設 1 小時
+var CALENDAR_EXTEND_MS = 30 * 60 * 1000; // append：結束時間至少 timestamp+30 分鐘
+var CALENDAR_START_DEDUP_MS = 120 * 1000;
 var CALENDAR_LOOKBACK_DAYS_DEFAULT = 3;
 var CALENDAR_LOOKBACK_DAYS_MIN = 1;
 var CALENDAR_LOOKBACK_DAYS_MAX = 14;
@@ -3840,6 +3841,14 @@ function resolveCalendarOp(data) {
   var op = calendarPhraseKey_(data.op);
   if (action === 'check_current' || op === 'check' || op === 'check_current') return 'check';
   if (op === 'end all' || op === 'endall' || op === 'end + all' || op === 'end+all') return 'end';
+  if (
+    op === 'append if exists' ||
+    op === 'appendifexists' ||
+    op === 'append_if_exists' ||
+    op === 'appendif'
+  ) {
+    return 'appendIfExists';
+  }
   if (op === 'start' || op === 'append' || op === 'end' || op === 'home' || op === 'block' || op === 'range') {
     return op === 'range' ? 'block' : op;
   }
@@ -3936,10 +3945,9 @@ function appendDescriptionLine(desc, line) {
 
 function calendarSearchBounds_(when, lookbackMs) {
   var back = lookbackMs || CALENDAR_LOOKBACK_DAYS_DEFAULT * 24 * 60 * 60 * 1000;
-  var pad = Math.max(CALENDAR_LOOKAHEAD_MS, back);
   return {
     from: new Date(when.getTime() - back),
-    to: new Date(when.getTime() + pad)
+    to: new Date(when.getTime() + CALENDAR_LOOKAHEAD_MS)
   };
 }
 
@@ -4061,6 +4069,7 @@ function pickTodayStartEvents_(events, when) {
 
 function resolveEndScope_(data, op, all, endAny, endExisting) {
   var raw = calendarPhraseKey_(data && (data.endScope || data.end_scope || data.scope));
+  if (raw === 'none' || raw === 'off' || raw === 'skip') return 'none';
   if (raw === 'all' || raw === 'latest' || raw === 'title' || raw === 'today') return raw;
   if (all) return 'all';
   if (endAny) return 'latest';
@@ -4068,7 +4077,44 @@ function resolveEndScope_(data, op, all, endAny, endExisting) {
   return 'title';
 }
 
+function eventActionableAt_(event, when) {
+  if (!event || !when) return false;
+  try {
+    return event.getStartTime().getTime() <= when.getTime() + 2000;
+  } catch (eAct) {
+    return true;
+  }
+}
+
+function filterStartsAt_(starts, when) {
+  var out = [];
+  if (!starts) return out;
+  for (var i = 0; i < starts.length; i++) {
+    if (eventActionableAt_(starts[i], when)) out.push(starts[i]);
+  }
+  return out;
+}
+
+function findDuplicateStart_(calendar, title, when) {
+  if (!calendar || !when) return null;
+  var want = String(title || '').trim();
+  if (!want) return null;
+  var from = new Date(when.getTime() - CALENDAR_START_DEDUP_MS);
+  var to = new Date(when.getTime() + CALENDAR_START_DEDUP_MS);
+  var events = calendar.getEvents(from, to);
+  var i;
+  for (i = 0; i < events.length; i++) {
+    var ev = events[i];
+    if (ev.getTitle() !== want) continue;
+    if (Math.abs(ev.getStartTime().getTime() - when.getTime()) > CALENDAR_START_DEDUP_MS) continue;
+    return ev;
+  }
+  return null;
+}
+
 function selectStartsToClose_(starts, scope, title, when) {
+  if (scope === 'none') return [];
+  starts = filterStartsAt_(starts, when);
   if (!starts || !starts.length) return [];
   if (scope === 'all') return starts;
   if (scope === 'latest') {
@@ -4133,21 +4179,31 @@ function applyEventLocation(event, placeName, lat, lng) {
   }
 }
 
-function extendEventEnd(event, when) {
+function extendEventEnd(event, when, extraMs) {
+  var pad = extraMs != null ? extraMs : CALENDAR_EXTEND_MS;
   var start = event.getStartTime();
   var currentEnd = event.getEndTime();
-  var minEnd = new Date(when.getTime() + CALENDAR_EXTEND_MS);
+  var minEnd = new Date(when.getTime() + pad);
   var newEnd = currentEnd.getTime() > minEnd.getTime() ? currentEnd : minEnd;
   if (when.getTime() > currentEnd.getTime()) {
     newEnd = minEnd;
   }
   if (newEnd.getTime() <= start.getTime()) {
-    newEnd = new Date(start.getTime() + CALENDAR_EXTEND_MS);
+    newEnd = new Date(start.getTime() + pad);
   }
   event.setTime(start, newEnd);
 }
 
 function closeCalendarEvent(event, when, trailPfx, placeName, lat, lng) {
+  var start = event.getStartTime();
+  if (when.getTime() + 2000 < start.getTime()) {
+    return {
+      eventId: event.getId(),
+      title: event.getTitle(),
+      skipped: true,
+      reason: 'when_before_start'
+    };
+  }
   var prefix = trailPrefix(trailPfx, 'end');
   var ts = formatCalendarStamp(when);
   var desc = event.getDescription() || '';
@@ -4158,16 +4214,16 @@ function closeCalendarEvent(event, when, trailPfx, placeName, lat, lng) {
     desc = appendDescriptionLine(desc, buildCalendarLogLine(prefix, placeName, lat, lng, when, prevWhen));
   }
   event.setDescription(desc);
-  var start = event.getStartTime();
   var end = when.getTime() > start.getTime() ? when : new Date(start.getTime() + 60 * 1000);
   event.setTime(start, end);
   applyEventLocation(event, placeName, lat, lng);
   return { eventId: event.getId(), title: event.getTitle(), skipped: skipped };
 }
 
-function createMarkedEvent(calendar, title, marker, trailPfx, when, placeName, lat, lng) {
+function createMarkedEvent(calendar, title, marker, trailPfx, when, placeName, lat, lng, durationMs) {
   var logLine = buildCalendarLogLine(trailPfx, placeName, lat, lng, when);
-  var endTime = new Date(when.getTime() + CALENDAR_DEFAULT_DURATION_MS);
+  var dur = durationMs != null ? durationMs : CALENDAR_DEFAULT_DURATION_MS;
+  var endTime = new Date(when.getTime() + dur);
   var event = calendar.createEvent(title, when, endTime, {
     description: marker + '\n' + logLine
   });
@@ -4207,7 +4263,9 @@ function eventSummaries(events) {
  * { action: 'trackCalendar', op, title, prefix, timestamp, lat, lng, endExisting, startHome, all, endAny, endScope, silent, days }
  */
 function handleCalendarTrack(data) {
+  var lock = LockService.getScriptLock();
   try {
+    lock.waitLock(30000);
     data = normalizeCalendarShortcut_(data || {});
     appendLog(['handleCalendarTrack called', JSON.stringify(data)]);
 
@@ -4216,7 +4274,7 @@ function handleCalendarTrack(data) {
       data.timestamp,
       data.timestampMs != null ? data.timestampMs : data.timestamp_ms
     );
-    var title = (data.title || '').toString().trim();
+    var title = (data.title || data.event || '').toString().trim();
     var rawOp = calendarPhraseKey_(data.op);
     if (!title && CALENDAR_TITLE_ALIASES_[rawOp]) title = CALENDAR_TITLE_ALIASES_[rawOp];
     var coords = parseCalendarCoords(data);
@@ -4248,7 +4306,7 @@ function handleCalendarTrack(data) {
     var starts = findStartMarkedEvents(calendar, when, lookbackMs);
     var homes = findEventsByFirstLine(calendar, CALENDAR_HOME_MARKER, when, lookbackMs);
     var liveEvents = findLiveTimedEvents(calendar, when, lookbackMs);
-    var appendable = mergeCalendarEvents(starts, liveEvents);
+    var appendable = filterStartsAt_(mergeCalendarEvents(starts, liveEvents), when);
     var searchBounds = calendarSearchBounds_(when, lookbackMs);
     var windowEvents = calendar.getEvents(searchBounds.from, searchBounds.to);
 
@@ -4312,12 +4370,28 @@ function handleCalendarTrack(data) {
     }
 
     if (op === 'start') {
-      var startClose = selectStartsToClose_(starts, endScope, title, when);
-      if (endScope === 'all') {
-        closeEvents(homes, when, 'end', placeName, lat, lng);
+      var dupStart = findDuplicateStart_(calendar, title || 'Trip', when);
+      if (dupStart) {
+        result = {
+          success: true,
+          mode: 'skipped',
+          reason: 'duplicate',
+          op: op,
+          eventId: dupStart.getId(),
+          title: dupStart.getTitle(),
+          timestamp: ts
+        };
+        appendLog(['Calendar start skipped (same title+time):', ts, title]);
+        return calendarJson(result);
       }
-      if (endExisting || endAny || endScope === 'latest' || endScope === 'today' || endScope === 'all') {
-        closeEvents(startClose, when, 'end', placeName, lat, lng);
+      var startClose = selectStartsToClose_(starts, endScope, title, when);
+      if (endScope !== 'none') {
+        if (endScope === 'all') {
+          closeEvents(homes, when, 'end', placeName, lat, lng);
+        }
+        if (endExisting || endAny || endScope === 'latest' || endScope === 'today' || endScope === 'all') {
+          closeEvents(startClose, when, 'end', placeName, lat, lng);
+        }
       }
       if (anyEventHasTrail(windowEvents, ts, 'start')) {
         result = { success: true, mode: 'skipped', reason: 'duplicate', op: op, timestamp: ts };
@@ -4371,7 +4445,8 @@ function handleCalendarTrack(data) {
           when,
           placeName,
           lat,
-          lng
+          lng,
+          CALENDAR_EXTEND_MS
         );
         result = {
           success: true,
@@ -4425,6 +4500,66 @@ function handleCalendarTrack(data) {
       return calendarJson(result);
     }
 
+    if (op === 'appendIfExists') {
+      var ifPrefix = trailPrefix(data.prefix, '-no input-');
+      if (!title) {
+        result = {
+          success: true,
+          mode: 'noop',
+          op: op,
+          warning: 'missing title/event'
+        };
+        return calendarJson(result);
+      }
+      if (anyEventHasTrail(windowEvents, ts, ifPrefix)) {
+        result = { success: true, mode: 'skipped', reason: 'duplicate', op: op, timestamp: ts };
+        return calendarJson(result);
+      }
+      var openNamed = [];
+      var oi;
+      for (oi = 0; oi < starts.length; oi++) {
+        if (starts[oi].getTitle() === title && eventActionableAt_(starts[oi], when)) {
+          openNamed.push(starts[oi]);
+        }
+      }
+      var ifTarget = pickPrimaryEvent(openNamed, when, title);
+      if (!ifTarget) {
+        result = {
+          success: true,
+          mode: 'noop',
+          op: op,
+          title: title,
+          warning: 'no open **start** event titled ' + title
+        };
+        appendLog(['Calendar appendIfExists noop:', title]);
+        return calendarJson(result);
+      }
+      var ifDesc = ifTarget.getDescription() || '';
+      var ifPrev = lastTrailTimestamp(ifDesc);
+      var ifLine = buildCalendarLogLine(ifPrefix, placeName, lat, lng, when, ifPrev);
+      ifDesc = appendDescriptionLine(ifDesc, ifLine);
+      ifTarget.setDescription(ifDesc);
+      extendEventEnd(ifTarget, when);
+      applyEventLocation(ifTarget, placeName, lat, lng);
+      result = {
+        success: true,
+        mode: 'appended',
+        op: op,
+        placeName: placeName,
+        logLine: ifLine,
+        events: [
+          {
+            eventId: ifTarget.getId(),
+            title: ifTarget.getTitle(),
+            start: ifTarget.getStartTime().toISOString(),
+            end: ifTarget.getEndTime().toISOString()
+          }
+        ]
+      };
+      appendLog(['Calendar appendIfExists:', JSON.stringify(result)]);
+      return calendarJson(result);
+    }
+
     if (op === 'end') {
       var endPrefix = 'end';
       var closeAll = endScope === 'all';
@@ -4434,7 +4569,7 @@ function handleCalendarTrack(data) {
         endTargets = mergeCalendarEvents(endTargets, homes);
       } else if (!endTargets.length && endScope === 'title') {
         titleFallback = Boolean(title);
-        var endPrimary = pickPrimaryEvent(starts, when, '');
+        var endPrimary = pickPrimaryEvent(filterStartsAt_(starts, when), when, '');
         endTargets = endPrimary ? [endPrimary] : [];
       }
       if (anyEventHasTrail(endTargets, ts, endPrefix) && endTargets.length) {
@@ -4534,6 +4669,10 @@ function handleCalendarTrack(data) {
       success: false,
       error: calendarAuthHint(error)
     });
+  } finally {
+    try {
+      lock.releaseLock();
+    } catch (lockErr) {}
   }
 }
 

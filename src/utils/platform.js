@@ -93,7 +93,8 @@ export function stringifyCalendarTrackInput(payload) {
   return JSON.stringify({
     action: 'trackCalendar',
     op: payload.op,
-    title: payload.title || '',
+    title: payload.title || payload.event || '',
+    event: payload.event || payload.title || '',
     prefix: payload.prefix || '',
     timestamp: payload.timestamp,
     timestampMs: payload.timestampMs,

@@ -83,8 +83,15 @@ export function applyOptimisticCalendarAction(prev, action) {
   let homes = [...(prev.homes || [])];
 
   if (action.op === 'start') {
-    starts = [{ title, start: nowIso, kind: 'start', marker: '**start**' }];
-    homes = [];
+    const created = { title, start: nowIso, kind: 'start', marker: '**start**' };
+    if (action.endScope === 'none' || action.endExisting === false) {
+      starts = [created, ...starts];
+    } else {
+      starts = [created];
+      homes = [];
+    }
+  } else if (action.op === 'appendIfExists') {
+    /* 不開新行程；沒有 **start** 就維持原狀 */
   } else if (action.op === 'append') {
     if (!starts.length) {
       starts = [{ title, start: nowIso, kind: 'start', marker: '**start**' }];

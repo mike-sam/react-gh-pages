@@ -81,9 +81,11 @@ export function QueueProvider({ children }) {
       const items = loadQueue();
       for (const item of items) {
         try {
-          await postPayload(item.payload);
-          rememberUnconfirmed(item);
+          const data = await postPayload(item.payload);
           removeFromQueue(item.id);
+          if (item.payload?.action !== 'trackCalendar' && (!data || data.success === false)) {
+            rememberUnconfirmed(item);
+          }
         } catch {
           // keep item; stop sequential flush on first hard failure
           break;

@@ -40,14 +40,20 @@ export const CALENDAR_TRACK_PARAMS = [
   {
     name: 'op',
     required: 'required',
-    example: 'start, append, end, home',
-    note: '按鈕對應 append / start / end / end all。End+Start 用 op=start&endScope=latest',
+    example: 'start, append, appendIfExists, end, home',
+    note: 'Start/Append＝append。續寫＝appendIfExists。Start New＝op=start&endScope=none。End+Start＝endScope=latest',
   },
   {
     name: 'title',
     required: 'start 建議',
     example: 'Work',
-    note: 'Work / Commute / Driving / Trip / Sleep，或其他自訂。缺則 Trip',
+    note: 'Work / Commute / Driving / Trip / Sleep。也可用 event=。appendIfExists 必填',
+  },
+  {
+    name: 'event',
+    required: 'optional',
+    example: 'Commute',
+    note: 'title 別名。appendIfExists&event=Commute：開著才追加，結束延到 timestamp+30m',
   },
   {
     name: 'prefix',
@@ -95,13 +101,13 @@ export const CALENDAR_TRACK_PARAMS = [
     name: 'endScope',
     required: 'optional',
     example: 'latest',
-    note: 'title＝所選標題（End）；latest＝最近一筆 **start**（End+Start）；today＝今日全部 **start**；all＝lookback 內全部（End All / Start New）',
+    note: 'title＝End 所選標題；latest＝End+Start；all＝End All；none＝Start New 不關舊的',
   },
   {
     name: 'endExisting',
     required: 'optional',
     example: '1',
-    note: '預設 1。start 時 0 可重疊。有 endScope 時以 endScope 為準',
+    note: '預設 1。Start New 請 0 + endScope=none。有 endScope 時以 endScope 為準',
   },
   {
     name: 'startHome',
@@ -156,6 +162,7 @@ export function calendarActionPayload({
     action: 'trackCalendar',
     op,
     title: title || '',
+    event: title || '',
     prefix,
     timestamp: stampCalendarTimestamp(when instanceof Date ? when : new Date()),
     timestampMs: (when instanceof Date ? when : new Date()).getTime(),
@@ -285,6 +292,7 @@ export function buildCalendarTrackUrlFromPayload(payload, base = calendarTrackEn
       lng: p.lng ?? p.longitude,
       latlong: p.latlong ?? p.latlng,
       placeName: p.placeName || p.place,
+      event: p.event || p.title,
       endExisting: p.endExisting,
       startHome: p.startHome,
       all: p.all,
@@ -309,6 +317,7 @@ export function buildCalendarTrackUrl(params, base = calendarTrackEndpoint()) {
   const keys = [
     'op',
     'title',
+    'event',
     'prefix',
     'timestamp',
     'timestampMs',
@@ -366,12 +375,25 @@ export function calendarTrackUrlExamples() {
       },
     },
     {
-      title: '開啟 Work · start',
-      note: '結束現有行程後開 Work',
+      title: '續寫 · Commute',
+      note: '僅當 Commute 仍為 **start** 才追加，結束延到 timestamp+30m。沒有開著的就不做事。',
+      params: {
+        op: 'appendIfExists',
+        event: 'Commute',
+        title: 'Commute',
+        timestamp: ts,
+        lat: '1.31',
+        lng: '103.86',
+      },
+    },
+    {
+      title: 'Start New · Work',
+      note: '不理過去行程，直接開一筆 Work。endScope=none、endExisting=0',
       params: {
         op: 'start',
         title: 'Work',
-        endExisting: true,
+        endExisting: false,
+        endScope: 'none',
         timestamp: ts,
       },
     },
@@ -389,7 +411,7 @@ export function calendarTrackUrlExamples() {
     },
     {
       title: 'End All',
-      note: '不看標題，結束 lookback 內所有 **start**。op=end all 即可。days 可省略（預設 3）',
+      note: '關掉 lookback 內所有 **start**，結束時間設成 timestamp。op=end all。days 可省略（預設 3）',
       params: {
         op: 'end all',
         all: true,
