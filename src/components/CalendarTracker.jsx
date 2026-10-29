@@ -70,6 +70,16 @@ function CalendarTracker() {
   const onIOS = useMemo(() => isIOS(), []);
   const shortcutName = SHORTCUTS?.CALENDAR_TRACK || 'CalendarTrack';
   const resolvedTitle = title === '__custom__' ? customTitle.trim() : title;
+  const selectEventTitle = (name) => {
+    const next = String(name || '').trim();
+    if (!next) return;
+    if (CALENDAR_TITLES.includes(next)) {
+      setTitle(next);
+      return;
+    }
+    setTitle('__custom__');
+    setCustomTitle(next);
+  };
 
   const refreshStatus = async ({ silent = false, force = !silent } = {}) => {
     if (!silent) setIsChecking(true);
@@ -290,11 +300,35 @@ function CalendarTracker() {
         />
       </div>
 
+      <section className="calendar-endall">
+        <span className="entry-field-label">過去</span>
+        <span className="entry-chip-row calendar-lookback-chips" role="group" aria-label="搜尋過去幾天">
+          {CALENDAR_LOOKBACK_DAY_CHOICES.map((n) => (
+            <button
+              key={n}
+              type="button"
+              className={`entry-chip${lookbackDays === n ? ' active' : ''}`}
+              onClick={() => pickLookbackDays(n)}
+            >
+              {n}天
+            </button>
+          ))}
+        </span>
+        <button
+          type="button"
+          className="entry-btn-end-all"
+          onClick={() => handleOp('end', { all: true, endScope: 'all', uiLabel: 'End All' })}
+        >
+          End All
+          <small className="calendar-btn-note">end all events within {lookbackDays} days</small>
+        </button>
+      </section>
+
       <div className="calendar-fields">
         <section className="calendar-field">
           <div className="calendar-field-head">
             <span className="entry-field-label">Event</span>
-            <span className="calendar-lookback-caption">點標題只是選取，不會送出</span>
+            <span className="calendar-lookback-caption">選取後才按下面按鈕</span>
           </div>
           <div className="entry-chip-row calendar-title-chips">
             {CALENDAR_TITLES.map((item) => (
@@ -328,7 +362,7 @@ function CalendarTracker() {
         <section className="calendar-field">
           <div className="calendar-field-head">
             <span className="entry-field-label">Prefix</span>
-            <span className="calendar-lookback-caption">Start / End 按鈕會自己寫，這裡只需附加說明</span>
+            <span className="calendar-lookback-caption">按鈕會自己寫 start/end，這裡只需附加說明</span>
           </div>
           <div className="entry-chip-row calendar-prefix-chips">
             <button
@@ -411,10 +445,7 @@ function CalendarTracker() {
 
       <div className="calendar-status">
         <div className="calendar-status-head">
-          <span className="entry-field-label">
-            進行中
-            <span className="calendar-lookback-caption">過去 {lookbackDays} 天</span>
-          </span>
+          <span className="entry-field-label">進行中</span>
           <button
             type="button"
             className="calendar-status-refresh"
@@ -438,17 +469,25 @@ function CalendarTracker() {
           <ul className="calendar-status-list">
             {status.starts.map((ev) => (
               <li key={`s-${ev.eventId || ev.title}-${ev.start}`}>
-                <strong>{ev.title}</strong>
-                {ev.marker !== '**start**' ? (
-                  <span className="calendar-status-adopted">既有</span>
-                ) : null}
-                {ev.start ? <span>從 {formatCalendarClock(ev.start)}</span> : null}
+                <button
+                  type="button"
+                  className={`calendar-status-pick${resolvedTitle === ev.title ? ' is-selected' : ''}`}
+                  onClick={() => selectEventTitle(ev.title)}
+                >
+                  <strong>{ev.title}</strong>
+                  {ev.marker !== '**start**' ? (
+                    <span className="calendar-status-adopted">既有</span>
+                  ) : null}
+                  {ev.start ? <span>從 {formatCalendarClock(ev.start)}</span> : null}
+                </button>
               </li>
             ))}
             {status.homes.map((ev) => (
               <li key={`h-${ev.eventId || ev.title}-${ev.start}`}>
-                <strong>Home</strong>
-                {ev.start ? <span>從 {formatCalendarClock(ev.start)}</span> : null}
+                <span className="calendar-status-pick is-static">
+                  <strong>Home</strong>
+                  {ev.start ? <span>從 {formatCalendarClock(ev.start)}</span> : null}
+                </span>
               </li>
             ))}
           </ul>
@@ -472,62 +511,39 @@ function CalendarTracker() {
         ) : null}
       </div>
 
-      <div className="entry-btn-row">
-        <button
-          type="button"
-          className="entry-btn-start"
-          onClick={() => handleOp('append', { uiLabel: 'Start/Append' })}
-          title="有任何 **start** 就追加到主行程；沒有則用目前標題開新的"
-        >
-          Start/Append
-        </button>
-        <button
-          type="button"
-          className="entry-btn-start"
-          onClick={() =>
-            handleOp('appendIfExists', { requireTitle: true, uiLabel: '續寫' })
-          }
-          title="標題仍是 **start** 才追加，結束延到 timestamp+30 分；沒有開著的就不做事"
-        >
-          續寫
-        </button>
-        <button
-          type="button"
-          className="entry-btn-start-new"
-          onClick={() =>
-            handleOp('start', {
-              endExisting: false,
-              endScope: 'none',
-              requireTitle: true,
-              uiLabel: 'Start New',
-            })
-          }
-          title="不理過去行程，直接用目前標題開一筆新的"
-        >
-          Start New
-        </button>
-      </div>
-
-      <p className="calendar-lookback-caption calendar-op-legend">
-        續寫＝標題開著才追加（不新建）。Start New＝不關舊的，直接開新的。End＝關所選標題並把結束設成時間戳。End+Start＝只關最近一筆
-        **start** 再開新的。End All＝關 lookback 內全部 **start**，結束時間＝時間戳。
-      </p>
-
-      <div className="calendar-end-group">
-        <div className="calendar-end-group-head">
-          <span className="calendar-lookback-caption">過去 {lookbackDays} 天</span>
-          <span className="entry-chip-row calendar-lookback-chips" role="group" aria-label="搜尋過去幾天">
-            {CALENDAR_LOOKBACK_DAY_CHOICES.map((n) => (
-              <button
-                key={n}
-                type="button"
-                className={`entry-chip${lookbackDays === n ? ' active' : ''}`}
-                onClick={() => pickLookbackDays(n)}
-              >
-                {n}天
-              </button>
-            ))}
-          </span>
+      <div className="calendar-act-rows">
+        <div className="entry-btn-row">
+          <button
+            type="button"
+            className="entry-btn-start"
+            onClick={() => handleOp('append', { requireTitle: true, uiLabel: 'Start/Append' })}
+          >
+            Start/Append
+            <small className="calendar-btn-note">append if exists or start if doesn't exists</small>
+          </button>
+          <button
+            type="button"
+            className="entry-btn-start"
+            onClick={() => handleOp('appendIfExists', { requireTitle: true, uiLabel: 'Append If' })}
+          >
+            Append If Exists
+            <small className="calendar-btn-note">only append if exists</small>
+          </button>
+          <button
+            type="button"
+            className="entry-btn-start-new"
+            onClick={() =>
+              handleOp('start', {
+                endExisting: false,
+                endScope: 'none',
+                requireTitle: true,
+                uiLabel: 'Start New',
+              })
+            }
+          >
+            Start New
+            <small className="calendar-btn-note">ignore any, create new</small>
+          </button>
         </div>
         <div className="entry-btn-row">
           <button
@@ -541,25 +557,17 @@ function CalendarTracker() {
                 uiLabel: 'End+Start',
               })
             }
-            title="只結束最近一筆 **start**，再用目前標題開新的"
           >
             End+Start
+            <small className="calendar-btn-note">end recent event & start this event</small>
           </button>
           <button
             type="button"
             className="entry-btn-end"
-            onClick={() => handleOp('end', { endScope: 'title', uiLabel: 'End' })}
-            title="結束目前所選標題、且仍為 **start** 的行程"
+            onClick={() => handleOp('end', { endScope: 'title', requireTitle: true, uiLabel: 'End' })}
           >
             End
-          </button>
-          <button
-            type="button"
-            className="entry-btn-end-all"
-            onClick={() => handleOp('end', { all: true, endScope: 'all', uiLabel: 'End All' })}
-            title="不看標題，關掉 lookback 內全部 **start**，結束時間設成目前時間戳"
-          >
-            End All
+            <small className="calendar-btn-note">end this event only</small>
           </button>
         </div>
       </div>

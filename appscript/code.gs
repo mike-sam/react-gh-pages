@@ -4432,7 +4432,14 @@ function handleCalendarTrack(data) {
       }
       var targets = appendable;
       if (!all) {
-        var primary = pickPrimaryEvent(appendable, when, title);
+        var appendPool = appendable;
+        if (title) {
+          appendPool = [];
+          for (var ai = 0; ai < appendable.length; ai++) {
+            if (appendable[ai].getTitle() === title) appendPool.push(appendable[ai]);
+          }
+        }
+        var primary = pickPrimaryEvent(appendPool, when, title);
         targets = primary ? [primary] : [];
       }
       if (!targets.length) {

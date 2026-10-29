@@ -23,7 +23,7 @@
 }
 
 @media screen and (min-width: 300px) {
-  /* Do not inset body — sticky nav must be full-bleed (no「劉海」side gaps) */
+  /* Do not inset body 鈥?sticky nav must be full-bleed (no銆屽妷娴枫€峴ide gaps) */
   body {
     margin: 0;
   }
@@ -1220,7 +1220,7 @@
   border-color: #5a6268;
 }
 
-/* Generic Number Pad Styles — reveal inline on field tap (not modal) */
+/* Generic Number Pad Styles 鈥?reveal inline on field tap (not modal) */
 .number-pad-container {
   margin-bottom: 15px;
 }
@@ -2498,7 +2498,7 @@
   color: white;
 }
 
-/* 加油升数bar区域 - 包含sub-bar */
+/* 鍔犳补鍗囨暟bar鍖哄煙 - 鍖呭惈sub-bar */
 .fuel-liters-bar-section {
   margin-top: 12px;
   padding-top: 12px;
@@ -2544,8 +2544,8 @@
   box-shadow: 0 2px 8px rgba(59, 130, 246, 0.3);
   transition: width 0.5s ease;
   border: 2px solid rgba(255, 255, 255, 0.3);
-  /* 根据sub-bar数量调整高度：每个sub-bar 18px，加上间距 */
-  /* 2个sub-bar = 18px * 2 + 4px间距 = 40px */
+  /* 鏍规嵁sub-bar鏁伴噺璋冩暣楂樺害锛氭瘡涓猻ub-bar 18px锛屽姞涓婇棿璺?*/
+  /* 2涓猻ub-bar = 18px * 2 + 4px闂磋窛 = 40px */
 }
 
 .fuel-sub-bar {
@@ -2576,7 +2576,7 @@
   border: 1px solid rgba(255, 255, 255, 0.3);
 }
 
-/* 虚线标示 */
+/* 铏氱嚎鏍囩ず */
 .sub-bar-dash-line {
   position: absolute;
   width: 1px;
@@ -2586,7 +2586,7 @@
   pointer-events: none;
 }
 
-/* 右侧文字显示区域 */
+/* 鍙充晶鏂囧瓧鏄剧ず鍖哄煙 */
 .fuel-bar-text-right {
   flex-shrink: 0;
   margin-left: 12px;
@@ -2725,7 +2725,7 @@
   text-align: right;
 }
 
-/* Sub-bar右侧文字（在bar内） */
+/* Sub-bar鍙充晶鏂囧瓧锛堝湪bar鍐咃級 */
 .sub-bar-text-right {
   position: absolute;
   display: flex;
@@ -2772,7 +2772,7 @@
   color: white;
 }
 
-/* 紧凑版卡片样式 */
+/* 绱у噾鐗堝崱鐗囨牱寮?*/
 .fuel-stats-compact {
   display: grid;
   grid-template-columns: 1fr;
@@ -3720,7 +3720,7 @@
   background: rgba(229, 57, 53, 0.22);
 }
 
-/* Date cross: ↑月  ←日  center  日→  ↓月 */
+/* Date cross: 鈫戞湀  鈫愭棩  center  鏃モ啋  鈫撴湀 */
 .date-adjust-cross {
   display: grid;
   grid-template-columns: 64px 1fr 64px;
@@ -3954,10 +3954,10 @@
   padding: 10px 12px;
   font-size: 14px;
   line-height: 1.45;
-  /* Desktop: drag corner. iOS: no handle — JS autogrow still applies */
+  /* Desktop: drag corner. iOS: no handle 鈥?JS autogrow still applies */
   resize: vertical;
   overflow-y: auto;
-  /* Height only via JS — field-sizing:content shrinks width and leaves right gap */
+  /* Height only via JS 鈥?field-sizing:content shrinks width and leaves right gap */
   max-height: 360px;
 }
 .remark-container-wrapper--polished .content-remark--autogrow {
@@ -4174,7 +4174,7 @@ body {
   touch-action: manipulation;
   margin: 0;
   min-height: 100%;
-  /* avoid overflow-x:hidden here — it breaks position:sticky nav */
+  /* avoid overflow-x:hidden here 鈥?it breaks position:sticky nav */
 }
 
 .tag {
@@ -4755,7 +4755,7 @@ input,textarea {
   padding: 0;
   background: var(--bg, #0f1115);
   color: var(--text, #e8eaed);
-  /* Do NOT set overflow-x/y here — any overflow ≠ visible breaks position:sticky on .page-chrome-top */
+  /* Do NOT set overflow-x/y here 鈥?any overflow 鈮?visible breaks position:sticky on .page-chrome-top */
 }
 
 .silent-submit-banner {
@@ -4844,7 +4844,7 @@ input,textarea {
   will-change: transform;
 }
 
-/* Shared bottom-right floating stack (QuickLinks, back-to-top, …) */
+/* Shared bottom-right floating stack (QuickLinks, back-to-top, 鈥? */
 .floating-stack {
   position: fixed;
   right: max(14px, env(safe-area-inset-right, 0px));
@@ -5253,7 +5253,7 @@ input,textarea {
 }
 
 .feature-page {
-  /* Same as .app-container / 記帳 — do not collapse under the sticky header */
+  /* Same as .app-container / 瑷樺赋 鈥?do not collapse under the sticky header */
   padding-top: 12px;
 }
 
@@ -5604,25 +5604,43 @@ input,textarea {
   color: var(--text-muted, #9aa3b2);
 }
 .calendar-tracker .entry-btn-row > button {
-  flex: 1 1 30%;
-  min-width: 6.6rem;
+  flex: 1 1 28%;
+  min-width: 6.2rem;
 }
-.calendar-end-group {
+.calendar-btn-note {
+  display: block;
+  margin-top: 2px;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.2;
+  opacity: 0.8;
+}
+.calendar-act-rows {
+  display: grid;
+  gap: 8px;
   margin: 8px 0 4px;
+}
+.calendar-endall {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 10px;
   padding: 8px 10px;
   border-radius: 10px;
   border: 1px solid var(--border, #333945);
   background: var(--bg-elevated, #1a1d24);
 }
-.calendar-end-group-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 8px;
-}
-.calendar-end-group .entry-btn-row {
+.calendar-endall .entry-field-label {
   margin: 0;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--text-muted, #9aa3b2);
+}
+.calendar-endall .entry-btn-end-all {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding: 8px 14px;
 }
 .calendar-status {
   margin: 8px 0 4px;
@@ -5634,11 +5652,11 @@ input,textarea {
 .calendar-status-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 8px;
 }
 .calendar-status-head .entry-field-label {
-  margin: 0;
+  margin: 0 auto 0 0;
   display: inline-flex;
   align-items: baseline;
   gap: 8px;
@@ -5693,7 +5711,31 @@ input,textarea {
   font-size: 13px;
   color: var(--text, #e8eaed);
 }
-.calendar-status-list li span {
+.calendar-status-pick {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  margin: 0;
+  padding: 4px 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.calendar-status-pick.is-static {
+  cursor: default;
+}
+.calendar-status-pick.is-selected {
+  border-color: var(--accent, #8ab4f8);
+  background: rgba(138, 180, 248, 0.08);
+}
+.calendar-status-list li span,
+.calendar-status-pick span {
   color: var(--text-muted, #9aa3b2);
   font-size: 12px;
 }
@@ -6873,7 +6915,7 @@ input,textarea {
 /* ===== Parking map ===== */
 .parking-map-preview {
   position: relative;
-  z-index: 1; /* contain Leaflet panes (z-index 400–1000) so they don't cover header modals */
+  z-index: 1; /* contain Leaflet panes (z-index 400鈥?000) so they don't cover header modals */
   isolation: isolate;
   margin: 12px 0 8px;
   border-radius: 10px;
@@ -7953,7 +7995,7 @@ input,textarea {
   100% { transform: scale(1); }
 }
 
-/* Infinite wheel: 3 visible slots — neighbors gray, wraps last→first */
+/* Infinite wheel: 3 visible slots 鈥?neighbors gray, wraps last鈫抐irst */
 .wheel-picker {
   position: relative;
   border: 1px solid var(--border, #333945);
@@ -8099,8 +8141,8 @@ input,textarea {
   box-sizing: border-box;
 }
 
-/* Payment: one cell — cat bar + option wheel
-   Outer 72px border-box → 70px content; catbar 22 + options 48 = 70 (exact 16×3 slots) */
+/* Payment: one cell 鈥?cat bar + option wheel
+   Outer 72px border-box 鈫?70px content; catbar 22 + options 48 = 70 (exact 16脳3 slots) */
 .payment-wheel-placeholder {
   flex: 1;
   appearance: none;
@@ -8473,7 +8515,7 @@ input,textarea {
   padding-bottom: 8px;
 }
 .picker-modal--top .picker-modal-body {
-  /* Keep results area usable even with 0–1 matches */
+  /* Keep results area usable even with 0鈥? matches */
   min-height: 160px;
 }
 .picker-modal--top .picker-modal-empty {
@@ -8517,7 +8559,7 @@ input,textarea {
   padding: 24px 8px;
 }
 
-/* Collapsible category / subcategory — aligned with page chrome chips */
+/* Collapsible category / subcategory 鈥?aligned with page chrome chips */
 .tag-selector-expanded {
   transform-origin: top center;
 }
@@ -9352,7 +9394,7 @@ input,textarea {
   margin: 12px 0 4px;
 }
 
-/* ===== Obligations (預定交易) ===== */
+/* ===== Obligations (闋愬畾浜ゆ槗) ===== */
 .obligation-page {
   padding-bottom: 32px;
 }

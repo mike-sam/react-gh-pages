@@ -41,7 +41,7 @@ export const CALENDAR_TRACK_PARAMS = [
     name: 'op',
     required: 'required',
     example: 'start, append, appendIfExists, end, home',
-    note: 'Start/Append＝append。續寫＝appendIfExists。Start New＝op=start&endScope=none。End+Start＝endScope=latest',
+    note: 'Start/Append＝append。Append If＝appendIfExists。Start New＝op=start&endScope=none。End+Start＝endScope=latest',
   },
   {
     name: 'title',
@@ -375,7 +375,7 @@ export function calendarTrackUrlExamples() {
       },
     },
     {
-      title: '續寫 · Commute',
+      title: 'Append If · Commute',
       note: '僅當 Commute 仍為 **start** 才追加，結束延到 timestamp+30m。沒有開著的就不做事。',
       params: {
         op: 'appendIfExists',

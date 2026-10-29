@@ -86,6 +86,12 @@ export function applyOptimisticCalendarAction(prev, action) {
     const created = { title, start: nowIso, kind: 'start', marker: '**start**' };
     if (action.endScope === 'none' || action.endExisting === false) {
       starts = [created, ...starts];
+    } else if (action.endScope === 'latest') {
+      const latest = starts.reduce(
+        (best, e) => (!best || String(e.start || '') > String(best.start || '') ? e : best),
+        null
+      );
+      starts = [created, ...starts.filter((e) => e !== latest)];
     } else {
       starts = [created];
       homes = [];
@@ -93,9 +99,8 @@ export function applyOptimisticCalendarAction(prev, action) {
   } else if (action.op === 'appendIfExists') {
     /* 不開新行程；沒有 **start** 就維持原狀 */
   } else if (action.op === 'append') {
-    if (!starts.length) {
-      starts = [{ title, start: nowIso, kind: 'start', marker: '**start**' }];
-      homes = [];
+    if (!starts.some((e) => e.title === title)) {
+      starts = [{ title, start: nowIso, kind: 'start', marker: '**start**' }, ...starts];
     }
   } else if (action.op === 'end') {
     if (action.all || action.endScope === 'all' || action.endAny || !action.title) {
