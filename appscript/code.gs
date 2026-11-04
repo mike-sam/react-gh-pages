@@ -3778,6 +3778,12 @@ function calendarPhraseToData_(raw) {
   if (key === 'end') {
     return { action: 'trackCalendar', op: 'end' };
   }
+  if (key === 'end start' || key === 'endstart') {
+    return { action: 'trackCalendar', op: 'start', endScope: 'latest' };
+  }
+  if (key === 'start new' || key === 'startnew') {
+    return { action: 'trackCalendar', op: 'start', endScope: 'none' };
+  }
   if (key === 'start' || key === 'append' || key === 'home' || key === 'check') {
     return { action: 'trackCalendar', op: key };
   }
@@ -3811,6 +3817,7 @@ function applyCalendarPhrase_(out, phrase) {
   if (phrase.title && !out.title) out.title = phrase.title;
   if (phrase.all) out.all = phrase.all;
   if (phrase.endAny) out.endAny = phrase.endAny;
+  if (phrase.endScope && !out.endScope) out.endScope = phrase.endScope;
   if (phrase.endExisting != null && (out.endExisting === undefined || out.endExisting === '')) {
     out.endExisting = phrase.endExisting;
   }
@@ -4132,9 +4139,9 @@ function selectStartsToClose_(starts, scope, title, when) {
     for (var i = 0; i < starts.length; i++) {
       if (starts[i].getTitle() === title) named.push(starts[i]);
     }
-    if (named.length) return named;
+    return named;
   }
-  var primary = pickPrimaryEvent(starts, when, title || '');
+  var primary = pickPrimaryEvent(starts, when, '');
   return primary ? [primary] : [];
 }
 
@@ -4260,7 +4267,7 @@ function eventSummaries(events) {
 
 /**
  * URL / JSON:
- * { action: 'trackCalendar', op, title, prefix, timestamp, lat, lng, endExisting, startHome, all, endAny, endScope, silent, days }
+ * 參數完整說明見 appscript/README.md「行事曆 URL 參數」。
  */
 function handleCalendarTrack(data) {
   var lock = LockService.getScriptLock();
@@ -4571,11 +4578,9 @@ function handleCalendarTrack(data) {
       var endPrefix = 'end';
       var closeAll = endScope === 'all';
       var endTargets = selectStartsToClose_(starts, endScope, title, when);
-      var titleFallback = false;
       if (closeAll) {
         endTargets = mergeCalendarEvents(endTargets, homes);
-      } else if (!endTargets.length && endScope === 'title') {
-        titleFallback = Boolean(title);
+      } else if (!endTargets.length && endScope === 'title' && !title) {
         var endPrimary = pickPrimaryEvent(filterStartsAt_(starts, when), when, '');
         endTargets = endPrimary ? [endPrimary] : [];
       }
@@ -4608,8 +4613,9 @@ function handleCalendarTrack(data) {
           endScope: endScope
         },
         warning: closedEnd.length
-          ? (titleFallback ? 'ended primary event; title had no match' : '')
-          : ('no matching open events in lookback window (starts=' +
+          ? ''
+          : ((title && !closeAll ? '"' + title + '" is not open; ' : '') +
+            'no matching open events in lookback window (starts=' +
             starts.length +
             ' live=' +
             liveEvents.length +
