@@ -224,7 +224,7 @@ function CalendarTracker() {
     const buildPayload = (coords) => ({
       id: Date.now(),
       action: 'trackCalendar',
-      op: flags.all ? 'end all' : op,
+      op: flags.wireOp || (flags.all ? 'endAll' : op),
       title: flags.all ? '' : resolvedTitle || '',
       prefix: prefix.trim(),
       timestamp,
@@ -232,12 +232,6 @@ function CalendarTracker() {
       latitude: coords?.lat ?? null,
       longitude: coords?.lng ?? null,
       placeName: coords ? labelFromCoveringPlace(coords) || coords.label || placeName : placeName,
-      endExisting: flags.endExisting !== undefined ? flags.endExisting : true,
-      startHome: flags.startHome === true,
-      all: flags.all === true,
-      endAny: flags.endAny === true,
-      endScope,
-      silent: true,
       days,
       lookbackDays: days,
     });
@@ -524,7 +518,7 @@ function CalendarTracker() {
           <button
             type="button"
             className="entry-btn-start"
-            onClick={() => handleOp('appendIfExists', { requireTitle: true, uiLabel: 'Append If' })}
+            onClick={() => handleOp('appendIfExists', { wireOp: 'appendIf', requireTitle: true, uiLabel: 'Append If' })}
           >
             Append If Exists
             <small className="calendar-btn-note">only append if exists</small>
@@ -536,6 +530,7 @@ function CalendarTracker() {
               handleOp('start', {
                 endExisting: false,
                 endScope: 'none',
+                wireOp: 'startNew',
                 requireTitle: true,
                 uiLabel: 'Start New',
               })
@@ -553,6 +548,7 @@ function CalendarTracker() {
               handleOp('start', {
                 endExisting: true,
                 endScope: 'latest',
+                wireOp: 'endStart',
                 requireTitle: true,
                 uiLabel: 'End+Start',
               })

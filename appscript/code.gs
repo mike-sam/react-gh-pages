@@ -3773,16 +3773,16 @@ function calendarPhraseToData_(raw) {
     return { action: 'calendarPing', op: 'ping' };
   }
   if (key === 'end all' || key === 'endall' || key === 'end + all' || key === 'end+all') {
-    return { action: 'trackCalendar', op: 'end', all: '1', endAny: '1' };
+    return { action: 'trackCalendar', op: 'end', all: '1', endScope: 'all', force: true };
   }
   if (key === 'end') {
     return { action: 'trackCalendar', op: 'end' };
   }
   if (key === 'end start' || key === 'endstart') {
-    return { action: 'trackCalendar', op: 'start', endScope: 'latest' };
+    return { action: 'trackCalendar', op: 'start', endScope: 'latest', force: true };
   }
   if (key === 'start new' || key === 'startnew') {
-    return { action: 'trackCalendar', op: 'start', endScope: 'none' };
+    return { action: 'trackCalendar', op: 'start', endScope: 'none', force: true };
   }
   if (key === 'start' || key === 'append' || key === 'home' || key === 'check') {
     return { action: 'trackCalendar', op: key };
@@ -3815,6 +3815,14 @@ function applyCalendarPhrase_(out, phrase) {
   if (phrase.action) out.action = phrase.action;
   if (phrase.op) out.op = phrase.op;
   if (phrase.title && !out.title) out.title = phrase.title;
+  if (phrase.force) {
+    // Named ops (endStart / startNew / endAll) decide scope alone; legacy flags are ignored.
+    out.endScope = phrase.endScope;
+    out.all = phrase.all || '';
+    out.endAny = '';
+    out.endExisting = '';
+    return out;
+  }
   if (phrase.all) out.all = phrase.all;
   if (phrase.endAny) out.endAny = phrase.endAny;
   if (phrase.endScope && !out.endScope) out.endScope = phrase.endScope;

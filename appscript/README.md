@@ -71,7 +71,7 @@ GAS 只認日曆上**描述第一行是 `**start**`** 的行程為「進行中�
 
 布林值接受 `1/0`、`true/false`、`yes/no`、`on/off`。
 
-**進階（不建議再用）**：`endScope`（`none / latest / all / title`）、`endExisting`、`all`、`endAny` 都是舊的組合方式，上面的 op 名稱已涵蓋。`silent` 已無作用。
+**舊參數**：`endScope`、`endExisting`、`all`、`endAny` 只在 `op=start` / `op=end` 時有作用（給舊捷徑用）。用 `endStart`、`startNew`、`endAll` 時一律忽略，帶了也沒影響。`silent` 已無作用。
 
 ### 防重複
 

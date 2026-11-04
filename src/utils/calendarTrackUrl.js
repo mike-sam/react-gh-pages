@@ -95,7 +95,7 @@ export const CALENDAR_TRACK_PARAMS = [
     name: 'endScope',
     required: 'optional',
     example: 'all',
-    note: '舊寫法，不必再帶（endExisting、all、endAny 同）。完整說明見 appscript/README.md',
+    note: '舊參數（endExisting、all、endAny 同），只在 op=start／end 有作用。用 endStart／startNew／endAll 時忽略',
   },
   {
     name: 'days',
