@@ -1,6 +1,6 @@
 /**
  * Lightweight hash routing for GitHub Pages.
- * Examples: #/  #/expense  #/calendar  #/vehicles  #/parking  #/regions
+ * Examples: #/  #/expense  #/photo  #/eat  #/calendar  #/vehicles  #/parking  #/regions
  *
  * In-app Back returns to 主頁 (tool pages are not stacked).
  */
@@ -9,6 +9,7 @@ export const ROUTES = {
   HOME: '/',
   EXPENSE: '/expense',
   PHOTO: '/photo',
+  EAT: '/eat',
   CALENDAR: '/calendar',
   PARKING: '/parking',
   VEHICLES: '/vehicles',
@@ -45,6 +46,14 @@ const DEFAULT_LEAVE_MSG = '尚有未送出的內容，確定要離開嗎？未�
 
 let dirtyGuard = null;
 let leaveConfirmed = false;
+/** 主頁按鈕要一路回到主頁。系統返回停在拍照記錄，不會被清掉。 */
+let collapseToHome = false;
+
+export function takeHomeCollapse() {
+  const pending = collapseToHome;
+  collapseToHome = false;
+  return pending;
+}
 
 /**
  * Register an unsaved-changes guard from a page. Pass null on unmount.
@@ -215,13 +224,16 @@ export function goHomeFromTool() {
   const hadOverlay = Boolean(window.history.state?.overlay);
   clearHistoryOverlays();
   if (hadOverlay) {
+    collapseToHome = false;
     applyHash('#/', { replace: true, skipGuard: true });
     return;
   }
   if (loadBackMode() === BACK_MODES.HOME && window.history.state?.fromHome) {
+    collapseToHome = true;
     window.history.back();
     return;
   }
+  collapseToHome = false;
   applyHash('#/', { replace: true, skipGuard: true });
 }
 

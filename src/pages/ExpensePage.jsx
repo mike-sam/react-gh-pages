@@ -7,29 +7,34 @@ import '../App.css';
 import ExpenseDateTimeRow from '../components/ExpenseDateTimeRow';
 import { focusElement } from '../utils/keyboardNavigation';
 import PageChrome from '../components/PageChrome';
+import EntryUrlExamples from '../components/EntryUrlExamples';
 import AmountTripleRow from '../components/AmountTripleRow';
 import TaxAddonStrip, { computeFinalAmount, formatTaxAddonTags } from '../components/TaxAddonStrip';
 import CameraAICapture from '../components/CameraAICapture';
 import ReceiptPhotoEditor from '../components/ReceiptPhotoEditor';
 import { useOfflineQueue } from '../context/QueueContext';
 import {
-  analyzeLifePhoto,
   analyzeReceiptPhoto,
   applyAiSuggestion,
   DEFAULT_AI_MODELS,
+  defaultPromptLibrary,
   DEFAULT_RECEIPT_PROMPT_TEMPLATE,
   formatAiCurlCopy,
   formatAiFallbackCopy,
   formatWhen,
-  lifePhotoPrompt,
   loadAiPrompt,
+  peekAiPrompt,
   parseAiSuggestions,
+  parseLifePhotoJson,
   recordAiSuggestion,
+  promptOptionLabel,
+  promptLibraryWarn,
+  promptsForContext,
   receiptPromptFor,
   receiptPromptParts,
   resolveSuggestionTimes,
   saveAiModelChoice,
-  saveAiPrompt,
+  savePromptLibrary,
   sendTelegramPhotos,
   suggestionSummary,
 } from '../utils/aiSuggest';
@@ -44,6 +49,7 @@ import { labelFromCoveringPlace, pinMerchantIfNearHere, rememberNamedPoint } fro
 import {
   asDraftDate,
   clearExpenseDraft,
+  durablePhotoUrl,
   hydrateDraftPhotos,
   loadBootExpenseDraft,
   saveExpenseDraft,
@@ -82,6 +88,19 @@ function ledgerFromLocation() {
   if (tab === 'scheduled') return 'scheduled';
   if (tab === 'summary') return 'summary';
   return 'now';
+}
+
+function expenseAiSeed() {
+  const cached = peekAiPrompt();
+  const prompts = cached?.prompts?.length ? cached.prompts : defaultPromptLibrary();
+  const general = prompts.find((row) => row.mode === 'expense' && !row.cat && !row.subcat);
+  return {
+    fetched: Boolean(cached),
+    prompts,
+    template: cached?.template || general?.template || DEFAULT_RECEIPT_PROMPT_TEMPLATE,
+    models: cached?.models?.length ? cached.models : DEFAULT_AI_MODELS,
+    prefer: cached?.prefer || 'gemini:gemini-3.5-flash-lite',
+  };
 }
 
 function ExpensePage() {
@@ -153,9 +172,10 @@ function ExpensePage() {
   const [aiPicked, setAiPicked] = useState(null);
   const [aiCopied, setAiCopied] = useState('');
   const [aiLocMsg, setAiLocMsg] = useState('');
-  const [aiTemplate, setAiTemplate] = useState(DEFAULT_RECEIPT_PROMPT_TEMPLATE);
-  const [aiTemplateSaved, setAiTemplateSaved] = useState(DEFAULT_RECEIPT_PROMPT_TEMPLATE);
-  const [aiTplLoaded, setAiTplLoaded] = useState(false);
+  const [aiSeed] = useState(expenseAiSeed);
+  const [aiTemplate, setAiTemplate] = useState(aiSeed.template);
+  const [aiTemplateSaved, setAiTemplateSaved] = useState(aiSeed.template);
+  const [aiTplLoaded, setAiTplLoaded] = useState(aiSeed.fetched);
   const [aiTplBusy, setAiTplBusy] = useState(false);
   const [aiTplMsg, setAiTplMsg] = useState('');
   const [itemizedImport, setItemizedImport] = useState(() =>
@@ -167,8 +187,11 @@ function ExpensePage() {
   const [aiCalAsk, setAiCalAsk] = useState(null);
   const [aiPaste, setAiPaste] = useState('');
   const [aiPromptView, setAiPromptView] = useState('edit');
-  const [aiModels, setAiModels] = useState(DEFAULT_AI_MODELS);
-  const [aiPrefer, setAiPrefer] = useState('gemini:gemini-3.5-flash-lite');
+  const [aiModels, setAiModels] = useState(aiSeed.models);
+  const [aiPrefer, setAiPrefer] = useState(aiSeed.prefer);
+  const [aiPrompts, setAiPrompts] = useState(aiSeed.prompts);
+  const [aiPromptId, setAiPromptId] = useState('');
+  const [aiPromptScope, setAiPromptScope] = useState('any');
   const [recordToTelegram, setRecordToTelegram] = useState(() => {
     try {
       return sessionStorage.getItem('lifePhotoRecord') === '1';
@@ -201,36 +224,46 @@ function ExpensePage() {
         tag: selectedTag,
         title: input,
         when: formatWhen(selectedDateTime),
+        lat: smartLoc?.lat,
+        lng: smartLoc?.lng,
       }),
-    [aiTemplate, selectedTag, input, selectedDateTime]
+    [aiTemplate, selectedTag, input, selectedDateTime, smartLoc]
   );
 
-  const ensureAiPromptLoaded = useCallback(async () => {
-    if (aiTplLoaded) return aiTemplate;
+  const fetchAiConfig = useCallback(async () => {
     setAiTplBusy(true);
     try {
       const data = await loadAiPrompt();
-      setAiTemplate(data.template);
-      setAiTemplateSaved(data.template);
+      const keepEdit = aiTemplate !== aiTemplateSaved;
+      if (!keepEdit) {
+        setAiTemplate(data.template);
+        setAiTemplateSaved(data.template);
+      }
       setAiTplLoaded(true);
       if (data.model) {
         setAiMeta((m) => (m.model ? m : { ...m, model: data.model }));
       }
       if (Array.isArray(data.models) && data.models.length) setAiModels(data.models);
       if (data.prefer) setAiPrefer(data.prefer);
+      if (Array.isArray(data.prompts) && data.prompts.length) setAiPrompts(data.prompts);
       const bits = [];
       if (data.hasGemini) bits.push('Gemini');
       if (data.hasOpenAI) bits.push('OpenAI');
-      setAiTplMsg(bits.length ? bits.join(' / ') : '未設 APIKey / OPENAPIKey');
+      setAiTplMsg(
+        keepEdit
+          ? '已讀取。這份未儲存的內容留著'
+          : bits.length
+            ? `已讀取 · ${bits.join(' / ')}`
+            : '已讀取，未設 APIKey'
+      );
       return data.template;
     } catch (err) {
-      setAiTplLoaded(true);
       setAiTplMsg(String(err.message || '讀取失敗').slice(0, 80));
       return aiTemplate;
     } finally {
       setAiTplBusy(false);
     }
-  }, [aiTplLoaded, aiTemplate]);
+  }, [aiTemplate, aiTemplateSaved]);
 
   const pickAiModel = async (value) => {
     const sep = String(value || '').indexOf(':');
@@ -246,15 +279,93 @@ function ExpensePage() {
     }
   };
 
+  const promptMode = recordToTelegram ? 'both' : 'expense';
+  const shownPrompts = useMemo(
+    () => promptsForContext(aiPrompts, { mode: promptMode, cat: selectedTag, subcat: input }),
+    [aiPrompts, promptMode, selectedTag, input]
+  );
+
+  useEffect(() => {
+    if (!shownPrompts.length) return undefined;
+    if (shownPrompts.some((row) => row.id === aiPromptId)) return undefined;
+    const best = shownPrompts[0];
+    setAiPromptId(best.id);
+    setAiTemplate(best.template);
+    setAiTemplateSaved(best.template);
+    return undefined;
+  }, [shownPrompts, aiPromptId]);
+
+  useEffect(() => {
+    const cat = String(selectedTag || '').trim();
+    const sub = String(input || '').trim();
+    if (aiPromptScope === 'sub' && !sub) {
+      setAiPromptScope(cat ? 'cat' : 'any');
+      if (!cat) setAiTplMsg('沒有分類，改用通用');
+    } else if (aiPromptScope === 'cat' && !cat) {
+      setAiPromptScope('any');
+      setAiTplMsg('沒有分類，改用通用');
+    }
+  }, [aiPromptScope, selectedTag, input]);
+
+  const pickPrompt = (id) => {
+    const row = aiPrompts.find((item) => item.id === id);
+    if (!row) return;
+    setAiPromptId(id);
+    setAiTemplate(row.template);
+    setAiTemplateSaved(row.template);
+  };
+
+  const addPrompt = () => {
+    const name = String(window.prompt('這份 prompt 的名稱') || '').trim();
+    if (!name) return;
+    const cat = aiPromptScope === 'any' ? '' : String(selectedTag || '').trim();
+    const subcat = aiPromptScope === 'sub' ? String(input || '').trim() : '';
+    if (aiPromptScope !== 'any' && !cat) {
+      setAiTplMsg('先選分類再新增專用 prompt');
+      return;
+    }
+    const row = {
+      id: `p${Date.now()}`,
+      label: name,
+      mode: promptMode,
+      cat,
+      subcat,
+      template: aiTemplate,
+    };
+    const nextLen = aiPrompts.length + 1;
+    setAiPrompts((prev) => [...prev, row]);
+    setAiPromptId(row.id);
+    setAiTemplateSaved('');
+    const warn = promptLibraryWarn(nextLen);
+    setAiTplMsg(warn ? `${warn}。按儲存才寫進試算表` : '已加到清單，按儲存才寫進試算表');
+  };
+
+  const deletePrompt = () => {
+    const row = aiPrompts.find((item) => item.id === aiPromptId);
+    if (!row) return;
+    if (!window.confirm(`刪除「${row.label}」？按儲存才寫進試算表。`)) return;
+    const next = aiPrompts.filter((item) => item.id !== row.id);
+    const best = promptsForContext(next, { mode: promptMode, cat: selectedTag, subcat: input })[0];
+    setAiPrompts(next);
+    if (best) {
+      setAiPromptId(best.id);
+      setAiTemplate(best.template);
+    }
+    setAiTemplateSaved('');
+    const warn = promptLibraryWarn(next.length);
+    setAiTplMsg(warn ? `${warn}。按儲存才寫進試算表` : '已從清單移除，按儲存才寫進試算表');
+  };
+
   const saveAiTemplate = async () => {
     setAiTplBusy(true);
     setAiTplMsg('');
     try {
-      const text = await saveAiPrompt(aiTemplate);
-      setAiTemplate(text);
-      setAiTemplateSaved(text);
-      setAiTplMsg('已儲存');
-      window.setTimeout(() => setAiTplMsg(''), 1600);
+      const base = aiPrompts.length ? aiPrompts : shownPrompts;
+      const next = base.map((row) => (row.id === aiPromptId ? { ...row, template: aiTemplate } : row));
+      const saved = await savePromptLibrary(next);
+      setAiPrompts(saved);
+      setAiTemplateSaved(aiTemplate);
+      setAiTplMsg('已儲存到 AI / Prompts');
     } catch (err) {
       setAiTplMsg(String(err.message || '儲存失敗').slice(0, 80));
     } finally {
@@ -292,13 +403,12 @@ function ExpensePage() {
       el.open = true;
       el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
-    ensureAiPromptLoaded();
   };
 
   const askAiForPhoto = async (index) => {
     const photo = photos[index];
     if (!photo?.base64 || aiBusyIndex >= 0) return;
-    const tpl = aiTplLoaded ? aiTemplate : await ensureAiPromptLoaded();
+    const tpl = aiTemplate;
     const whenStr = formatWhen(selectedDateTime);
     const localPrompt = receiptPromptFor(selectedTag, input, tpl, whenStr);
     setAiBusyIndex(index);
@@ -308,11 +418,19 @@ function ExpensePage() {
     setAiLocMsg('');
     setAiMeta({ model: '', prompt: localPrompt, photoHash: '', photoIndex: index });
     try {
+      const shots = recordToTelegram ? (photos.length ? photos : [photo]).filter((p) => p?.base64) : [];
       const result = await analyzeReceiptPhoto(photo, {
         tag: selectedTag,
         title: input,
         promptTemplate: tpl,
         when: whenStr,
+        lat: smartLoc?.lat,
+        lng: smartLoc?.lng,
+        schema: recordToTelegram ? false : undefined,
+        images: shots
+          .filter((p) => p !== photo && p.base64 !== photo.base64)
+          .slice(0, 5)
+          .map((p) => ({ mimeType: p.type || 'image/jpeg', base64: p.base64 })),
       });
       setAiSuggestions(result.suggestions);
       setAiMeta({
@@ -324,19 +442,11 @@ function ExpensePage() {
       });
       if (!result.suggestions.length) setAiError('沒有建議');
       if (recordToTelegram) {
-        const shots = (photos.length ? photos : [photo]).filter((p) => p?.base64);
         if (!shots.length) {
           setAiError('沒有可推上 Telegram 的照片');
         } else {
           try {
-            const life = await analyzeLifePhoto(
-              shots,
-              lifePhotoPrompt({
-                when: whenStr,
-                lat: smartLoc?.lat,
-                lng: smartLoc?.lng,
-              })
-            );
+            const life = parseLifePhotoJson(result.text || '');
             await sendTelegramPhotos({
               photos: shots,
               caption: life.caption,
@@ -946,8 +1056,10 @@ function ExpensePage() {
       tripInfo,
       fuelPrice,
       fuelType,
-      photos: photos.map((photo) => photo.uploadedUrl || photo.base64).filter(Boolean),
-      photo_urls: photos.map((photo) => photo.uploadedUrl || photo.previewUrl).filter(Boolean),
+      photos: photos
+        .map((photo) => durablePhotoUrl(photo.uploadedUrl) || photo.base64)
+        .filter(Boolean),
+      photo_urls: photos.map((photo) => durablePhotoUrl(photo.uploadedUrl)).filter(Boolean),
       ai_suggestion: aiPicked ? JSON.stringify(aiPicked) : '',
     };
 
@@ -1158,12 +1270,47 @@ function ExpensePage() {
 
   const silentSec = Math.ceil(silentRemainMs / 1000);
   const [ledger, setLedger] = useState(ledgerFromLocation);
+  const [fromPhoto] = useState(() => Boolean(window.history.state?.fromPhoto));
 
   useEffect(() => {
     const sync = () => setLedger(ledgerFromLocation());
     window.addEventListener('hashchange', sync);
     return () => window.removeEventListener('hashchange', sync);
   }, []);
+
+  useEffect(() => {
+    if (!fromPhoto) return undefined;
+    let userMoved = false;
+    const onUser = () => {
+      userMoved = true;
+    };
+    window.addEventListener('wheel', onUser, { passive: true });
+    window.addEventListener('touchmove', onUser, { passive: true });
+    const scrollToPrompt = () => {
+      if (userMoved) return;
+      const el = aiPromptRef.current;
+      if (!el) return;
+      el.open = true;
+      const target = el.querySelector('summary') || el;
+      const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
+      target.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'center' });
+    };
+    const timers = [60, 320].map((ms) => window.setTimeout(scrollToPrompt, ms));
+    return () => {
+      timers.forEach((id) => window.clearTimeout(id));
+      window.removeEventListener('wheel', onUser);
+      window.removeEventListener('touchmove', onUser);
+    };
+  }, [fromPhoto]);
+
+  const backToPhoto = () => {
+    applyHash(hrefFor(ROUTES.PHOTO), { replace: true, state: { fromHome: true } });
+  };
+
+  const uncheckExpense = () => {
+    if (!window.confirm('要返回拍照記錄嗎？')) return;
+    backToPhoto();
+  };
 
   const goLedger = (next) => {
     setLedger(next);
@@ -1319,13 +1466,7 @@ function ExpensePage() {
                 />
               }
             />
-            <details
-              className="ai-photo-prompt"
-              ref={aiPromptRef}
-              onToggle={(e) => {
-                if (e.currentTarget.open) ensureAiPromptLoaded();
-              }}
-            >
+            <details className="ai-photo-prompt" ref={aiPromptRef}>
               <summary>
                 <span className="ai-photo-prompt-title">📷 AI prompt</span>
                 <span className="ai-photo-prompt-sub">
@@ -1352,8 +1493,38 @@ function ExpensePage() {
                   />
                   記錄
                 </label>
+                {fromPhoto ? (
+                  <label className="life-photo-check">
+                    <input type="checkbox" checked onChange={uncheckExpense} />
+                    記賬
+                  </label>
+                ) : null}
                 <span>{recordToTelegram ? '送出時推 Telegram' : '送出時不推 Telegram'}</span>
               </div>
+              <label className="ai-model-pick">
+                Prompt
+                <select value={aiPromptId} onChange={(e) => pickPrompt(e.target.value)}>
+                  {shownPrompts.map((row) => (
+                    <option key={row.id} value={row.id}>
+                      {promptOptionLabel(row)}
+                    </option>
+                  ))}
+                </select>
+                <select value={aiPromptScope} onChange={(e) => setAiPromptScope(e.target.value)} aria-label="新增範圍">
+                  <option value="any">通用</option>
+                  <option value="cat" disabled={!String(selectedTag || '').trim()}>此分類</option>
+                  <option value="sub" disabled={!String(input || '').trim()}>此子分類</option>
+                </select>
+                <button type="button" className="ai-suggest-copy" onClick={addPrompt}>
+                  新增
+                </button>
+                <button type="button" className="ai-suggest-copy ai-suggest-delete" disabled={!aiPromptId} onClick={deletePrompt}>
+                  刪除
+                </button>
+                {promptLibraryWarn(aiPrompts.length) ? (
+                  <span className="ai-suggest-hint">{promptLibraryWarn(aiPrompts.length)}</span>
+                ) : null}
+              </label>
               <label className="ai-model-pick">
                 模型
                 <select value={aiPrefer} onChange={(e) => pickAiModel(e.target.value)}>
@@ -1431,6 +1602,9 @@ function ExpensePage() {
                 />
               )}
               <div className="ai-suggest-meta">
+                <button type="button" className="ai-suggest-copy" disabled={aiTplBusy} onClick={fetchAiConfig}>
+                  {aiTplBusy ? '…' : aiTplLoaded ? '重讀設定' : '讀取設定'}
+                </button>
                 <button
                   type="button"
                   className="ai-suggest-copy"
@@ -1737,6 +1911,7 @@ function ExpensePage() {
         </div>
           </>
         )}
+        <EntryUrlExamples />
       </div>
     </PageChrome>
   );

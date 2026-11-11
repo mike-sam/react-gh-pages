@@ -1058,6 +1058,7 @@ function handleUpsertExpense(data) {
           var result = uploadFileToDrive(photo, generatePhotoFileName(i, valid.length), 'ExpensePhotos');
           if (result && result.success) uploadedPhotoUrls.push(result.previewUrl || result.fileUrl);
         } else if (photo.indexOf('http') === 0) {
+          if (photo.indexOf('https://api.telegram.org/file/bot') === 0) continue;
           uploadedPhotoUrls.push(photo);
         }
       }
@@ -1652,6 +1653,7 @@ function handleGetAiPrompt() {
       model: resolveGeminiModel_(ai.NAME || lookupKeyValue_('Name', 'AI')),
       openaiModel: openaiModel,
       models: String(ai.MODELS || AI_MODELS_DEFAULT_),
+      prompts: String(ai.PROMPTS || ''),
       prefer: String(ai.PREFER || 'gemini:gemini-3.5-flash-lite'),
       geminiKey: String(ai.APIKEY || lookupKeyValue_('APIKey', 'AI') || '').trim(),
       openaiKey: String(

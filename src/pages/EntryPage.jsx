@@ -1,45 +1,36 @@
 import React, { useState } from 'react';
 import HeaderActions from '../components/HeaderActions';
-import EntryUrlExamples from '../components/EntryUrlExamples';
 import SelfmanageMark from '../brand/SelfmanageMark';
-import EatWhatModal from '../components/EatWhatModal';
 import { forceReload } from '../utils/forceReload';
-import { hrefFor, ROUTES } from '../utils/routing';
+import { hrefFor } from '../utils/routing';
+import { HOME_TOOLS } from '../components/HomeQuickAccess';
 import '../App.css';
 
-const ACTIONS = [
-  {
-    path: ROUTES.EXPENSE,
-    icon: '🧾',
-    title: '記帳',
-    desc: '單筆、排程、報表。URL 參數見內頁 ?',
-    direct: '#/expense',
-  },
-  {
-    path: ROUTES.CALENDAR,
-    icon: '📅',
-    title: '行事曆軌跡',
-    desc: '記錄行程軌跡。URL 參數見內頁 ?',
-    direct: '#/calendar',
-  },
-  {
-    path: ROUTES.VEHICLES,
-    icon: '🚗',
-    title: '車輛',
-    desc: '地圖上看全部車輛，記位置與保養記帳。URL 參數見內頁 ?',
-    direct: '#/vehicles',
-  },
-  {
-    path: ROUTES.REGIONS,
-    icon: '🗺️',
-    title: '地圖管理',
-    desc: '區域與地標，定位時自動帶入',
-    direct: '#/regions',
-  },
-];
+const HOME_VIEW_KEY = 'entryHomeView';
+
+function loadHomeView() {
+  try {
+    const saved = localStorage.getItem(HOME_VIEW_KEY);
+    if (saved === 'list' || saved === 'icons') return saved;
+  } catch {
+    /* private mode */
+  }
+  return 'icons';
+}
 
 function EntryPage() {
-  const [eatOpen, setEatOpen] = useState(false);
+  const [view, setViewState] = useState(loadHomeView);
+  const icons = view === 'icons';
+
+  const setView = (next) => {
+    setViewState(next);
+    try {
+      localStorage.setItem(HOME_VIEW_KEY, next);
+    } catch {
+      /* private mode */
+    }
+  };
+
   const handleForceReload = async () => {
     if (!window.confirm('將清空快取、註銷 Service Worker 並強制拉取最新版本，確定？')) {
       return;
@@ -61,39 +52,40 @@ function EntryPage() {
             <p className="entry-brand-aka">自理工具</p>
           </div>
         </div>
-        <h1 className="entry-hero-title">要做什麼？</h1>
+        <div className="entry-hero-foot">
+          <h1 className="entry-hero-title">要做什麼？</h1>
+          <div className="mode-toggle entry-view-toggle" role="tablist" aria-label="主頁排列">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={!icons}
+              className={icons ? '' : 'is-on'}
+              onClick={() => setView('list')}
+            >
+              列表
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={icons}
+              className={icons ? 'is-on' : ''}
+              onClick={() => setView('icons')}
+            >
+              圖示
+            </button>
+          </div>
+        </div>
         <p className="entry-hero-sub">選一項開始。也可直接用專屬網址開啟單一功能。</p>
       </div>
 
-      <div className="entry-action-grid">
-        {ACTIONS.slice(0, 1).map((action) => (
-          <a key={action.path} className="entry-action-card" href={hrefFor(action.path)}>
-            <div className="entry-action-icon">{action.icon}</div>
-            <div className="entry-action-body">
-              <div className="entry-action-title">{action.title}</div>
-              <div className="entry-action-desc">{action.desc}</div>
-              <code className="entry-action-url">{action.direct}</code>
-            </div>
-          </a>
-        ))}
-        <a className="entry-action-card" href={hrefFor(ROUTES.PHOTO)}>
-          <div className="entry-action-icon">📷</div>
-          <div className="entry-action-body">
-            <div className="entry-action-title">拍照記錄</div>
-            <div className="entry-action-desc">拍照後可記錄到 Telegram，或帶去記帳。</div>
-            <code className="entry-action-url">#/photo</code>
-          </div>
-        </a>
-        <button type="button" className="entry-action-card" onClick={() => setEatOpen(true)}>
-          <div className="entry-action-icon">🍜</div>
-          <div className="entry-action-body">
-            <div className="entry-action-title">吃什麼</div>
-            <div className="entry-action-desc">附近過去一年吃過的，轉一下。不進報表。</div>
-          </div>
-        </button>
-        {ACTIONS.slice(1).map((action) => (
-          <a key={action.path} className="entry-action-card" href={hrefFor(action.path)}>
-            <div className="entry-action-icon">{action.icon}</div>
+      <div className={`entry-action-grid${icons ? ' is-icons' : ''}`}>
+        {HOME_TOOLS.map((action) => (
+          <a
+            key={action.id}
+            className={`entry-action-card${icons ? ' is-icon' : ''}`}
+            href={hrefFor(action.path)}
+          >
+            <div className="entry-action-icon" aria-hidden="true">{action.icon}</div>
             <div className="entry-action-body">
               <div className="entry-action-title">{action.title}</div>
               <div className="entry-action-desc">{action.desc}</div>
@@ -116,9 +108,6 @@ function EntryPage() {
           📊 Sheets
         </a>
       </div>
-
-      <EntryUrlExamples />
-      {eatOpen ? <EatWhatModal open onClose={() => setEatOpen(false)} /> : null}
     </div>
   );
 }

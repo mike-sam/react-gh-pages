@@ -9,6 +9,7 @@ import {
   parseHashPath,
   isOnDirtyStayPath,
   restoreIfDirtyPop,
+  takeHomeCollapse,
   ROUTES,
   shouldHoldRouteSync,
 } from '../utils/routing';
@@ -50,11 +51,19 @@ export function useHashRoute() {
     };
 
     const onPop = () => {
-      if (consumeOverlayPop()) return;
-      if (restoreIfDirtyPop()) return;
+      if (consumeOverlayPop()) {
+        takeHomeCollapse();
+        return;
+      }
+      if (restoreIfDirtyPop()) {
+        takeHomeCollapse();
+        return;
+      }
+      const forceHome = takeHomeCollapse();
       if (loadBackMode() !== BACK_MODES.HOME) return;
       if (getHashPath() === ROUTES.HOME) return;
       if (isOnDirtyStayPath()) return;
+      if (!forceHome && getHashPath() === ROUTES.PHOTO) return;
       applyHash('#/', { replace: true });
     };
 

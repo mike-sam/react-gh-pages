@@ -1,17 +1,29 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import CameraAICapture from './CameraAICapture';
+import MobileFriendlyDateTime from './MobileFriendlyDateTime';
 import { useSmartLocation } from '../hooks/useSmartLocation';
 import { API_ENDPOINTS } from '../config';
-import { hydrateDraftPhotos, loadExpenseDraft, saveExpenseDraft } from '../utils/expenseDraft';
+import {
+  asDraftDate,
+  durablePhotoUrl,
+  hydrateDraftPhotos,
+  loadExpenseDraft,
+  saveExpenseDraft,
+} from '../utils/expenseDraft';
 import { applyHash, hrefFor, ROUTES } from '../utils/routing';
 import {
   analyzeLifePhoto,
-  DEFAULT_LIFE_PROMPT_TEMPLATE,
+  formatWhen,
   lifePhotoPrompt,
   lifePromptVars,
-  loadLifePromptTemplate,
+  defaultPromptLibrary,
+  loadAiPrompt,
+  peekAiPrompt,
+  promptOptionLabel,
   promptParts,
-  saveLifePromptTemplate,
+  promptLibraryWarn,
+  promptsForContext,
+  savePromptLibrary,
   sendTelegramPhotos,
 } from '../utils/aiSuggest';
 
@@ -19,21 +31,37 @@ function draftPhotos(list) {
   return (list || []).map((photo) => {
     const next = { ...photo };
     delete next.sourcePreview;
-    if (next.uploadedUrl) delete next.base64;
+    if (durablePhotoUrl(next.uploadedUrl)) delete next.base64;
+    else if (/^https:\/\/api\.telegram\.org\/file\/bot/i.test(String(next.uploadedUrl || ''))) {
+      delete next.uploadedUrl;
+    }
     return next;
   });
 }
 
 const NOTICE_KEY = 'lifePhotoNotice';
 const RECORD_KEY = 'lifePhotoRecord';
+let kgCache = 0;
 
-function openExpense(caption, photos, notice, record) {
+function seedRecordPrompt() {
+  const cached = peekAiPrompt();
+  const list = cached?.prompts?.length ? cached.prompts : defaultPromptLibrary();
+  const best = promptsForContext(list, { mode: 'record' })[0];
+  return {
+    list,
+    fetched: Boolean(cached),
+    id: best?.id || '',
+    template: best?.template || '',
+  };
+}
+
+function openExpense(caption, photos, notice, record, when) {
   const prev = loadExpenseDraft() || {};
   const saved = saveExpenseDraft({
     ...prev,
     simpleDescription: caption || prev.simpleDescription || '',
     photos: draftPhotos(photos),
-    selectedDateTime: prev.selectedDateTime || new Date(),
+    selectedDateTime: when || prev.selectedDateTime || new Date(),
   });
   if (!saved) return false;
   try {
@@ -43,24 +71,25 @@ function openExpense(caption, photos, notice, record) {
   } catch {
     /* ignore */
   }
-  applyHash(hrefFor(ROUTES.EXPENSE), { state: { fromHome: true } });
+  applyHash(hrefFor(ROUTES.EXPENSE), { state: { fromHome: true, fromPhoto: true } });
   return true;
 }
 
 /** 首頁拍照。有圖才出現記錄／記賬。勾記賬才進入記帳頁。 */
-function writeSharedPhotos(list) {
+function writeSharedPhotos(list, when) {
   const prev = loadExpenseDraft() || {};
   saveExpenseDraft({
     ...prev,
     photos: list,
     simpleDescription: prev.simpleDescription || '',
-    selectedDateTime: prev.selectedDateTime || new Date(),
+    selectedDateTime: when || prev.selectedDateTime || new Date(),
   });
 }
 
 function LifePhotoPanel() {
   const { location } = useSmartLocation();
   const [photos, setPhotos] = useState(() => hydrateDraftPhotos(loadExpenseDraft()?.photos));
+  const [whenAt, setWhenAt] = useState(() => asDraftDate(loadExpenseDraft()?.selectedDateTime, new Date()));
   const [logToTelegram, setLogToTelegram] = useState(() => {
     try {
       return sessionStorage.getItem(RECORD_KEY) !== '0';
@@ -74,8 +103,17 @@ function LifePhotoPanel() {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
   const [ready, setReady] = useState(null);
-  const [kg, setKg] = useState(65);
-  const [lifeTpl, setLifeTpl] = useState(() => loadLifePromptTemplate());
+  const [kg, setKg] = useState(kgCache || 65);
+  const seeded = useRef(seedRecordPrompt());
+  const [lifeTpl, setLifeTpl] = useState(seeded.current.template);
+  const [lifeSaved, setLifeSaved] = useState(seeded.current.template);
+  const [promptList, setPromptList] = useState(seeded.current.list);
+  const [promptFetched, setPromptFetched] = useState(seeded.current.fetched);
+  const [promptBusy, setPromptBusy] = useState(false);
+  const [promptId, setPromptId] = useState(seeded.current.id);
+  const [promptScope, setPromptScope] = useState('any');
+  const [draftCat, setDraftCat] = useState(() => loadExpenseDraft()?.selectedTag || '');
+  const [draftSub, setDraftSub] = useState(() => loadExpenseDraft()?.input || '');
   const [promptView, setPromptView] = useState('preview');
   const [promptPending, setPromptPending] = useState(false);
   const promptRef = useRef(null);
@@ -85,34 +123,72 @@ function LifePhotoPanel() {
       photosReady.current = true;
       return undefined;
     }
-    writeSharedPhotos(photos);
+    writeSharedPhotos(photos, whenAt);
     return undefined;
-  }, [photos]);
+  }, [photos, whenAt]);
+
+  const shownPrompts = useMemo(
+    () => promptsForContext(promptList, { mode: 'record' }),
+    [promptList]
+  );
 
   useEffect(() => {
-    let cancel = false;
-    (async () => {
-      try {
-        const url = new URL(API_ENDPOINTS.KEY_VALUE);
-        url.searchParams.set('action', 'getKeyValue');
-        url.searchParams.set('group', 'Telegram');
-        url.searchParams.set('key', 'Kg');
-        const res = await fetch(url.toString(), { cache: 'no-store' });
-        const data = await res.json();
-        const n = Number(data?.value);
-        if (!cancel && data?.success && n > 0) setKg(n);
-      } catch {
-        /* 沒讀到就用 65 */
+    if (!shownPrompts.length) return undefined;
+    if (shownPrompts.some((row) => row.id === promptId)) return undefined;
+    const best = shownPrompts[0];
+    setPromptId(best.id);
+    setLifeTpl(best.template);
+    setLifeSaved(best.template);
+    setPromptScope('any');
+    return undefined;
+  }, [shownPrompts, promptId]);
+
+  const fetchAiConfig = async () => {
+    if (promptBusy) return;
+    setPromptBusy(true);
+    setMsg('讀取設定…');
+    try {
+      const data = await loadAiPrompt();
+      const list = Array.isArray(data.prompts) ? data.prompts : [];
+      setPromptList(list);
+      setPromptFetched(true);
+      if (lifeTpl === lifeSaved) {
+        const best = promptsForContext(list, { mode: 'record' })[0];
+        if (best) {
+          setPromptId(best.id);
+          setLifeTpl(best.template);
+          setLifeSaved(best.template);
+        }
       }
-    })();
-    return () => {
-      cancel = true;
-    };
-  }, []);
+      if (!(kgCache > 0)) {
+        try {
+          const url = new URL(API_ENDPOINTS.KEY_VALUE);
+          url.searchParams.set('action', 'getKeyValue');
+          url.searchParams.set('group', 'Telegram');
+          url.searchParams.set('key', 'Kg');
+          const res = await fetch(url.toString());
+          const row = await res.json();
+          const n = Number(row?.value);
+          if (row?.success && n > 0) {
+            kgCache = n;
+            setKg(n);
+          }
+        } catch {
+          /* 體重維持 65 */
+        }
+      }
+      const keys = [data.hasGemini ? 'Gemini' : '', data.hasOpenAI ? 'OpenAI' : ''].filter(Boolean).join(' / ');
+      setMsg(keys ? `已讀取 · ${keys}` : '已讀取，未設 APIKey');
+    } catch (err) {
+      setMsg(String(err?.message || '讀取失敗').slice(0, 80));
+    } finally {
+      setPromptBusy(false);
+    }
+  };
 
   const lifeVars = useMemo(
-    () => lifePromptVars({ lat: location?.lat, lng: location?.lng, kg }),
-    [location?.lat, location?.lng, kg]
+    () => lifePromptVars({ when: formatWhen(whenAt), lat: location?.lat, lng: location?.lng, kg }),
+    [whenAt, location?.lat, location?.lng, kg]
   );
   const lifePreview = useMemo(() => promptParts(lifeTpl, lifeVars), [lifeTpl, lifeVars]);
 
@@ -132,7 +208,7 @@ function LifePhotoPanel() {
       setKeepExpense(false);
       return;
     }
-    if (!openExpense('', photos, '', logToTelegram)) {
+    if (!openExpense('', photos, '', logToTelegram, whenAt)) {
       setKeepExpense(false);
       setMsg('照片沒能帶進記帳，請再試一次');
     }
@@ -149,23 +225,25 @@ function LifePhotoPanel() {
     setReady(null);
     setPromptPending(false);
     try {
-      const prompt = lifePhotoPrompt({
-        lat: location?.lat,
-        lng: location?.lng,
-        kg,
-      });
+      const prompt = lifePhotoPrompt(
+        {
+          when: formatWhen(whenAt),
+          lat: location?.lat,
+          lng: location?.lng,
+          kg,
+        },
+        lifeTpl
+      );
       const parsed = await analyzeLifePhoto(photos, prompt);
       let nextPhotos = photos;
       if (logToTelegram) {
         setMsg('上傳 Telegram…');
-        const sent = await sendTelegramPhotos({
+        await sendTelegramPhotos({
           photos,
           caption: parsed.caption,
           topic: parsed.topic,
           mode: photos.length > 1 ? lifeMode : 'individual',
         });
-        const urls = Array.isArray(sent.urls) ? sent.urls : [];
-        nextPhotos = photos.map((p, i) => (urls[i] ? { ...p, uploadedUrl: urls[i] } : p));
       }
       const extra = parsed.other ? ` · ${parsed.other}` : '';
       setPhotos(nextPhotos);
@@ -205,6 +283,12 @@ function LifePhotoPanel() {
               </div>
             ))}
           </div>
+          <MobileFriendlyDateTime
+            compact
+            title="拍攝時間"
+            value={whenAt}
+            onChange={setWhenAt}
+          />
           <div className="life-photo-bar">
             <label className="life-photo-check">
               <input
@@ -248,9 +332,7 @@ function LifePhotoPanel() {
               <span className="ai-photo-prompt-sub">
                 {logToTelegram ? '記錄 · 送出時推 Telegram' : '記錄沒勾 · 不會推'}
               </span>
-              {lifeTpl !== DEFAULT_LIFE_PROMPT_TEMPLATE ? (
-                <span className="ai-photo-prompt-chip">已改</span>
-              ) : null}
+              {lifeTpl !== lifeSaved ? <span className="ai-photo-prompt-chip">未儲存</span> : null}
             </summary>
             {promptPending ? (
               <div className="ai-prompt-send">
@@ -273,6 +355,89 @@ function LifePhotoPanel() {
                 </button>
               </div>
             ) : null}
+            <label className="ai-model-pick">
+              Prompt
+              <select
+                value={promptId}
+                onChange={(e) => {
+                  const row = promptList.find((item) => item.id === e.target.value);
+                  if (!row) return;
+                  setPromptId(row.id);
+                  setLifeTpl(row.template);
+                  setLifeSaved(row.template);
+                }}
+              >
+                {shownPrompts.map((row) => (
+                  <option key={row.id} value={row.id}>
+                    {promptOptionLabel(row)}
+                  </option>
+                ))}
+              </select>
+              <select
+                value="any"
+                onChange={() => setPromptScope('any')}
+                aria-label="新增範圍"
+              >
+                <option value="any">通用</option>
+                <option value="cat" disabled>此分類</option>
+                <option value="sub" disabled>此子分類</option>
+              </select>
+              <button
+                type="button"
+                className="ai-suggest-copy"
+                onClick={() => {
+                  const name = String(window.prompt('這份 prompt 的名稱') || '').trim();
+                  if (!name) return;
+                  const cat = promptScope === 'any' ? '' : draftCat;
+                  const subcat = promptScope === 'sub' ? draftSub : '';
+                  if (promptScope !== 'any' && !cat) {
+                    setMsg('記帳頁還沒有分類，先用通用');
+                    return;
+                  }
+                  const row = {
+                    id: `p${Date.now()}`,
+                    label: name,
+                    mode: 'record',
+                    cat,
+                    subcat,
+                    template: lifeTpl,
+                  };
+                  const nextLen = promptList.length + 1;
+                  setPromptList((prev) => [...prev, row]);
+                  setPromptId(row.id);
+                  setLifeSaved('');
+                  const warn = promptLibraryWarn(nextLen);
+                  setMsg(warn ? `${warn}。按儲存才寫進試算表` : '已加到清單，按儲存才寫進試算表');
+                }}
+              >
+                新增
+              </button>
+              <button
+                type="button"
+                className="ai-suggest-copy ai-suggest-delete"
+                disabled={!promptId}
+                onClick={() => {
+                  const row = promptList.find((item) => item.id === promptId);
+                  if (!row) return;
+                  if (!window.confirm(`刪除「${row.label}」？按儲存才寫進試算表。`)) return;
+                  const next = promptList.filter((item) => item.id !== row.id);
+                  const best = promptsForContext(next, { mode: 'record' })[0];
+                  setPromptList(next);
+                  if (best) {
+                    setPromptId(best.id);
+                    setLifeTpl(best.template);
+                  }
+                  setLifeSaved('');
+                  const warn = promptLibraryWarn(next.length);
+                  setMsg(warn ? `${warn}。按儲存才寫進試算表` : '已從清單移除，按儲存才寫進試算表');
+                }}
+              >
+                刪除
+              </button>
+              {promptLibraryWarn(promptList.length) ? (
+                <span className="ai-suggest-hint">{promptLibraryWarn(promptList.length)}</span>
+              ) : null}
+            </label>
             <div className="ai-prompt-tabs" role="tablist">
               <button
                 type="button"
@@ -314,7 +479,7 @@ function LifePhotoPanel() {
                 className="ai-suggest-tpl"
                 rows={10}
                 value={lifeTpl}
-                onChange={(e) => setLifeTpl(saveLifePromptTemplate(e.target.value))}
+                onChange={(e) => setLifeTpl(e.target.value)}
                 spellCheck={false}
               />
             )}
@@ -322,15 +487,46 @@ function LifePhotoPanel() {
               <button
                 type="button"
                 className="ai-suggest-copy"
-                onClick={() => setLifeTpl(saveLifePromptTemplate(DEFAULT_LIFE_PROMPT_TEMPLATE))}
+                disabled={promptBusy}
+                onClick={fetchAiConfig}
+              >
+                {promptBusy ? '…' : promptFetched ? '重讀設定' : '讀取設定'}
+              </button>
+              <button
+                type="button"
+                className="ai-suggest-copy"
+                onClick={() => {
+                  const general = promptList.find((row) => row.mode === 'record' && !row.cat);
+                  if (general) setLifeTpl(general.template);
+                }}
               >
                 預設
+              </button>
+              <button
+                type="button"
+                className="ai-suggest-copy"
+                disabled={busy || lifeTpl === lifeSaved}
+                onClick={async () => {
+                  try {
+                    const next = promptList.map((row) =>
+                      row.id === promptId ? { ...row, template: lifeTpl } : row
+                    );
+                    const saved = await savePromptLibrary(next);
+                    setPromptList(saved);
+                    setLifeSaved(lifeTpl);
+                    setMsg('已儲存到 AI / Prompts');
+                  } catch (err) {
+                    setMsg(String(err?.message || '儲存失敗').slice(0, 80));
+                  }
+                }}
+              >
+                儲存
               </button>
             </div>
           </details>
         </>
       ) : (
-        <p className="camera-ai-hint">先拍照或從相冊選圖。勾記賬會進入記帳頁。</p>
+        <p className="camera-ai-hint">先拍照或從相冊選圖。勾記賬會進入記帳頁，上方可回到這裡。</p>
       )}
       {msg ? <p className="camera-ai-hint">{msg}</p> : null}
       {ready ? (
@@ -338,7 +534,7 @@ function LifePhotoPanel() {
           type="button"
           className="camera-ai-btn"
           onClick={() => {
-            if (!openExpense(ready.caption, ready.photos, '說明已帶入。選分類後可記帳。', logToTelegram)) {
+            if (!openExpense(ready.caption, ready.photos, '說明已帶入。選分類後可記帳。', logToTelegram, whenAt)) {
               setMsg('照片沒能帶進記帳，請再試一次');
             }
           }}

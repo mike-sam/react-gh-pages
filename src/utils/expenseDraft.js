@@ -111,6 +111,14 @@ export function snapshotExpenseDraft(form) {
   };
 }
 
+/** Drive (or any http link) can be stored. Telegram file URLs embed the bot token and expire. */
+export function durablePhotoUrl(url) {
+  const s = String(url || '').trim();
+  if (!/^https?:\/\//i.test(s)) return '';
+  if (/^https:\/\/api\.telegram\.org\/file\/bot/i.test(s)) return '';
+  return s;
+}
+
 function photoForDraft(photo) {
   if (!photo || typeof photo !== 'object') return photo;
   const next = { ...photo };

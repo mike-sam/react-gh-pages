@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import HeaderActions from './HeaderActions';
+import HomeQuickAccess from './HomeQuickAccess';
 import { FloatingStackItem } from '../context/FloatingStackContext';
 import { hrefFor, ROUTES } from '../utils/routing';
 
@@ -46,26 +47,29 @@ function PageChrome({ title, children, showHomeLink = true }) {
   return (
     <div className="page-chrome">
       <div className="page-chrome-top">
-        {showHomeLink ? (
-          <a
-            className="page-home-link"
-            href={hrefFor(ROUTES.HOME)}
-            aria-label="主頁"
-            title="主頁"
-          >
-            <svg className="page-home-icon" viewBox="0 0 24 24" width="20" height="20" aria-hidden>
-              <path
-                fill="currentColor"
-                d="M12 3.2 3.5 10.5h2.2V20h5.1v-5.4h2.4V20h5.1v-9.5h2.2L12 3.2z"
-              />
-            </svg>
-            <span className="page-home-text">主頁</span>
-          </a>
-        ) : (
-          <span />
-        )}
-        {title ? <h1 className="page-chrome-title">{title}</h1> : <span />}
-        <HeaderActions compact />
+        <div className="page-chrome-bar">
+          {showHomeLink ? (
+            <a
+              className="page-home-link"
+              href={hrefFor(ROUTES.HOME)}
+              aria-label="主頁"
+              title="主頁"
+            >
+              <svg className="page-home-icon" viewBox="0 0 24 24" width="20" height="20" aria-hidden>
+                <path
+                  fill="currentColor"
+                  d="M12 3.2 3.5 10.5h2.2V20h5.1v-5.4h2.4V20h5.1v-9.5h2.2L12 3.2z"
+                />
+              </svg>
+              <span className="page-home-text">主頁</span>
+            </a>
+          ) : (
+            <span />
+          )}
+          {title ? <h1 className="page-chrome-title">{title}</h1> : <span />}
+          <HeaderActions compact />
+          <HomeQuickAccess />
+        </div>
         <div className="page-chrome-scroll-progress" aria-hidden>
           <div
             className="page-chrome-scroll-progress-bar"

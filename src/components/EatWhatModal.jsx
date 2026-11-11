@@ -1,25 +1,38 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
-import { Circle, CircleMarker, MapContainer, Marker, TileLayer, ZoomControl, useMap } from 'react-leaflet';
-import L from 'leaflet';
+import { Circle, CircleMarker, MapContainer, Popup, TileLayer, ZoomControl, useMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
-import { DEFAULT_ZOOM, MapInvalidateOn, tilesFor } from './map/LeafletBits';
+import { MapInvalidateOn, tilesFor } from './map/LeafletBits';
 import { DEFAULT_MAP_CENTER } from '../utils/mapDefaults';
 import { haversineKm } from '../utils/expenseSummary';
 import { ensureEatPlaces, monthsAgoMs, parseEatWhen } from '../utils/eatPlaces';
+import {
+  loadLandmarkRegions,
+  loadSheetPlaces,
+  mergePlaceCatalog,
+  normalizePinIcon,
+  overlayLocalPinIcons,
+  regionContains,
+} from '../utils/landmarkRegions';
 import { toMapsDriveUrl, toMapsUrl } from '../utils/locationStorage';
 import { estimateDriveMinutes, fetchDriveMinutes, formatDriveMin } from '../utils/driveEta';
 import { useSmartLocation } from '../hooks/useSmartLocation';
-import { useHistoryOverlay } from '../hooks/useHistoryOverlay';
 
 const DEFAULT_KM = 5;
+const FOOD_ONLY_KEY = 'eatFoodLandmarkOnly';
 
-const PICK_ICON = L.divIcon({
-  className: 'eat-pick-icon',
-  html: '<span class="eat-pick-pin"></span>',
-  iconSize: [28, 36],
-  iconAnchor: [14, 34],
-});
+function loadFoodOnly() {
+  try {
+    return localStorage.getItem(FOOD_ONLY_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function foodLandmarks() {
+  const local = loadLandmarkRegions();
+  const sheet = overlayLocalPinIcons(loadSheetPlaces());
+  return mergePlaceCatalog(local, sheet).filter((r) => normalizePinIcon(r.icon) === 'food');
+}
 
 function zoomForKm(km) {
   if (km >= 16) return 10;
@@ -67,34 +80,38 @@ function SearchIcon() {
   );
 }
 
-function MapDirector({ here, radiusKm, flyPoint, flyNonce, zoomOutToken }) {
+function MapDirector({ here, radiusKm, flyPoint, flyInToken, restoreToken, onZoomedChange }) {
   const map = useMap();
-  const flyRef = useRef(flyNonce);
-  const outRef = useRef(zoomOutToken);
-
-  useEffect(() => {
-    if (!zoomOutToken || zoomOutToken === outRef.current) return;
-    outRef.current = zoomOutToken;
-    if (here && Number.isFinite(here.lat)) {
-      map.flyTo([here.lat, here.lng], zoomForKm(radiusKm), { duration: 0.4 });
-    }
-  }, [zoomOutToken, here, radiusKm, map]);
-
-  useEffect(() => {
-    if (!flyPoint || flyNonce === flyRef.current) return;
-    flyRef.current = flyNonce;
-    map.flyTo([flyPoint.lat, flyPoint.lng], 16, { duration: 0.4 });
-  }, [flyPoint, flyNonce, map]);
+  const flyRef = useRef(flyInToken);
+  const restoreRef = useRef(restoreToken);
+  const savedRef = useRef(null);
 
   useEffect(() => {
     if (!here) return;
-    map.setView([here.lat, here.lng], Math.max(map.getZoom() || DEFAULT_ZOOM, zoomForKm(radiusKm)));
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    savedRef.current = null;
+    onZoomedChange?.(false);
+    map.setView([here.lat, here.lng], zoomForKm(radiusKm));
+  }, [radiusKm, here, map, onZoomedChange]);
 
   useEffect(() => {
-    if (!here || flyPoint) return;
-    map.setView([here.lat, here.lng], zoomForKm(radiusKm));
-  }, [radiusKm, here, flyPoint, map]);
+    if (!flyInToken || flyInToken === flyRef.current) return;
+    flyRef.current = flyInToken;
+    if (!flyPoint || !Number.isFinite(flyPoint.lat)) return;
+    const center = map.getCenter();
+    savedRef.current = { lat: center.lat, lng: center.lng, zoom: map.getZoom() };
+    map.flyTo([flyPoint.lat, flyPoint.lng], 16, { duration: 0.35 });
+    onZoomedChange?.(true);
+  }, [flyInToken, flyPoint, map, onZoomedChange]);
+
+  useEffect(() => {
+    if (!restoreToken || restoreToken === restoreRef.current) return;
+    restoreRef.current = restoreToken;
+    const saved = savedRef.current;
+    savedRef.current = null;
+    if (saved) map.flyTo([saved.lat, saved.lng], saved.zoom, { duration: 0.35 });
+    else if (here) map.flyTo([here.lat, here.lng], zoomForKm(radiusKm), { duration: 0.35 });
+    onZoomedChange?.(false);
+  }, [restoreToken, here, radiusKm, map, onZoomedChange]);
 
   return here ? (
     <Circle
@@ -105,19 +122,23 @@ function MapDirector({ here, radiusKm, flyPoint, flyNonce, zoomOutToken }) {
   ) : null;
 }
 
-function EatWhatModal({ open, onClose }) {
-  useHistoryOverlay(open, onClose);
+function EatWhatPanel() {
   const { location, resolveForAction } = useSmartLocation();
   const tile = tilesFor('street');
   const [places, setPlaces] = useState([]);
   const [err, setErr] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [radiusKm, setRadiusKm] = useState(DEFAULT_KM);
   const [includeMonths, setIncludeMonths] = useState(12);
   const [excludeMonths, setExcludeMonths] = useState(0);
+  const [foodOnly, setFoodOnly] = useState(loadFoodOnly);
+  const [foodPins, setFoodPins] = useState([]);
   const [spinning, setSpinning] = useState(false);
   const [pick, setPick] = useState(null);
-  const [zoomOutToken, setZoomOutToken] = useState(0);
+  const [popupNonce, setPopupNonce] = useState(0);
+  const [flyInToken, setFlyInToken] = useState(0);
+  const [restoreToken, setRestoreToken] = useState(0);
+  const [zoomedIn, setZoomedIn] = useState(false);
   const [etaMin, setEtaMin] = useState(null);
   const [etaBusy, setEtaBusy] = useState(false);
   const [etaErr, setEtaErr] = useState('');
@@ -132,24 +153,29 @@ function EatWhatModal({ open, onClose }) {
   }, [location]);
 
   useEffect(() => {
-    if (!open) return undefined;
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
     setErr('');
     setPick(null);
     setEtaMin(null);
     setEtaErr('');
     setLoading(true);
     resolveForAction?.().catch(() => {});
+    setFoodPins(foodLandmarks());
+    let alive = true;
     ensureEatPlaces()
-      .then((data) => setPlaces(data.places || []))
-      .catch((e) => setErr(e.message || '讀取失敗'))
-      .finally(() => setLoading(false));
+      .then((data) => {
+        if (alive) setPlaces(data.places || []);
+      })
+      .catch((e) => {
+        if (alive) setErr(e.message || '讀取失敗');
+      })
+      .finally(() => {
+        if (alive) setLoading(false);
+      });
     return () => {
-      document.body.style.overflow = prev;
+      alive = false;
       etaAbort.current?.abort();
     };
-  }, [open, resolveForAction]);
+  }, [resolveForAction]);
 
   const nearby = useMemo(() => {
     if (!here) return [];
@@ -163,9 +189,13 @@ function EatWhatModal({ open, onClose }) {
       const when = parseEatWhen(p.lastAt);
       if (when && when < includeFrom) return false;
       if (when && when >= excludeAfter) return false;
+      if (foodOnly && foodPins.length) {
+        const point = { lat, lng };
+        if (!foodPins.some((pin) => regionContains(pin, point))) return false;
+      }
       return true;
     });
-  }, [places, here, radiusKm, includeMonths, excludeMonths]);
+  }, [places, here, radiusKm, includeMonths, excludeMonths, foodOnly, foodPins]);
 
   const radiusEta = formatDriveMin(estimateDriveMinutes(radiusKm));
   const pickKm = pick && here ? haversineKm(here.lat, here.lng, pick.lat, pick.lng) : 0;
@@ -190,6 +220,25 @@ function EatWhatModal({ open, onClose }) {
     }
   }, [here, pick]);
 
+  const placeFromRow = (row) => ({
+    id: `${row.lat},${row.lng}`,
+    lat: Number(row.lat),
+    lng: Number(row.lng),
+    title: String(row.title || '').trim(),
+    description: String(row.description || '').trim(),
+    lastAt: row.lastAt || '',
+    n: Number(row.n) || 1,
+  });
+
+  const previewPlace = (row) => {
+    spinRef.current += 1;
+    setSpinning(false);
+    setEtaMin(null);
+    setEtaErr('');
+    setPick(placeFromRow(row));
+    setPopupNonce((n) => n + 1);
+  };
+
   const spin = async () => {
     const pool = nearby;
     if (!pool.length || spinning) return;
@@ -197,29 +246,17 @@ function EatWhatModal({ open, onClose }) {
     setSpinning(true);
     setEtaMin(null);
     setEtaErr('');
-    if (pick) {
-      setZoomOutToken((n) => n + 1);
-      await new Promise((r) => setTimeout(r, 420));
-      if (seq !== spinRef.current) return;
-    }
-    const toPick = (row, i) => ({
-      id: `${row.lat},${row.lng}-${i || row.lastAt || ''}`,
-      lat: Number(row.lat),
-      lng: Number(row.lng),
-      title: String(row.title || '').trim(),
-      description: String(row.description || '').trim(),
-      lastAt: row.lastAt || '',
-      n: Number(row.n) || 1,
-    });
+    if (zoomedIn) setRestoreToken((n) => n + 1);
     let i = 0;
     const tick = () => {
       if (seq !== spinRef.current) return;
-      setPick(toPick(pool[i % pool.length], i));
+      setPick(placeFromRow(pool[i % pool.length]));
       i += 1;
       if (i < 14) {
         window.setTimeout(tick, 70);
       } else {
-        setPick(toPick(pool[Math.floor(Math.random() * pool.length)]));
+        setPick(placeFromRow(pool[Math.floor(Math.random() * pool.length)]));
+        setPopupNonce((n) => n + 1);
         setSpinning(false);
       }
     };
@@ -229,25 +266,15 @@ function EatWhatModal({ open, onClose }) {
   let meta = '沒有目前位置';
   if (loading) meta = '讀取中…';
   else if (err) meta = err;
+  else if (here && foodOnly && !foodPins.length && !nearby.length) meta = '沒有餐飲地標，圈內也沒有紀錄';
+  else if (here && foodOnly && !foodPins.length) meta = `沒有餐飲地標，改用吃過的 ${nearby.length} 處`;
+  else if (here && foodOnly && !nearby.length) meta = '圈內沒有餐飲地標的紀錄，放寬方圓或關掉篩選';
   else if (here && !nearby.length) meta = '圈內沒有紀錄，改篩選或放寬方圓';
+  else if (here && foodOnly) meta = `圈內 ${nearby.length} 處餐飲地標，點吃什麼`;
   else if (here) meta = `圈內 ${nearby.length} 處，點吃什麼`;
 
-  if (!open) return null;
-
-  const node = (
-    <div className="eat-modal-overlay" onClick={onClose} role="presentation">
-      <div
-        className="eat-modal"
-        role="dialog"
-        aria-label="吃什麼"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="eat-modal-head">
-          <h4>吃什麼</h4>
-          <button type="button" className="picker-modal-close" onClick={onClose} aria-label="關閉">
-            ✕
-          </button>
-        </div>
+  return (
+    <section className="eat-page" aria-label="吃什麼">
         <button
           type="button"
           className="expense-heat-spin eat-modal-spin"
@@ -257,6 +284,25 @@ function EatWhatModal({ open, onClose }) {
           {spinning ? '轉…' : pick ? '再來' : '吃什麼'}
         </button>
         <p className="eat-modal-meta">{meta}</p>
+
+        <label className="eat-exclude">
+          <input
+            type="checkbox"
+            checked={foodOnly}
+            onChange={(e) => {
+              const next = e.target.checked;
+              if (next) setFoodPins(foodLandmarks());
+              setFoodOnly(next);
+              setPick(null);
+              try {
+                localStorage.setItem(FOOD_ONLY_KEY, next ? '1' : '0');
+              } catch {
+                /* private mode */
+              }
+            }}
+          />
+          只用地標餐廳
+        </label>
 
         <label className="eat-slider">
           <span>{includeLabel(includeMonths)}</span>
@@ -305,31 +351,71 @@ function EatWhatModal({ open, onClose }) {
           >
             <TileLayer url={tile.url} attribution={tile.attribution} subdomains={tile.subdomains} />
             <ZoomControl position="bottomright" />
-            <MapInvalidateOn token={`${open}|${radiusKm}|${nearby.length}`} />
+            <MapInvalidateOn token={`${radiusKm}|${nearby.length}`} />
             <MapDirector
               here={here}
               radiusKm={radiusKm}
               flyPoint={pick}
-              flyNonce={pick ? pick.id : ''}
-              zoomOutToken={zoomOutToken}
+              flyInToken={flyInToken}
+              restoreToken={restoreToken}
+              onZoomedChange={setZoomedIn}
             />
-            {nearby.map((p) => (
-              <CircleMarker
-                key={`${p.lat},${p.lng}`}
-                center={[Number(p.lat), Number(p.lng)]}
-                radius={pick && pick.lat === Number(p.lat) && pick.lng === Number(p.lng) ? 11 : 7}
-                pathOptions={{
-                  color: pick && pick.lat === Number(p.lat) && pick.lng === Number(p.lng) ? '#fff' : '#e8710a',
-                  weight: pick && pick.lat === Number(p.lat) && pick.lng === Number(p.lng) ? 2 : 0,
-                  fillColor: '#e8710a',
-                  fillOpacity: 0.45,
-                }}
-              />
-            ))}
-            {pick && Number.isFinite(pick.lat) ? (
-              <Marker position={[pick.lat, pick.lng]} icon={PICK_ICON} />
+            {nearby.map((p) => {
+              const lat = Number(p.lat);
+              const lng = Number(p.lng);
+              const selected = pick && pick.lat === lat && pick.lng === lng;
+              return (
+                <CircleMarker
+                  key={`${lat},${lng}`}
+                  center={[lat, lng]}
+                  radius={selected ? 12 : 9}
+                  className="eat-place-marker"
+                  eventHandlers={{ click: () => previewPlace(p) }}
+                  pathOptions={{
+                    color: selected ? '#fff' : '#e8710a',
+                    weight: selected ? 2 : 1,
+                    fillColor: '#e8710a',
+                    fillOpacity: selected ? 0.9 : 0.55,
+                  }}
+                />
+              );
+            })}
+            {pick && !spinning && Number.isFinite(pick.lat) ? (
+              <Popup
+                key={`${pick.id}-${popupNonce}`}
+                position={[pick.lat, pick.lng]}
+                autoPan={false}
+                closeButton
+              >
+                <div className="eat-pop">
+                  <div className="eat-pop-title">{pick.title || pick.description || '這裡'}</div>
+                  {pick.title && pick.description ? (
+                    <div className="eat-pop-desc">{pick.description}</div>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="eat-pop-zoom"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (zoomedIn) setRestoreToken((n) => n + 1);
+                      else setFlyInToken((n) => n + 1);
+                    }}
+                  >
+                    {zoomedIn ? '回原視角' : '放大看'}
+                  </button>
+                </div>
+              </Popup>
             ) : null}
           </MapContainer>
+          {zoomedIn ? (
+            <button
+              type="button"
+              className="eat-restore-view"
+              onClick={() => setRestoreToken((n) => n + 1)}
+            >
+              回原視角
+            </button>
+          ) : null}
         </div>
         {pick ? (
           <div className="expense-heat-pick">
@@ -377,11 +463,8 @@ function EatWhatModal({ open, onClose }) {
             </a>
           </div>
         ) : null}
-      </div>
-    </div>
+    </section>
   );
-
-  return createPortal(node, document.body);
 }
 
-export default EatWhatModal;
+export default EatWhatPanel;

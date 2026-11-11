@@ -285,7 +285,10 @@ export function fillReceiptPrompt(template, ctx) {
     .replace(/\{\{\s*subcats\s*\}\}/gi, vars.subcats)
     .replace(/\{\{\s*fields\s*\}\}/gi, vars.fields)
     .replace(/\{\{\s*when\s*\}\}/gi, vars.when)
-    .replace(/\{\{\s*hints\s*\}\}/gi, vars.hints);
+    .replace(/\{\{\s*hints\s*\}\}/gi, vars.hints)
+    .replace(/\{\{\s*latlng\s*\}\}/gi, lifePromptVars(ctx).latlng || '無')
+    .replace(/\{\{\s*kg\s*\}\}/gi, lifePromptVars(ctx).kg)
+    .replace(/\{\{\s*dailyKcal\s*\}\}/gi, lifePromptVars(ctx).dailyKcal);
   if (!hasPh) {
     out += `\n\n目前分類: ${vars.tag}\n目前子分類: ${vars.title}${
       vars.cats ? `\n允許分類: ${vars.cats}` : ''
@@ -307,23 +310,26 @@ export function receiptPromptFor(tag, title, template, when) {
 }
 
 /** Split a template into literal text and the values that replace {{tag}} etc. */
-export function receiptPromptParts(template, { tag, title, when } = {}) {
-  const vars = receiptPromptVars({
-    tag: tag || '',
-    title: title || '',
-    when: when || '',
-    fields: fieldsForExpense(tag, title),
-    allowedTags: getExpenseTagPack().cats,
-    allowedSubcats: getExpenseTagPack().subcats,
-  });
+export function receiptPromptParts(template, { tag, title, when, lat, lng, kg } = {}) {
+  const vars = {
+    ...receiptPromptVars({
+      tag: tag || '',
+      title: title || '',
+      when: when || '',
+      fields: fieldsForExpense(tag, title),
+      allowedTags: getExpenseTagPack().cats,
+      allowedSubcats: getExpenseTagPack().subcats,
+    }),
+    ...lifePromptVars({ when, lat, lng, kg }),
+  };
   const src = String(template || '');
-  const re = /\{\{\s*([a-z]+)\s*\}\}/gi;
+  const re = /\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g;
   const parts = [];
   let last = 0;
   let match = re.exec(src);
   while (match) {
     if (match.index > last) parts.push({ kind: 'text', text: src.slice(last, match.index) });
-    const key = String(match[1] || '').toLowerCase();
+    const key = String(match[1] || '');
     const value = vars[key] != null ? String(vars[key]) : '';
     parts.push({
       kind: 'slot',
@@ -448,7 +454,7 @@ export function parseAiModels(raw) {
   }
 }
 
-/** Memory only — never localStorage. Filled by loadAiPrompt. */
+/** 這次網頁還開著才算數。不寫 localStorage，iOS webview 關掉就沒了。 */
 const aiKeys = {
   gemini: '',
   openai: '',
@@ -933,6 +939,13 @@ async function photoHash(b64) {
   }
 }
 
+let aiPromptSnapshot = null;
+
+/** 這次網頁已經讀過就回傳，沒讀過是 null。不會打 GAS。 */
+export function peekAiPrompt() {
+  return aiPromptSnapshot;
+}
+
 export async function loadAiPrompt() {
   const data = await postGasJson({ action: 'getAiPrompt' }, 20000);
   if (!data || data.success !== true || data.action !== 'getAiPrompt') {
@@ -951,16 +964,28 @@ export async function loadAiPrompt() {
     if (aiKeys.prefer === 'gemini' && preferId) aiKeys.geminiModel = canonicalizeGeminiModel(preferId);
   }
   const stored = String(data.template || '').trim();
-  return {
+  let promptsRaw = data.prompts;
+  if (promptsRaw == null || String(promptsRaw).trim() === '') {
+    try {
+      const row = await postGasJson({ action: 'getKeyValue', group: 'AI', key: 'Prompts' }, 20000);
+      if (row?.success && row.value != null) promptsRaw = row.value;
+    } catch {
+      /* 沒有這列就用三份通用 */
+    }
+  }
+  const result = {
     template: stored || data.defaultTemplate || DEFAULT_RECEIPT_PROMPT_TEMPLATE,
     stored: Boolean(stored),
     defaultTemplate: data.defaultTemplate || DEFAULT_RECEIPT_PROMPT_TEMPLATE,
     model: aiKeys.geminiModel,
     models: parseAiModels(data.models),
+    prompts: parsePromptLibrary(promptsRaw, stored || data.defaultTemplate || DEFAULT_RECEIPT_PROMPT_TEMPLATE),
     prefer: `${aiKeys.prefer}:${aiKeys.prefer === 'openai' ? aiKeys.openaiModel : aiKeys.geminiModel}`,
     hasGemini: Boolean(aiKeys.gemini),
     hasOpenAI: Boolean(aiKeys.openai),
   };
+  aiPromptSnapshot = result;
+  return result;
 }
 
 export async function saveAiModelChoice(provider, id) {
@@ -976,6 +1001,22 @@ export async function saveAiModelChoice(provider, id) {
   return value;
 }
 
+export async function savePromptLibrary(list) {
+  const rows = Array.isArray(list) ? list : [];
+  const value = JSON.stringify(rows);
+  const data = await postGasJson({ action: 'setKeyValue', group: 'AI', key: 'Prompts', value }, 20000);
+  if (!data || data.success !== true) throw new Error(data?.error || 'prompt 沒寫進設定');
+  const general = rows.find((row) => row.mode === 'expense' && !row.cat && !row.subcat);
+  if (general?.template) {
+    try {
+      await saveAiPrompt(general.template);
+    } catch {
+      /* 清單已寫入。舊的單筆 Prompt 沒同步不影響下拉 */
+    }
+  }
+  return rows;
+}
+
 export async function saveAiPrompt(template) {
   const text = (String(template || '').trim() || DEFAULT_RECEIPT_PROMPT_TEMPLATE).slice(0, 8000);
   const data = await postGasJson({ action: 'setAiPrompt', template: text }, 20000);
@@ -985,12 +1026,15 @@ export async function saveAiPrompt(template) {
   return text;
 }
 
-export async function analyzeReceiptPhoto(photo, { tag, title, promptTemplate, when } = {}) {
+export async function analyzeReceiptPhoto(photo, { tag, title, promptTemplate, when, lat, lng, kg, schema, images } = {}) {
   if (!photo?.base64) throw new Error('沒有圖片');
   const prompt = fillReceiptPrompt(promptTemplate, {
     tag: tag || '',
     title: title || '',
     when: when || '',
+    lat,
+    lng,
+    kg,
     fields: fieldsForExpense(tag, title),
     allowedTags: getExpenseTagPack().cats,
     allowedSubcats: getExpenseTagPack().subcats,
@@ -998,13 +1042,6 @@ export async function analyzeReceiptPhoto(photo, { tag, title, promptTemplate, w
   const mimeType = photo.type || 'image/jpeg';
   const base64 = photo.base64;
   const tried = [];
-  if (!aiKeys.gemini && !aiKeys.openai) {
-    try {
-      await loadAiPrompt();
-    } catch {
-      /* keep going; keys may still be empty */
-    }
-  }
   const fail = (err, model) => {
     throw attachAiMeta(err instanceof Error ? err : new Error(String(err?.message || err || 'AI 建議失敗')), {
       model: model || '',
@@ -1013,7 +1050,7 @@ export async function analyzeReceiptPhoto(photo, { tag, title, promptTemplate, w
     });
   };
   if (!aiKeys.gemini && !aiKeys.openai) {
-    fail(new Error('KeyValueConfig AI 未設 APIKey / OPENAPIKey'));
+    fail(new Error('按「讀取設定」才會打 getAiPrompt'));
   }
 
   let lastErr = '';
@@ -1025,10 +1062,13 @@ export async function analyzeReceiptPhoto(photo, { tag, title, promptTemplate, w
       base64,
       prompt,
       budgetMs: GEMINI_BUDGET_MS,
+      schema,
+      images,
     });
     tried.push(...(gemini.tried || [gemini.model]));
     return {
       suggestions: parseAiSuggestions(gemini.text),
+      text: gemini.text,
       model: gemini.model,
       tried,
       prompt,
@@ -1043,10 +1083,12 @@ export async function analyzeReceiptPhoto(photo, { tag, title, promptTemplate, w
       base64,
       prompt,
       timeoutMs: OPENAI_BUDGET_MS,
+      images,
     });
     tried.push(openai.model);
     return {
       suggestions: parseAiSuggestions(openai.text),
+      text: openai.text,
       model: openai.model,
       tried,
       prompt,
@@ -1262,8 +1304,89 @@ export function fillPromptSlots(template, vars) {
 }
 
 /** 記錄用。記帳收據 prompt 分開，不混在這支。沿用這一頁改過的模板。 */
-export function lifePhotoPrompt({ when, lat, lng, kg } = {}) {
-  return fillPromptSlots(loadLifePromptTemplate(), lifePromptVars({ when, lat, lng, kg }));
+const PROMPT_MODES = ['expense', 'record', 'both'];
+
+/** A+B。一次回傳記錄 caption 和一筆記賬 suggestion，不用只記賬那份。 */
+export const DEFAULT_BOTH_PROMPT_TEMPLATE = [
+  '你是記帳兼照片記錄助手。只根據照片，回傳一個 JSON，同時包含記錄和一筆記賬。',
+  '記錄：caption 用簡體中文，描述主體和場景，不要用「这是一张照片」開頭。不要猜拍攝時間，不要辨認車牌，不要加車牌 hashtag。',
+  '拍攝時間（只有食物才可用來加 hashtag）：{{when}}',
+  '目前位置：{{latlng}}',
+  '體重 kg：{{kg}}。步行 5km/h 約 3.5 MET，慢跑 8km/h 約 8.3 MET。每分鐘 kcal ≈ MET×3.5×體重÷200。結果取整數。',
+  '只有畫面裡真的有食物或飲料才加：🍽️ 热量、🍬 糖分、🚶 步行消耗、🏃 慢跑消耗，以及每日建議攝取約{{dailyKcal}} kcal（體重×30，不是醫囑）。',
+  '食物 hashtag 只在有可靠拍攝時間時加：05:00–10:59 #breakfast，11:00–16:59 #lunch，17:00–21:59 #dinner，22:00–04:59 #supper。',
+  'topic 只能是 General、Foods、Receipts、Med、Viridien、Car。收據優先 Receipts。食物優先 Foods。不確定用 General。',
+  '有經緯度才在 caption 最後加「 - http://maps.google.com/maps?q=lat,lng」。',
+  '記賬：目前分類 {{tag}}，目前子分類 {{title}}。允許分類：{{cats}}。允許子分類：{{subcats}}。需要欄位：{{fields}}。{{hints}}',
+  'suggestions 只給 1 筆。tag/title 必須在允許清單內；已選的優先沿用。金額用 number。有品項才填 items。',
+  '只回這一個 JSON：',
+  '{"caption":"","topic":"General","other":"","suggestions":[{"label":"含稅總額","tag":"餐饮美食","title":"午餐","amount":25.5,"currency":"MYR","merchant":"店名","items":[{"name":"Nasi Lemak","unitPrice":8.5,"quantity":2,"amount":17}]}]}',
+].join('\n');
+
+/** 一格約 24 份。超過 20 份先提示，還是可以新增。 */
+export function promptLibraryWarn(count) {
+  const n = Number(count) || 0;
+  if (n <= 20) return '';
+  return `已有 ${n} 份，試算表一格大約到 24 份`;
+}
+
+/** 三份通用。cat／subcat 空白＝不限分類。試算表 AI/Prompts 可整份換掉。 */
+export function defaultPromptLibrary(receiptTemplate) {
+  const receipt = String(receiptTemplate || '').trim() || DEFAULT_RECEIPT_PROMPT_TEMPLATE;
+  return [
+    { id: 'expense', label: '只記賬', mode: 'expense', cat: '', subcat: '', template: receipt },
+    { id: 'record', label: '只記錄', mode: 'record', cat: '', subcat: '', template: DEFAULT_LIFE_PROMPT_TEMPLATE },
+    { id: 'both', label: '記賬＋記錄', mode: 'both', cat: '', subcat: '', template: DEFAULT_BOTH_PROMPT_TEMPLATE },
+  ];
+}
+
+export function parsePromptLibrary(raw, receiptTemplate) {
+  const fallback = defaultPromptLibrary(receiptTemplate);
+  try {
+    const list = typeof raw === 'string' ? (String(raw).trim() ? JSON.parse(raw) : []) : raw;
+    if (!Array.isArray(list) || !list.length) return fallback;
+    const out = list
+      .map((row, index) => ({
+        id: String(row?.id || `p${index}`).trim(),
+        label: String(row?.label || row?.id || 'prompt').trim(),
+        mode: PROMPT_MODES.includes(row?.mode) ? row.mode : 'expense',
+        cat: String(row?.cat || '').trim(),
+        subcat: String(row?.subcat || '').trim(),
+        template: String(row?.template || ''),
+      }))
+      .filter((row) => row.id && row.label);
+    const receipt = String(receiptTemplate || '').trim() || DEFAULT_RECEIPT_PROMPT_TEMPLATE;
+    out.forEach((row) => {
+      if (row.id === 'both' && !row.cat && !row.subcat && row.template.trim() === receipt) {
+        row.template = DEFAULT_BOTH_PROMPT_TEMPLATE;
+      }
+    });
+    return out.length ? out : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+/** 子分類專用優先，其次分類，最後通用。其他分類的不出現。 */
+export function promptsForContext(list, { mode, cat, subcat } = {}) {
+  const same = (Array.isArray(list) ? list : []).filter((row) => row.mode === mode);
+  const wantCat = String(cat || '').trim();
+  const wantSub = String(subcat || '').trim();
+  const subHits = wantCat && wantSub ? same.filter((row) => row.cat === wantCat && row.subcat === wantSub) : [];
+  const catHits = wantCat ? same.filter((row) => row.cat === wantCat && !row.subcat) : [];
+  const general = same.filter((row) => !row.cat && !row.subcat);
+  return [...subHits, ...catHits, ...general];
+}
+
+export function promptOptionLabel(row) {
+  if (!row) return '';
+  const where = !row.cat ? '通用' : row.subcat ? `${row.cat}/${row.subcat}` : row.cat;
+  return `${row.label} · ${where}`;
+}
+
+export function lifePhotoPrompt({ when, lat, lng, kg } = {}, template) {
+  const src = String(template || '').trim() || loadLifePromptTemplate();
+  return fillPromptSlots(src, lifePromptVars({ when, lat, lng, kg }));
 }
 
 export function parseLifePhotoJson(text) {
@@ -1284,13 +1407,7 @@ export async function analyzeLifePhoto(photos, prompt) {
   const list = (Array.isArray(photos) ? photos : [photos]).filter((p) => p?.base64).slice(0, 6);
   const photo = list[0];
   if (!photo?.base64) throw new Error('沒有圖片');
-  if (!aiKeys.gemini && !aiKeys.openai) {
-    try {
-      await loadAiPrompt();
-    } catch {
-      /* keys may still be empty */
-    }
-  }
+  if (!aiKeys.gemini && !aiKeys.openai) throw new Error('按「讀取設定」才會打 getAiPrompt');
   const mimeType = photo.type || 'image/jpeg';
   const images = list.slice(1).map((p) => ({ mimeType: p.type || 'image/jpeg', base64: p.base64 }));
   let text = '';
@@ -1328,7 +1445,7 @@ export async function analyzeLifePhoto(photos, prompt) {
       text = openai.text;
     }
   }
-  if (!text) throw new Error(geminiErr || 'KeyValueConfig AI 未設 APIKey / OPENAPIKey');
+  if (!text) throw new Error(geminiErr || '按「讀取設定」才會打 getAiPrompt');
   return parseLifePhotoJson(text);
 }
 
