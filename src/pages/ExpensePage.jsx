@@ -14,6 +14,7 @@ import CameraAICapture from '../components/CameraAICapture';
 import ReceiptPhotoEditor from '../components/ReceiptPhotoEditor';
 import { useOfflineQueue } from '../context/QueueContext';
 import {
+  aiModelStatusLabel,
   analyzeReceiptPhoto,
   applyAiSuggestion,
   DEFAULT_AI_MODELS,
@@ -262,14 +263,12 @@ function ExpensePage() {
       if (data.prefer) setAiPrefer(String(data.prefer).split('|')[0]);
       setAiRotate(Boolean(data.rotate));
       if (Array.isArray(data.prompts) && data.prompts.length) setAiPrompts(data.prompts);
-      const bits = [];
-      if (data.hasGemini) bits.push('Gemini');
-      if (data.hasOpenAI) bits.push('OpenAI');
+      const label = aiModelStatusLabel(data.models, data.prefer);
       setAiTplMsg(
         keepEdit
           ? '已讀取。這份未儲存的內容留著'
-          : bits.length
-            ? `已讀取 · ${bits.join(' / ')}`
+          : label
+            ? `已讀取 · ${label}`
             : '已讀取，未設 APIKey'
       );
       return data.template;
@@ -1610,7 +1609,7 @@ function ExpensePage() {
                 <select value={aiPrefer} onChange={(e) => pickAiModel(e.target.value)}>
                   {aiModels.map((model) => (
                     <option key={`${model.provider}:${model.id}`} value={`${model.provider}:${model.id}`}>
-                      {`${model.provider === 'openai' ? 'OpenAI' : 'Gemini'} ${model.label}${model.tier ? ` · ${model.tier}` : ''}`}
+                      {`${model.provider === 'openai' ? 'OpenAI' : model.provider === 'mistral' ? 'Mistral' : 'Gemini'} ${model.label}${model.tier ? ` · ${model.tier}` : ''}`}
                     </option>
                   ))}
                 </select>

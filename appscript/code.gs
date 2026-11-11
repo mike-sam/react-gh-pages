@@ -1613,7 +1613,7 @@ function handleAnalyzeReceipt(data) {
 }
 
 var AI_MODELS_DEFAULT_ =
-  '[{"id":"gemini-3.5-flash-lite","provider":"gemini","label":"Flash Lite","tier":"最便宜"},{"id":"gemini-3.8-flash","provider":"gemini","label":"Flash","tier":"較準"},{"id":"gpt-4o-mini","provider":"openai","label":"4o mini","tier":"便宜"}]';
+  '[{"id":"gemini-3.5-flash-lite","provider":"gemini","label":"Gemini 3.5 Flash-Lite","tier":"免費優先"},{"id":"gemini-3.8-flash","provider":"gemini","label":"Gemini 3.8 Flash","tier":"免費較強"},{"id":"ministral-8b-2512","provider":"mistral","label":"Ministral 3 8B","tier":"低成本 $0.15"},{"id":"ministral-14b-2512","provider":"mistral","label":"Ministral 3 14B","tier":"低成本 $0.20"},{"id":"gpt-6-luna","provider":"openai","label":"GPT-6 Luna","tier":"低成本 $0.50"}]';
 
 function ensureAiOpenApiKeyRow_() {
   var sheet = getKeyValueSheet();
@@ -1625,6 +1625,18 @@ function ensureAiOpenApiKeyRow_() {
     if (groupStr === 'AI' && (keyStr === 'OPENAPIKEY' || keyStr === 'OPENAIKEY')) return;
   }
   sheet.appendRow(['AI', 'OPENAPIKey', '', datetimetoYMDHIS(), 'ChatGPT/OpenAI; Gemini 慢時瀏覽器直打']);
+}
+
+function ensureAiMistralKeyRow_() {
+  var sheet = getKeyValueSheet();
+  var data = sheet.getDataRange().getValues();
+  var i;
+  for (i = 1; i < data.length; i++) {
+    var groupStr = data[i][0] ? String(data[i][0]).trim().toUpperCase() : '';
+    var keyStr = data[i][1] ? String(data[i][1]).trim().toUpperCase() : '';
+    if (groupStr === 'AI' && keyStr === 'MISTRALKEY') return;
+  }
+  sheet.appendRow(['AI', 'MistralKey', '', datetimetoYMDHIS(), 'Mistral; 瀏覽器直打。Models 的 provider 填 mistral']);
 }
 
 function ensureAiModelRows_() {
@@ -1640,6 +1652,7 @@ function ensureAiModelRows_() {
 function handleGetAiPrompt() {
   try {
     ensureAiOpenApiKeyRow_();
+    ensureAiMistralKeyRow_();
     ensureAiModelRows_();
     var ai = lookupGroupMap_('AI');
     var stored = String(ai.PROMPT || lookupKeyValue_('Prompt', 'AI') || '').trim();
@@ -1658,7 +1671,8 @@ function handleGetAiPrompt() {
       geminiKey: String(ai.APIKEY || lookupKeyValue_('APIKey', 'AI') || '').trim(),
       openaiKey: String(
         ai.OPENAPIKEY || ai.OPENAIKEY || lookupKeyValue_('OPENAPIKey', 'AI') || lookupKeyValue_('OPENAIKey', 'AI') || ''
-      ).trim()
+      ).trim(),
+      mistralKey: String(ai.MISTRALKEY || lookupKeyValue_('MistralKey', 'AI') || '').trim()
     });
   } catch (error) {
     return jsonOut({ success: false, error: error.toString() });

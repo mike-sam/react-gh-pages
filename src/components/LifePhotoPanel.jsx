@@ -18,6 +18,7 @@ import {
   lifePromptVars,
   DEFAULT_AI_MODELS,
   defaultPromptLibrary,
+  aiModelStatusLabel,
   loadAiPrompt,
   loadRememberModel,
   peekAiPrompt,
@@ -200,8 +201,8 @@ function LifePhotoPanel() {
           /* 體重維持 65 */
         }
       }
-      const keys = [data.hasGemini ? 'Gemini' : '', data.hasOpenAI ? 'OpenAI' : ''].filter(Boolean).join(' / ');
-      setMsg(keys ? `已讀取 · ${keys}` : '已讀取，未設 APIKey');
+      const label = aiModelStatusLabel(data.models, data.prefer);
+      setMsg(label ? `已讀取 · ${label}` : '已讀取，未設 APIKey');
     } catch (err) {
       setMsg(String(err?.message || '讀取失敗').slice(0, 80));
     } finally {
@@ -433,7 +434,7 @@ function LifePhotoPanel() {
               <select value={prefer} disabled={busy} onChange={(e) => pickModel(e.target.value)}>
                 {models.map((model) => (
                   <option key={`${model.provider}:${model.id}`} value={`${model.provider}:${model.id}`}>
-                    {`${model.provider === 'openai' ? 'OpenAI' : 'Gemini'} ${model.label}${model.tier ? ` · ${model.tier}` : ''}`}
+                    {`${model.provider === 'openai' ? 'OpenAI' : model.provider === 'mistral' ? 'Mistral' : 'Gemini'} ${model.label}${model.tier ? ` · ${model.tier}` : ''}`}
                   </option>
                 ))}
               </select>
