@@ -2,6 +2,17 @@ import { API_ENDPOINTS } from '../config';
 
 export const CALENDAR_TITLES = ['Work', 'Commute', 'Driving', 'Trip', 'Sleep'];
 
+/** One meal name for the track time. Covers the whole day. */
+export function mealEventForDate(date) {
+  const d = date instanceof Date && !Number.isNaN(date.getTime()) ? date : new Date();
+  const mins = d.getHours() * 60 + d.getMinutes();
+  if (mins >= 5 * 60 && mins < 10 * 60) return 'Breakfast';
+  if (mins >= 10 * 60 && mins < 12 * 60) return 'Brunch';
+  if (mins >= 12 * 60 && mins < 16 * 60) return 'Lunch';
+  if (mins >= 16 * 60 && mins < 21 * 60) return 'Dinner';
+  return 'Supper';
+}
+
 export const CALENDAR_PREFIXES = ['public transportation'];
 
 export const CALENDAR_LOOKBACK_DAYS_DEFAULT = 3;
@@ -92,12 +103,6 @@ export const CALENDAR_TRACK_PARAMS = [
     note: '軌跡地名。空白則 GAS 用地圖管理的區域反查。place 同義',
   },
   {
-    name: 'endScope',
-    required: 'optional',
-    example: 'all',
-    note: '舊參數（endExisting、all、endAny 同），只在 op=start／end 有作用。用 endStart／startNew／endAll 時忽略',
-  },
-  {
     name: 'days',
     required: 'optional',
     example: '3',
@@ -112,14 +117,9 @@ export function calendarActionPayload({
   when,
   lat = null,
   lng = null,
-  endExisting = true,
-  all = false,
-  endAny = false,
-  endScope = '',
   prefix = '',
   lookbackDays,
   days,
-  silent = true,
   id,
   timestampEnd,
   timestampEndMs,
@@ -139,14 +139,7 @@ export function calendarActionPayload({
     latitude: lat ?? null,
     longitude: lng ?? null,
     placeName: placeName || '',
-    endExisting,
-    startHome: false,
-    all: Boolean(all),
-    endAny: Boolean(endAny),
-    endScope: endScope || '',
-    silent: silent !== false,
     days: resolvedDays,
-    lookbackDays: resolvedDays,
   };
   if (timestampEnd) body.timestampEnd = timestampEnd;
   if (timestampEndMs != null) body.timestampEndMs = timestampEndMs;
@@ -173,9 +166,6 @@ export function calendarBlockPayload({
     lat,
     lng,
     placeName,
-    endExisting: false,
-    endAny: false,
-    silent: true,
     timestampEnd: stampCalendarTimestamp(e),
     timestampEndMs: e.getTime(),
     description: String(description || '').slice(0, 800),
@@ -263,14 +253,7 @@ export function buildCalendarTrackUrlFromPayload(payload, base = calendarTrackEn
       latlong: p.latlong ?? p.latlng,
       placeName: p.placeName || p.place,
       event: p.event || p.title,
-      endExisting: p.endExisting,
-      startHome: p.startHome,
-      all: p.all,
-      endAny: p.endAny,
-      endScope: p.endScope,
-      silent: p.silent,
-      days: p.days,
-      lookbackDays: p.lookbackDays,
+      days: p.days ?? p.lookbackDays,
     },
     base
   );
@@ -298,14 +281,7 @@ export function buildCalendarTrackUrl(params, base = calendarTrackEndpoint()) {
     'lng',
     'latlong',
     'placeName',
-    'endExisting',
-    'startHome',
-    'all',
-    'endAny',
-    'endScope',
-    'silent',
     'days',
-    'lookbackDays',
   ];
   keys.forEach((k) => {
     const v = params?.[k];

@@ -7,6 +7,7 @@ import ExpensePage from './pages/ExpensePage';
 import CalendarPage from './pages/CalendarPage';
 import ParkingPage from './pages/ParkingPage';
 import RegionsPage from './pages/RegionsPage';
+import PhotoPage from './pages/PhotoPage';
 import './App.css';
 
 /**
@@ -38,6 +39,8 @@ function App() {
       return <ParkingPage />;
     case ROUTES.REGIONS:
       return <RegionsPage />;
+    case ROUTES.PHOTO:
+      return <PhotoPage />;
     case ROUTES.HOME:
     default:
       return <EntryPage />;

@@ -71,7 +71,12 @@ GAS 只認日曆上**描述第一行是 `**start**`** 的行程為「進行中�
 
 布林值接受 `1/0`、`true/false`、`yes/no`、`on/off`。
 
-**舊參數**：`endScope`、`endExisting`、`all`、`endAny` 只在 `op=start` / `op=end` 時有作用（給舊捷徑用）。用 `endStart`、`startNew`、`endAll` 時一律忽略，帶了也沒影響。`silent` 已無作用。
+GAS 不讀 `silent`、`endScope`、`endExisting`、`all`、`endAny`、`lookbackDays`。關哪些只看 `op`。天數只看 `days`。
+
+### 兩種送法
+
+- **開頁面**：打開這個網站的行事曆頁，自己按按鈕。看得到畫面。
+- **後台**：iOS Shortcuts 用「取得 URL 內容」打 **GAS exec URL**（本頁範例），方法 GET，打開 Follow Redirects。不要用「打開 URL」（那會開 Safari），也不要打 github pages：Get Contents 不執行網頁，頁面不會替你送出。
 
 ### 防重複
 

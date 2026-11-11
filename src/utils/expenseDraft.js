@@ -2,7 +2,7 @@ import { getMergedQueryParams } from './expenseQuickUrl';
 
 export const EXPENSE_DRAFT_KEY = 'expenseFormDraft';
 const DRAFT_TTL_MS = 14 * 24 * 60 * 60 * 1000;
-const MAX_JSON_CHARS = 1_200_000;
+const MAX_JSON_CHARS = 4_500_000;
 
 const INCOMING_KEYS = [
   'cat',
@@ -111,6 +111,29 @@ export function snapshotExpenseDraft(form) {
   };
 }
 
+function photoForDraft(photo) {
+  if (!photo || typeof photo !== 'object') return photo;
+  const next = { ...photo };
+  delete next.sourcePreview;
+  delete next.preview;
+  return next;
+}
+
+/** Draft stores base64 only. Rebuild the thumbnail the page can show. */
+export function hydrateDraftPhotos(list) {
+  if (!Array.isArray(list)) return [];
+  return list.map((photo) => {
+    if (!photo || typeof photo !== 'object') return photo;
+    if (photo.preview) return photo;
+    if (photo.base64) {
+      const type = photo.type || 'image/jpeg';
+      return { ...photo, preview: `data:${type};base64,${photo.base64}` };
+    }
+    if (photo.uploadedUrl) return { ...photo, preview: photo.uploadedUrl };
+    return photo;
+  });
+}
+
 export function loadExpenseDraft() {
   try {
     const raw = localStorage.getItem(EXPENSE_DRAFT_KEY);
@@ -146,27 +169,28 @@ export function clearExpenseDraft() {
 
 export function saveExpenseDraft(form) {
   const snap = snapshotExpenseDraft(form);
+  snap.photos = (snap.photos || []).map(photoForDraft);
   if (!isExpenseDraftWorthSaving(snap)) {
     clearExpenseDraft();
     return false;
   }
   const write = (photos) => {
-    const rec = { v: 1, savedAt: Date.now(), ...snap, photos };
-    const json = JSON.stringify(rec);
-    if (json.length > MAX_JSON_CHARS && photos.length) return false;
-    localStorage.setItem(EXPENSE_DRAFT_KEY, json);
-    return true;
-  };
-  try {
-    if (write(snap.photos)) return true;
-    const slim = (snap.photos || []).map(({ sourcePreview, ...rest }) => rest);
-    if (write(slim)) return true;
-    return write([]);
-  } catch {
     try {
-      return write([]);
+      const rec = { v: 1, savedAt: Date.now(), ...snap, photos };
+      const json = JSON.stringify(rec);
+      if (json.length > MAX_JSON_CHARS) return false;
+      localStorage.setItem(EXPENSE_DRAFT_KEY, json);
+      return true;
     } catch {
       return false;
     }
+  };
+  if (write(snap.photos)) return true;
+  let batch = snap.photos.slice();
+  while (batch.length > 1) {
+    batch = batch.slice(0, -1);
+    if (write(batch)) return true;
   }
+  if (batch.length === 1 && write(batch)) return true;
+  return false;
 }

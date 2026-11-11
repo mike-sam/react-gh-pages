@@ -17,6 +17,14 @@ export const RECEIPT_PRESETS = [
   { id: 'small', label: '較小', quality: 0.66, maxEdge: 1100, maxBytes: 160 * 1024 },
 ];
 
+/** Telegram 少壓一點。記帳／Drive 仍走上面的收據預設。 */
+export const TELEGRAM_COMPRESS = {
+  preset: 'telegram',
+  quality: 0.9,
+  maxEdge: 2400,
+  maxBytes: 1400 * 1024,
+};
+
 export const DEFAULT_RECEIPT_PREFS = {
   preset: 'balanced',
   quality: 0.78,
@@ -283,7 +291,7 @@ export async function renderReceiptPhoto({
   ctx.drawImage(oriented, sx, sy, sw, sh, 0, 0, tw, th);
 
   let q = clamp(Number(quality) || DEFAULT_RECEIPT_PREFS.quality, 0.45, 0.92);
-  const budget = clamp(Number(maxBytes) || DEFAULT_RECEIPT_PREFS.maxBytes, 80 * 1024, 900 * 1024);
+  const budget = clamp(Number(maxBytes) || DEFAULT_RECEIPT_PREFS.maxBytes, 80 * 1024, 1600 * 1024);
   let blob = await canvasToJpegBlob(canvas, q);
   while (blob.size > budget && q > 0.5) {
     q = Math.max(0.5, q - 0.07);

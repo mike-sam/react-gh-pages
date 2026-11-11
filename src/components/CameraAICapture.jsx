@@ -1,8 +1,8 @@
 import React, { useRef, useState } from 'react';
-import { compressReceiptFile, formatReceiptSizePair } from '../utils/receiptPhoto';
+import { compressReceiptFile, formatReceiptSizePair, TELEGRAM_COMPRESS } from '../utils/receiptPhoto';
 
 /** 📷 拍照 / 🖼️ 相冊 → 先做成可再裁切／調壓縮的工作圖。 */
-function CameraAICapture({ onPhotoReady }) {
+function CameraAICapture({ onPhotoReady, lighter }) {
   const cameraRef = useRef(null);
   const albumRef = useRef(null);
   const [busy, setBusy] = useState(false);
@@ -13,7 +13,7 @@ function CameraAICapture({ onPhotoReady }) {
     setBusy(true);
     setHint('處理中…');
     try {
-      const photo = await compressReceiptFile(file);
+      const photo = await compressReceiptFile(file, lighter ? TELEGRAM_COMPRESS : undefined);
       onPhotoReady?.(photo);
       setHint(`${formatReceiptSizePair(photo.compressedSize, photo.originalSize)} · 可再裁切`);
     } catch (err) {
@@ -30,10 +30,12 @@ function CameraAICapture({ onPhotoReady }) {
     processFile(file);
   };
 
-  const onAlbumChange = (e) => {
-    const file = e.target.files?.[0];
+  const onAlbumChange = async (e) => {
+    const files = Array.from(e.target.files || []);
     e.target.value = '';
-    processFile(file);
+    for (let i = 0; i < files.length; i += 1) {
+      await processFile(files[i]);
+    }
   };
 
   return (
@@ -50,6 +52,7 @@ function CameraAICapture({ onPhotoReady }) {
         ref={albumRef}
         type="file"
         accept="image/*"
+        multiple
         hidden
         onChange={onAlbumChange}
       />

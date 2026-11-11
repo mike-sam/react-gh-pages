@@ -13,21 +13,30 @@ import CameraAICapture from '../components/CameraAICapture';
 import ReceiptPhotoEditor from '../components/ReceiptPhotoEditor';
 import { useOfflineQueue } from '../context/QueueContext';
 import {
+  analyzeLifePhoto,
   analyzeReceiptPhoto,
   applyAiSuggestion,
+  DEFAULT_AI_MODELS,
   DEFAULT_RECEIPT_PROMPT_TEMPLATE,
   formatAiCurlCopy,
   formatAiFallbackCopy,
   formatWhen,
+  lifePhotoPrompt,
   loadAiPrompt,
   parseAiSuggestions,
   recordAiSuggestion,
   receiptPromptFor,
+  receiptPromptParts,
   resolveSuggestionTimes,
+  saveAiModelChoice,
   saveAiPrompt,
+  sendTelegramPhotos,
   suggestionSummary,
 } from '../utils/aiSuggest';
 import { calendarBlockPayload } from '../utils/calendarTrackUrl';
+import UrlTemplateBar from '../components/UrlTemplateBar';
+import { API_ENDPOINTS } from '../config';
+import { getStoredAccessHash } from '../utils/accessGate';
 import { copyText } from '../utils/platform';
 import { useSmartLocation } from '../hooks/useSmartLocation';
 import { formatRelativeTimeShort, toMapsUrl } from '../utils/locationStorage';
@@ -35,6 +44,7 @@ import { labelFromCoveringPlace, pinMerchantIfNearHere, rememberNamedPoint } fro
 import {
   asDraftDate,
   clearExpenseDraft,
+  hydrateDraftPhotos,
   loadBootExpenseDraft,
   saveExpenseDraft,
 } from '../utils/expenseDraft';
@@ -52,7 +62,8 @@ import {
   subscribeAppBootstrap,
   transformPaymentOptions,
 } from '../utils/appBootstrap';
-import { applyHash, getHashPath, ROUTES } from '../utils/routing';
+import { applyHash, getHashPath, hrefFor, ROUTES } from '../utils/routing';
+import { normalizePlate } from '../utils/vehicles';
 import {
   parseExpenseQuickDraft,
   clearExpenseQuickQuery,
@@ -85,6 +96,7 @@ function ExpensePage() {
   const [silentPhase, setSilentPhase] = useState(null);
   const [silentRemainMs, setSilentRemainMs] = useState(0);
   const [draftReady, setDraftReady] = useState(false);
+  const draftSnapRef = useRef(null);
 
   const [selectedTag, setSelectedTag] = useState(boot?.selectedTag || null);
   const [input, setInput] = useState(boot?.input || '');
@@ -96,9 +108,18 @@ function ExpensePage() {
   const [currency, setCurrency] = useState(boot?.currency || 'MYR');
   const [log, setLog] = useState(() => loadExpenseHistory());
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [output, setOutput] = useState(() =>
-    boot?.savedAt ? `已還原本機暫存（${formatRelativeTimeShort(boot.savedAt)}）` : ''
-  );
+  const [output, setOutput] = useState(() => {
+    try {
+      const note = sessionStorage.getItem('lifePhotoNotice');
+      if (note) {
+        sessionStorage.removeItem('lifePhotoNotice');
+        return note;
+      }
+    } catch {
+      /* ignore */
+    }
+    return boot?.savedAt ? `已還原本機暫存（${formatRelativeTimeShort(boot.savedAt)}）` : '';
+  });
   const [selectedDateTime, setSelectedDateTime] = useState(
     () => asDraftDate(boot?.selectedDateTime, new Date())
   );
@@ -106,7 +127,8 @@ function ExpensePage() {
   const [eventEnd, setEventEnd] = useState(() => asDraftDate(boot?.eventEnd));
   const [paymentMethod, setPaymentMethod] = useState(boot?.paymentMethod || '');
   const [simpleDescription, setSimpleDescription] = useState(boot?.simpleDescription || '');
-  const [photos, setPhotos] = useState(() => (Array.isArray(boot?.photos) ? boot.photos : []));
+  const [photos, setPhotos] = useState(() => hydrateDraftPhotos(boot?.photos));
+  const plateTagRef = useRef('');
   const [editPhotoIndex, setEditPhotoIndex] = useState(-1);
   /** When set, submit keeps this id → GAS Replace Into（編輯既有筆） */
   const [editingId, setEditingId] = useState(boot?.editingId ?? null);
@@ -144,6 +166,18 @@ function ExpensePage() {
   const [calendarEventId, setCalendarEventId] = useState(boot?.calendarEventId || '');
   const [aiCalAsk, setAiCalAsk] = useState(null);
   const [aiPaste, setAiPaste] = useState('');
+  const [aiPromptView, setAiPromptView] = useState('edit');
+  const [aiModels, setAiModels] = useState(DEFAULT_AI_MODELS);
+  const [aiPrefer, setAiPrefer] = useState('gemini:gemini-3.5-flash-lite');
+  const [recordToTelegram, setRecordToTelegram] = useState(() => {
+    try {
+      return sessionStorage.getItem('lifePhotoRecord') === '1';
+    } catch {
+      return false;
+    }
+  });
+  const [aiAskIndex, setAiAskIndex] = useState(-1);
+  const aiPromptRef = useRef(null);
 
   const hasUnsavedInput = useMemo(() => {
     const amt = String(amount || '').trim();
@@ -161,6 +195,16 @@ function ExpensePage() {
     );
   }, [selectedTag, input, amount, remark, simpleDescription, carPlate, photos, taxAddons, editingId]);
 
+  const promptPreview = useMemo(
+    () =>
+      receiptPromptParts(aiTemplate, {
+        tag: selectedTag,
+        title: input,
+        when: formatWhen(selectedDateTime),
+      }),
+    [aiTemplate, selectedTag, input, selectedDateTime]
+  );
+
   const ensureAiPromptLoaded = useCallback(async () => {
     if (aiTplLoaded) return aiTemplate;
     setAiTplBusy(true);
@@ -172,6 +216,8 @@ function ExpensePage() {
       if (data.model) {
         setAiMeta((m) => (m.model ? m : { ...m, model: data.model }));
       }
+      if (Array.isArray(data.models) && data.models.length) setAiModels(data.models);
+      if (data.prefer) setAiPrefer(data.prefer);
       const bits = [];
       if (data.hasGemini) bits.push('Gemini');
       if (data.hasOpenAI) bits.push('OpenAI');
@@ -185,6 +231,20 @@ function ExpensePage() {
       setAiTplBusy(false);
     }
   }, [aiTplLoaded, aiTemplate]);
+
+  const pickAiModel = async (value) => {
+    const sep = String(value || '').indexOf(':');
+    if (sep < 1) return;
+    setAiPrefer(value);
+    try {
+      const saved = await saveAiModelChoice(value.slice(0, sep), value.slice(sep + 1));
+      setAiPrefer(saved);
+      setAiTplMsg('模型已存');
+      window.setTimeout(() => setAiTplMsg(''), 1600);
+    } catch (err) {
+      setAiTplMsg(String(err.message || '模型沒存成').slice(0, 80));
+    }
+  };
 
   const saveAiTemplate = async () => {
     setAiTplBusy(true);
@@ -200,6 +260,39 @@ function ExpensePage() {
     } finally {
       setAiTplBusy(false);
     }
+  };
+
+  useEffect(() => {
+    const plate = normalizePlate(carPlate);
+    const active = selectedTag === '交通出行' && plate && plate !== 'OTHER';
+    const tag = active ? `#${plate}` : '';
+    const prevTag = plateTagRef.current;
+    if (prevTag === tag) return;
+    setSimpleDescription((text) => {
+      let next = String(text || '');
+      if (prevTag) {
+        next = next
+          .replace(new RegExp(`\\s*${prevTag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'gi'), '')
+          .replace(/[ \t]{2,}/g, ' ')
+          .trim();
+      }
+      if (tag && !new RegExp(`#${plate}\\b`, 'i').test(next)) next = `${next} ${tag}`.trim();
+      return next;
+    });
+    plateTagRef.current = tag;
+  }, [selectedTag, carPlate]);
+
+  const reviewAiPrompt = (index) => {
+    const photo = photos[index];
+    if (!photo?.base64 || aiBusyIndex >= 0) return;
+    setAiAskIndex(index);
+    setAiPromptView('preview');
+    const el = aiPromptRef.current;
+    if (el) {
+      el.open = true;
+      el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+    ensureAiPromptLoaded();
   };
 
   const askAiForPhoto = async (index) => {
@@ -230,6 +323,35 @@ function ExpensePage() {
         tried: result.tried || [],
       });
       if (!result.suggestions.length) setAiError('沒有建議');
+      if (recordToTelegram) {
+        const shots = (photos.length ? photos : [photo]).filter((p) => p?.base64);
+        if (!shots.length) {
+          setAiError('沒有可推上 Telegram 的照片');
+        } else {
+          try {
+            const life = await analyzeLifePhoto(
+              shots,
+              lifePhotoPrompt({
+                when: whenStr,
+                lat: smartLoc?.lat,
+                lng: smartLoc?.lng,
+              })
+            );
+            await sendTelegramPhotos({
+              photos: shots,
+              caption: life.caption,
+              topic: life.topic,
+              mode: shots.length > 1 ? 'album' : 'individual',
+            });
+            if (life.caption) {
+              setSimpleDescription((cur) => (String(cur || '').trim() ? cur : life.caption));
+            }
+            setAiTplMsg(`已推 Telegram · ${life.topic}`);
+          } catch (err) {
+            setAiError(`記帳建議已回來，Telegram 沒推成：${String(err?.message || err).split('\n')[0].slice(0, 120)}`);
+          }
+        }
+      }
     } catch (err) {
       setAiMeta((m) => ({
         ...m,
@@ -540,7 +662,33 @@ function ExpensePage() {
     if (resolved && resolved !== paymentMethod) setPaymentMethod(resolved);
   }, [paymentMethod, paymentOptions]);
 
+  useEffect(() => () => {
+    if (draftSnapRef.current) saveExpenseDraft(draftSnapRef.current);
+  }, []);
+
   useEffect(() => {
+    draftSnapRef.current = {
+      selectedTag,
+      input,
+      remark,
+      simpleDescription,
+      amount,
+      currency,
+      paymentMethod,
+      carPlate,
+      mileage,
+      tripInfo,
+      fuelPrice,
+      fuelType,
+      taxAddons,
+      photos,
+      isAmountManuallySet,
+      editingId,
+      calendarEventId,
+      selectedDateTime,
+      eventStart,
+      eventEnd,
+    };
     if (!paymentsReady) return undefined;
     if (!draftReady) {
       setDraftReady(true);
@@ -612,6 +760,45 @@ function ExpensePage() {
     if (format === 'YM') return `${parts.Y}${parts.M}`;
     return `${parts.Y}-${parts.M}-${parts.D} ${parts.H}:${parts.I}:${parts.S}`;
   };
+
+  const expenseTemplate = useMemo(() => {
+    if (!selectedTag) return null;
+    const query = {
+      cat: selectedTag,
+      subcat: input || undefined,
+      amount: amount || undefined,
+      desc: String(simpleDescription || remark || '').replace(/\r?\n/g, '\\n') || undefined,
+      paymentmethod: paymentMethod || undefined,
+      currency: currency || undefined,
+      timestamp: selectedDateTime ? formatDateTime(selectedDateTime) : undefined,
+      start: eventStart ? formatDateTime(eventStart) : undefined,
+      end: eventEnd ? formatDateTime(eventEnd) : undefined,
+    };
+    if (smartLoc?.lat != null && smartLoc?.lng != null) {
+      query.latlong = `${smartLoc.lat},${smartLoc.lng}`;
+    }
+    const pageUrl = `${window.location.origin}${window.location.pathname}${hrefFor(ROUTES.EXPENSE, query)}`;
+    const gas = new URL(API_ENDPOINTS.GSHEET_SUBMIT);
+    gas.searchParams.set('action', 'upsertExpense');
+    Object.entries(query).forEach(([k, v]) => {
+      if (v != null && v !== '') gas.searchParams.set(k, String(v));
+    });
+    const token = getStoredAccessHash();
+    if (token) gas.searchParams.set('access', token);
+    return { pageUrl, gasUrl: gas.toString() };
+  }, [
+    selectedTag,
+    input,
+    amount,
+    simpleDescription,
+    remark,
+    paymentMethod,
+    currency,
+    selectedDateTime,
+    eventStart,
+    eventEnd,
+    smartLoc,
+  ]);
 
   const resetData = () => {
     clearExpenseDraft();
@@ -1134,25 +1321,115 @@ function ExpensePage() {
             />
             <details
               className="ai-photo-prompt"
+              ref={aiPromptRef}
               onToggle={(e) => {
                 if (e.currentTarget.open) ensureAiPromptLoaded();
               }}
             >
               <summary>
                 <span className="ai-photo-prompt-title">📷 AI prompt</span>
-                <span className="ai-photo-prompt-sub">照片建議 · 也可貼外部回傳 JSON</span>
+                <span className="ai-photo-prompt-sub">
+                  {recordToTelegram ? '記帳＋記錄 · 會推 Telegram' : '只記帳 · 不推 Telegram'}
+                </span>
                 {aiTemplate !== aiTemplateSaved ? (
                   <span className="ai-photo-prompt-chip">未儲存</span>
                 ) : null}
               </summary>
-              <div className="ai-suggest-hint">{'{{tag}} {{title}} {{cats}} {{subcats}} {{fields}} {{hints}} {{when}}'}</div>
-              <textarea
-                className="ai-suggest-tpl"
-                rows={10}
-                value={aiTemplate}
-                onChange={(e) => setAiTemplate(e.target.value)}
-                spellCheck={false}
-              />
+              <div className="ai-prompt-mode">
+                <label className="life-photo-check">
+                  <input
+                    type="checkbox"
+                    checked={recordToTelegram}
+                    onChange={(e) => {
+                      const on = e.target.checked;
+                      setRecordToTelegram(on);
+                      try {
+                        sessionStorage.setItem('lifePhotoRecord', on ? '1' : '0');
+                      } catch {
+                        /* ignore */
+                      }
+                    }}
+                  />
+                  記錄
+                </label>
+                <span>{recordToTelegram ? '送出時推 Telegram' : '送出時不推 Telegram'}</span>
+              </div>
+              <label className="ai-model-pick">
+                模型
+                <select value={aiPrefer} onChange={(e) => pickAiModel(e.target.value)}>
+                  {aiModels.map((model) => (
+                    <option key={`${model.provider}:${model.id}`} value={`${model.provider}:${model.id}`}>
+                      {`${model.provider === 'openai' ? 'OpenAI' : 'Gemini'} ${model.label}${model.tier ? ` · ${model.tier}` : ''}`}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {aiAskIndex >= 0 ? (
+                <div className="ai-prompt-send">
+                  <span>還沒送出。可先看 Preview 或改 Edit，按送出才會用 token。</span>
+                  <button
+                    type="button"
+                    className="ai-prompt-send-btn"
+                    disabled={aiBusyIndex >= 0}
+                    onClick={() => askAiForPhoto(aiAskIndex)}
+                  >
+                    {aiBusyIndex === aiAskIndex ? '辨識中…' : '送出'}
+                  </button>
+                  <button
+                    type="button"
+                    className="ai-suggest-copy"
+                    disabled={aiBusyIndex >= 0}
+                    onClick={() => setAiAskIndex(-1)}
+                  >
+                    取消
+                  </button>
+                </div>
+              ) : null}
+              <div className="ai-prompt-tabs" role="tablist">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={aiPromptView === 'edit'}
+                  className={`ai-prompt-tab${aiPromptView === 'edit' ? ' is-active' : ''}`}
+                  onClick={() => setAiPromptView('edit')}
+                >
+                  Edit
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={aiPromptView === 'preview'}
+                  className={`ai-prompt-tab${aiPromptView === 'preview' ? ' is-active' : ''}`}
+                  onClick={() => setAiPromptView('preview')}
+                >
+                  Preview
+                </button>
+              </div>
+              {aiPromptView === 'preview' ? (
+                <pre className="ai-prompt-preview">
+                  {promptPreview.map((part, index) =>
+                    part.kind === 'slot' ? (
+                      <mark
+                        key={`${part.key}-${index}`}
+                        className={`ai-prompt-slot${part.empty ? ' is-empty' : ''}`}
+                        title={`{{${part.key}}}`}
+                      >
+                        {part.text}
+                      </mark>
+                    ) : (
+                      <span key={`t-${index}`}>{part.text}</span>
+                    )
+                  )}
+                </pre>
+              ) : (
+                <textarea
+                  className="ai-suggest-tpl"
+                  rows={10}
+                  value={aiTemplate}
+                  onChange={(e) => setAiTemplate(e.target.value)}
+                  spellCheck={false}
+                />
+              )}
               <div className="ai-suggest-meta">
                 <button
                   type="button"
@@ -1270,9 +1547,9 @@ function ExpensePage() {
                       type="button"
                       className="photo-ai-btn"
                       disabled={aiBusyIndex >= 0}
-                      onClick={() => askAiForPhoto(index)}
+                      onClick={() => reviewAiPrompt(index)}
                     >
-                      {aiBusyIndex === index ? '辨識中…' : '建議'}
+                      {aiBusyIndex === index ? '辨識中…' : aiAskIndex === index ? '確認 prompt' : '建議'}
                     </button>
                   </div>
                   <button
@@ -1445,6 +1722,15 @@ function ExpensePage() {
           }}
         />
         <Output output={output} />
+
+        {expenseTemplate ? (
+          <UrlTemplateBar
+            pageUrl={expenseTemplate.pageUrl}
+            gasUrl={expenseTemplate.gasUrl}
+            pageNote="打開記帳頁並帶入。畫面上是原文，複製出來的是 encoded。"
+            gasNote={'Shortcuts 用 Get Contents 打這條才會直接入帳。\\n 會變成換行。驗證碼只在複製的網址裡。'}
+          />
+        ) : null}
 
         <div className="expense-footer-meta">
           <span className="expense-version-foot">v{getBuildVersion()}</span>

@@ -6,6 +6,7 @@ import {
   calendarTrackUrlExamples,
 } from '../utils/calendarTrackUrl';
 import HelpParamTable from './HelpParamTable';
+import { prettyUrl } from '../utils/routing';
 
 function CalendarUrlExamples({ liveUrl }) {
   const [open, setOpen] = useState(false);
@@ -47,7 +48,7 @@ function CalendarUrlExamples({ liveUrl }) {
               <span className="entry-help-badge">Get Contents · 勿 Open</span>
             </div>
             <p className="entry-help-hint">
-              Shortcuts 用 Get Contents of URL（GET 或 POST）。帶 timestamp 可原 URL 重送。
+              後台自動化打下面的 GAS 網址，用 Get Contents of URL（GET，Follow Redirects 打開）。不要 Open URL，也不要打這個網站：Get Contents 不會跑網頁。開頁面自己按按鈕那條路不變。
             </p>
 
             <h3 className="entry-help-section">參數</h3>
@@ -62,7 +63,7 @@ function CalendarUrlExamples({ liveUrl }) {
                     {copied === 'live' ? '已複製' : '複製'}
                   </button>
                 </div>
-                <code className="calendar-url-code">{liveUrl}</code>
+                <code className="calendar-url-code">{prettyUrl(liveUrl)}</code>
               </div>
             ) : null}
             <ul className="entry-help-list">
@@ -78,7 +79,7 @@ function CalendarUrlExamples({ liveUrl }) {
                         </button>
                       </div>
                       <span className="entry-help-item-note">{ex.note}</span>
-                      <code className="entry-help-item-url">{href}</code>
+                      <code className="entry-help-item-url">{prettyUrl(href)}</code>
                     </div>
                   </li>
                 );

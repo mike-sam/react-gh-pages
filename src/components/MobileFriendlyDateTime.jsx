@@ -94,6 +94,7 @@ const MobileFriendlyDateTime = ({
     };
     const onEnd = (e) => {
       const t = e.changedTouches?.[0];
+      if (swipeRef.current.moved) e.preventDefault();
       if (!t || !swipeRef.current.axis) {
         swipeRef.current.axis = null;
         return;
@@ -113,7 +114,7 @@ const MobileFriendlyDateTime = ({
 
     el.addEventListener('touchstart', onStart, { passive: true });
     el.addEventListener('touchmove', onMove, { passive: false });
-    el.addEventListener('touchend', onEnd, { passive: true });
+    el.addEventListener('touchend', onEnd, { passive: false });
     return () => {
       el.removeEventListener('touchstart', onStart);
       el.removeEventListener('touchmove', onMove);
@@ -387,9 +388,21 @@ const MobileFriendlyDateTime = ({
                     className="date-native-input"
                     value={toNativeDateValue(tempDate)}
                     onChange={onNativeDateChange}
-                    tabIndex={-1}
-                    aria-hidden
-                    onClick={(e) => e.stopPropagation()}
+                    aria-label="選擇日期"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (swipeRef.current.moved) {
+                        e.preventDefault();
+                        swipeRef.current.moved = false;
+                        return;
+                      }
+                      const input = e.currentTarget;
+                      try {
+                        input.showPicker?.();
+                      } catch {
+                        /* 這次點擊本身會打開系統日曆 */
+                      }
+                    }}
                   />
                 </div>
 

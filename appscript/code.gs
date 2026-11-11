@@ -77,6 +77,8 @@ const doGet = (event) => {
     case 'trackCalendar':
     case 'check_current':
       return handleCalendarTrack(parameter || {});
+    case 'upsertExpense':
+      return handleUpsertExpense(expenseFromShortcut_(parameter || {}));
     default:
       appendLog(['doGet unknown action', action || '(empty)', flattenParams_(parameter)]);
       const { name, country } = parameter;
@@ -105,6 +107,10 @@ const doPost = (request = {}) => {
     queryParams = normalizeCalendarShortcut_(queryParams);
 
     if (!contents) {
+      if (queryParams.action === 'upsertExpense') {
+        if (!isAccessAllowed(queryParams.action, queryParams, null)) return accessDeniedOut();
+        return handleUpsertExpense(expenseFromShortcut_(queryParams));
+      }
       if (queryParams.action === 'trackCalendar' || queryParams.action === 'check_current' || queryParams.action === 'calendarPing') {
         if (queryParams.action === 'calendarPing' || queryParams.op === 'ping') {
           return calendarJson({ success: true, ping: true, received: queryParams, at: new Date().toISOString() });
@@ -202,6 +208,8 @@ const doPost = (request = {}) => {
         return handleRecordAiSuggestion(data);
       case 'upsertExpense':
         return handleUpsertExpense(data);
+      case 'sendTelegram':
+        return handleSendTelegram(data);
       default:
         // 默认：费用 Replace Into / Insert
         return handleUpsertExpense(data);
@@ -923,6 +931,37 @@ function normalizeExpenseAmountToMyr(obj) {
 /**
  * 費用寫入：Replace Into + 附帶 Location / Mileage / Photo 副作用
  */
+function expenseFromShortcut_(parameter) {
+  parameter = parameter || {};
+  var desc = String(parameter.desc || parameter.remark || '').replace(/\\n/g, '\n');
+  var id = parameter.timestampMs || parameter.timestamp_ms || parameter.id || new Date().getTime();
+  var lat = parameter.latitude || parameter.lat || '';
+  var lng = parameter.longitude || parameter.lng || '';
+  if ((!lat || !lng) && parameter.latlong) {
+    var parts = String(parameter.latlong).split(',');
+    lat = String(parts[0] || '').trim();
+    lng = String(parts[1] || '').trim();
+  }
+  return {
+    action: 'upsertExpense',
+    id: id,
+    timestamp_ms: id,
+    timestamp: parameter.timestamp || '',
+    tag: parameter.cat || parameter.tag || '',
+    title: parameter.subcat || parameter.title || '',
+    amount: parameter.amount || '',
+    currency: parameter.currency || 'MYR',
+    remark: desc,
+    description: desc,
+    payment_method: parameter.paymentmethod || parameter.payment || parameter.payment_method || '',
+    event_start: parameter.start || parameter.event_start || '',
+    event_end: parameter.end || parameter.event_end || '',
+    latitude: lat,
+    longitude: lng,
+    carPlate: parameter.carPlate || parameter.plate || ''
+  };
+}
+
 function handleUpsertExpense(data) {
   var lock = LockService.getScriptLock();
   try {
@@ -1100,6 +1139,135 @@ function stripBase64_(s) {
   var i = s.indexOf(',');
   if (s.indexOf('data:') === 0 && i > -1) return s.slice(i + 1);
   return s.replace(/\s+/g, '');
+}
+
+var TELEGRAM_THREADS_DEFAULT_ =
+  '{"General":"*1","Foods":6,"Receipts":11,"Med":35,"Viridien":55,"Car":102}';
+
+function ensureTelegramRows_() {
+  var map = lookupGroupMap_('Telegram');
+  if (map.TOKEN == null) setKeyValue({ group: 'Telegram', key: 'Token', value: '' });
+  if (map.CHATID == null) setKeyValue({ group: 'Telegram', key: 'ChatId', value: '' });
+  if (map.THREADS == null) {
+    setKeyValue({ group: 'Telegram', key: 'Threads', value: TELEGRAM_THREADS_DEFAULT_ });
+  }
+  if (map.KG == null) setKeyValue({ group: 'Telegram', key: 'Kg', value: '65' });
+}
+
+function telegramThreads_() {
+  ensureTelegramRows_();
+  var raw = String(lookupGroupMap_('Telegram').THREADS || '').trim();
+  try {
+    var parsed = JSON.parse(raw || TELEGRAM_THREADS_DEFAULT_);
+    if (parsed && typeof parsed === 'object') return parsed;
+  } catch (e) {}
+  return JSON.parse(TELEGRAM_THREADS_DEFAULT_);
+}
+
+function telegramThreadId_(topic) {
+  var threads = telegramThreads_();
+  var key = String(topic || 'General').trim();
+  var id = threads[key];
+  if (id == null) id = threads.General;
+  if (id == null || String(id) === '*1') return '';
+  return String(id);
+}
+
+function telegramFileUrl_(token, fileId) {
+  var res = UrlFetchApp.fetch(
+    'https://api.telegram.org/bot' + token + '/getFile?file_id=' + encodeURIComponent(fileId),
+    { muteHttpExceptions: true }
+  );
+  var json = JSON.parse(res.getContentText() || '{}');
+  if (!json.ok || !json.result || !json.result.file_path) return '';
+  return 'https://api.telegram.org/file/bot' + token + '/' + json.result.file_path;
+}
+
+function telegramLargestPhotoId_(photoSizes) {
+  if (!photoSizes || !photoSizes.length) return '';
+  var best = photoSizes[0];
+  for (var i = 1; i < photoSizes.length; i++) {
+    if ((photoSizes[i].file_size || 0) > (best.file_size || 0)) best = photoSizes[i];
+  }
+  return best.file_id || '';
+}
+
+function handleSendTelegram(data) {
+  try {
+    data = data || {};
+    ensureTelegramRows_();
+    var cfg = lookupGroupMap_('Telegram');
+    var token = String(cfg.TOKEN || '').trim();
+    var chatId = String(cfg.CHATID || '').trim();
+    if (!token || !chatId) {
+      return jsonOut({ success: false, error: 'KeyValueConfig group Telegram 未設定 Token / ChatId' });
+    }
+    var photos = Array.isArray(data.photos) ? data.photos : [];
+    var blobs = [];
+    for (var i = 0; i < photos.length && blobs.length < 10; i++) {
+      var b64 = stripBase64_(photos[i] && (photos[i].base64 || photos[i]));
+      if (!b64) continue;
+      var mime = (photos[i] && photos[i].mime) || 'image/jpeg';
+      blobs.push(Utilities.newBlob(Utilities.base64Decode(b64), mime, 'p' + blobs.length + '.jpg'));
+    }
+    if (!blobs.length) return jsonOut({ success: false, error: '沒有圖片' });
+    var caption = String(data.caption || '').trim();
+    if (caption.length > 1024) caption = caption.slice(0, 1024);
+    var mode = String(data.mode || '').toLowerCase() === 'individual' ? 'individual' : '';
+    if (!mode) mode = blobs.length > 1 ? 'album' : 'individual';
+    var thread = telegramThreadId_(data.topic || data.topicId);
+    var urls = [];
+    var api = 'https://api.telegram.org/bot' + token + '/';
+
+    var sendOne = function (blob, cap) {
+      var payload = { chat_id: chatId, photo: blob };
+      if (cap) payload.caption = cap;
+      if (thread) payload.message_thread_id = thread;
+      var res = UrlFetchApp.fetch(api + 'sendPhoto', { method: 'post', payload: payload, muteHttpExceptions: true });
+      var json = JSON.parse(res.getContentText() || '{}');
+      if (!json.ok) throw new Error((json.description || 'sendPhoto 失敗') + '');
+      var fileId = telegramLargestPhotoId_(json.result && json.result.photo);
+      urls.push(telegramFileUrl_(token, fileId));
+    };
+
+    if (mode === 'album' && blobs.length > 1) {
+      var media = [];
+      var payloadAlbum = { chat_id: chatId };
+      if (thread) payloadAlbum.message_thread_id = thread;
+      for (var a = 0; a < blobs.length; a++) {
+        var item = { type: 'photo', media: 'attach://p' + a };
+        if (a === 0 && caption) item.caption = caption;
+        media.push(item);
+        payloadAlbum['p' + a] = blobs[a];
+      }
+      payloadAlbum.media = JSON.stringify(media);
+      var albumRes = UrlFetchApp.fetch(api + 'sendMediaGroup', {
+        method: 'post',
+        payload: payloadAlbum,
+        muteHttpExceptions: true
+      });
+      var albumJson = JSON.parse(albumRes.getContentText() || '{}');
+      if (!albumJson.ok) throw new Error((albumJson.description || 'sendMediaGroup 失敗') + '');
+      var messages = albumJson.result || [];
+      for (var m = 0; m < messages.length; m++) {
+        urls.push(telegramFileUrl_(token, telegramLargestPhotoId_(messages[m].photo)));
+      }
+    } else {
+      for (var s = 0; s < blobs.length; s++) {
+        sendOne(blobs[s], s === 0 || mode === 'individual' ? caption : '');
+      }
+    }
+    return jsonOut({
+      success: true,
+      mode: mode,
+      topic: data.topic || 'General',
+      threadId: thread || '*1',
+      urls: urls
+    });
+  } catch (error) {
+    appendLog(['sendTelegram', error.toString()]);
+    return jsonOut({ success: false, error: error.toString() });
+  }
 }
 
 function photoHash_(b64) {
@@ -1443,6 +1611,9 @@ function handleAnalyzeReceipt(data) {
   }
 }
 
+var AI_MODELS_DEFAULT_ =
+  '[{"id":"gemini-3.5-flash-lite","provider":"gemini","label":"Flash Lite","tier":"最便宜"},{"id":"gemini-3.8-flash","provider":"gemini","label":"Flash","tier":"較準"},{"id":"gpt-4o-mini","provider":"openai","label":"4o mini","tier":"便宜"}]';
+
 function ensureAiOpenApiKeyRow_() {
   var sheet = getKeyValueSheet();
   var data = sheet.getDataRange().getValues();
@@ -1455,9 +1626,20 @@ function ensureAiOpenApiKeyRow_() {
   sheet.appendRow(['AI', 'OPENAPIKey', '', datetimetoYMDHIS(), 'ChatGPT/OpenAI; Gemini 慢時瀏覽器直打']);
 }
 
+function ensureAiModelRows_() {
+  var map = lookupGroupMap_('AI');
+  if (map.MODELS == null) {
+    setKeyValue({ group: 'AI', key: 'Models', value: AI_MODELS_DEFAULT_ });
+  }
+  if (map.PREFER == null) {
+    setKeyValue({ group: 'AI', key: 'Prefer', value: 'gemini:gemini-3.5-flash-lite' });
+  }
+}
+
 function handleGetAiPrompt() {
   try {
     ensureAiOpenApiKeyRow_();
+    ensureAiModelRows_();
     var ai = lookupGroupMap_('AI');
     var stored = String(ai.PROMPT || lookupKeyValue_('Prompt', 'AI') || '').trim();
     var openaiModel = String(ai.OPENAIMODEL || lookupKeyValue_('OPENAIModel', 'AI') || 'gpt-4o-mini').trim();
@@ -1469,6 +1651,8 @@ function handleGetAiPrompt() {
       defaultTemplate: defaultReceiptPromptTemplate_(),
       model: resolveGeminiModel_(ai.NAME || lookupKeyValue_('Name', 'AI')),
       openaiModel: openaiModel,
+      models: String(ai.MODELS || AI_MODELS_DEFAULT_),
+      prefer: String(ai.PREFER || 'gemini:gemini-3.5-flash-lite'),
       geminiKey: String(ai.APIKEY || lookupKeyValue_('APIKey', 'AI') || '').trim(),
       openaiKey: String(
         ai.OPENAPIKEY || ai.OPENAIKEY || lookupKeyValue_('OPENAPIKey', 'AI') || lookupKeyValue_('OPENAIKey', 'AI') || ''
@@ -3540,7 +3724,6 @@ var CALENDAR_LOOKAHEAD_MS = 60 * 60 * 1000;
 function calendarLookbackDaysRaw(data) {
   if (!data) return null;
   if (data.days != null && String(data.days).trim() !== '') return data.days;
-  if (data.lookbackDays != null && String(data.lookbackDays).trim() !== '') return data.lookbackDays;
   return null;
 }
 
@@ -3773,16 +3956,16 @@ function calendarPhraseToData_(raw) {
     return { action: 'calendarPing', op: 'ping' };
   }
   if (key === 'end all' || key === 'endall' || key === 'end + all' || key === 'end+all') {
-    return { action: 'trackCalendar', op: 'end', all: '1', endScope: 'all', force: true };
+    return { action: 'trackCalendar', op: 'end', endScope: 'all' };
   }
   if (key === 'end') {
     return { action: 'trackCalendar', op: 'end' };
   }
   if (key === 'end start' || key === 'endstart') {
-    return { action: 'trackCalendar', op: 'start', endScope: 'latest', force: true };
+    return { action: 'trackCalendar', op: 'start', endScope: 'latest' };
   }
   if (key === 'start new' || key === 'startnew') {
-    return { action: 'trackCalendar', op: 'start', endScope: 'none', force: true };
+    return { action: 'trackCalendar', op: 'start', endScope: 'none' };
   }
   if (key === 'start' || key === 'append' || key === 'home' || key === 'check') {
     return { action: 'trackCalendar', op: key };
@@ -3792,7 +3975,7 @@ function calendarPhraseToData_(raw) {
       action: 'trackCalendar',
       op: 'start',
       title: CALENDAR_TITLE_ALIASES_[key],
-      endExisting: '1'
+      endScope: 'all'
     };
   }
   var m = key.match(/^(start|end)\s+(.+)$/);
@@ -3804,7 +3987,7 @@ function calendarPhraseToData_(raw) {
       action: 'trackCalendar',
       op: 'start',
       title: CALENDAR_TITLE_ALIASES_[m[2]],
-      endExisting: '1'
+      endScope: 'all'
     };
   }
   return null;
@@ -3815,20 +3998,7 @@ function applyCalendarPhrase_(out, phrase) {
   if (phrase.action) out.action = phrase.action;
   if (phrase.op) out.op = phrase.op;
   if (phrase.title && !out.title) out.title = phrase.title;
-  if (phrase.force) {
-    // Named ops (endStart / startNew / endAll) decide scope alone; legacy flags are ignored.
-    out.endScope = phrase.endScope;
-    out.all = phrase.all || '';
-    out.endAny = '';
-    out.endExisting = '';
-    return out;
-  }
-  if (phrase.all) out.all = phrase.all;
-  if (phrase.endAny) out.endAny = phrase.endAny;
-  if (phrase.endScope && !out.endScope) out.endScope = phrase.endScope;
-  if (phrase.endExisting != null && (out.endExisting === undefined || out.endExisting === '')) {
-    out.endExisting = phrase.endExisting;
-  }
+  if (phrase.endScope) out.endScope = phrase.endScope;
   return out;
 }
 
@@ -3837,7 +4007,19 @@ function normalizeCalendarShortcut_(data) {
   var out = {};
   var keys = Object.keys(data);
   var i;
-  for (i = 0; i < keys.length; i++) out[keys[i]] = data[keys[i]];
+  var ignored = {
+    endScope: 1,
+    end_scope: 1,
+    scope: 1,
+    endExisting: 1,
+    endAny: 1,
+    all: 1,
+    silent: 1,
+    lookbackDays: 1
+  };
+  for (i = 0; i < keys.length; i++) {
+    if (!ignored[keys[i]]) out[keys[i]] = data[keys[i]];
+  }
   var actionKey = calendarPhraseKey_(out.action);
   if (actionKey && actionKey !== 'trackcalendar' && actionKey !== 'check_current' && actionKey !== 'calendaping') {
     applyCalendarPhrase_(out, calendarPhraseToData_(out.action));
@@ -4082,13 +4264,11 @@ function pickTodayStartEvents_(events, when) {
   return out;
 }
 
-function resolveEndScope_(data, op, all, endAny, endExisting) {
-  var raw = calendarPhraseKey_(data && (data.endScope || data.end_scope || data.scope));
+function resolveEndScope_(op, preset) {
+  var raw = calendarPhraseKey_(preset);
   if (raw === 'none' || raw === 'off' || raw === 'skip') return 'none';
   if (raw === 'all' || raw === 'latest' || raw === 'title' || raw === 'today') return raw;
-  if (all) return 'all';
-  if (endAny) return 'latest';
-  if (op === 'start' && endExisting) return 'all';
+  if (op === 'start') return 'all';
   return 'title';
 }
 
@@ -4298,23 +4478,14 @@ function handleCalendarTrack(data) {
     var hasCoords = !isNaN(lat) && !isNaN(lng);
     var placeName = (data.placeName || data.place || '').toString().trim();
     if (!placeName && hasCoords) placeName = resolvePlaceName(lat, lng);
-    var endExisting = calendarFlag(data.endExisting, true);
     var startHome = calendarFlag(data.startHome, false);
-    var all = calendarFlag(data.all, false);
-    var endAny = calendarFlag(data.endAny, false);
-    if (rawOp === 'end all' || rawOp === 'endall' || rawOp === 'end + all' || rawOp === 'end+all') {
-      all = true;
-      endAny = true;
-    }
-    var endScope = resolveEndScope_(data, op, all, endAny, endExisting);
+    var endScope = resolveEndScope_(op, data.endScope);
     var lookbackMs = calendarLookbackMs(data);
     appendLog([
       'handleCalendarTrack resolved',
       op,
       'title=' + title,
-      'endScope=' + endScope,
-      'all=' + all,
-      'endAny=' + endAny
+      'endScope=' + endScope
     ]);
     var ts = formatCalendarStamp(when);
     var calendar = openTrackingCalendar();
@@ -4404,7 +4575,7 @@ function handleCalendarTrack(data) {
         if (endScope === 'all') {
           closeEvents(homes, when, 'end', placeName, lat, lng);
         }
-        if (endExisting || endAny || endScope === 'latest' || endScope === 'today' || endScope === 'all') {
+        if (startClose.length) {
           closeEvents(startClose, when, 'end', placeName, lat, lng);
         }
       }
@@ -4445,18 +4616,15 @@ function handleCalendarTrack(data) {
         appendLog(['Calendar append skipped (duplicate):', ts, prefix]);
         return calendarJson(result);
       }
-      var targets = appendable;
-      if (!all) {
-        var appendPool = appendable;
-        if (title) {
-          appendPool = [];
-          for (var ai = 0; ai < appendable.length; ai++) {
-            if (appendable[ai].getTitle() === title) appendPool.push(appendable[ai]);
-          }
+      var appendPool = appendable;
+      if (title) {
+        appendPool = [];
+        for (var ai = 0; ai < appendable.length; ai++) {
+          if (appendable[ai].getTitle() === title) appendPool.push(appendable[ai]);
         }
-        var primary = pickPrimaryEvent(appendPool, when, title);
-        targets = primary ? [primary] : [];
       }
+      var primary = pickPrimaryEvent(appendPool, when, title);
+      var targets = primary ? [primary] : [];
       if (!targets.length) {
         closeEvents(homes, when, 'end', placeName, lat, lng);
         var createdFromAppend = createMarkedEvent(

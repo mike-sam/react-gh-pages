@@ -306,6 +306,38 @@ export function receiptPromptFor(tag, title, template, when) {
   });
 }
 
+/** Split a template into literal text and the values that replace {{tag}} etc. */
+export function receiptPromptParts(template, { tag, title, when } = {}) {
+  const vars = receiptPromptVars({
+    tag: tag || '',
+    title: title || '',
+    when: when || '',
+    fields: fieldsForExpense(tag, title),
+    allowedTags: getExpenseTagPack().cats,
+    allowedSubcats: getExpenseTagPack().subcats,
+  });
+  const src = String(template || '');
+  const re = /\{\{\s*([a-z]+)\s*\}\}/gi;
+  const parts = [];
+  let last = 0;
+  let match = re.exec(src);
+  while (match) {
+    if (match.index > last) parts.push({ kind: 'text', text: src.slice(last, match.index) });
+    const key = String(match[1] || '').toLowerCase();
+    const value = vars[key] != null ? String(vars[key]) : '';
+    parts.push({
+      kind: 'slot',
+      key,
+      text: value.trim() ? value : '空',
+      empty: !value.trim(),
+    });
+    last = match.index + match[0].length;
+    match = re.exec(src);
+  }
+  if (last < src.length) parts.push({ kind: 'text', text: src.slice(last) });
+  return parts;
+}
+
 export function formatAiFallbackCopy({ model, prompt, error } = {}) {
   return [
     `model: ${model || '未回傳'}`,
@@ -391,8 +423,39 @@ function attachAiMeta(err, extra) {
   return e;
 }
 
+/** 便宜的在前。KeyValueConfig AI/Models 可整份換掉。 */
+export const DEFAULT_AI_MODELS = [
+  { id: 'gemini-3.5-flash-lite', provider: 'gemini', label: 'Flash Lite', tier: '最便宜' },
+  { id: 'gemini-3.8-flash', provider: 'gemini', label: 'Flash', tier: '較準' },
+  { id: 'gpt-4o-mini', provider: 'openai', label: '4o mini', tier: '便宜' },
+];
+
+export function parseAiModels(raw) {
+  try {
+    const list = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    if (!Array.isArray(list)) return DEFAULT_AI_MODELS.slice();
+    const out = list
+      .map((row) => ({
+        id: String(row?.id || '').trim(),
+        provider: String(row?.provider || '').trim().toLowerCase(),
+        label: String(row?.label || row?.id || '').trim(),
+        tier: String(row?.tier || '').trim(),
+      }))
+      .filter((row) => row.id && (row.provider === 'gemini' || row.provider === 'openai'));
+    return out.length ? out : DEFAULT_AI_MODELS.slice();
+  } catch {
+    return DEFAULT_AI_MODELS.slice();
+  }
+}
+
 /** Memory only — never localStorage. Filled by loadAiPrompt. */
-const aiKeys = { gemini: '', openai: '', geminiModel: '', openaiModel: DEFAULT_OPENAI_MODEL };
+const aiKeys = {
+  gemini: '',
+  openai: '',
+  geminiModel: '',
+  openaiModel: DEFAULT_OPENAI_MODEL,
+  prefer: 'gemini',
+};
 
 function canonicalizeGeminiModel(name) {
   let slug = String(name || '')
@@ -413,9 +476,14 @@ function geminiBrowserModels(preferred) {
   const push = (m) => {
     if (m && out.indexOf(m) === -1) out.push(m);
   };
+  push(p || 'gemini-3.5-flash-lite');
   push('gemini-3.5-flash-lite');
-  if (p && p !== 'gemini-3.5-flash-lite') push(p);
   return out;
+}
+
+function aiProviderOrder() {
+  const first = aiKeys.prefer === 'openai' ? 'openai' : 'gemini';
+  return first === 'openai' ? ['openai', 'gemini'] : ['gemini', 'openai'];
 }
 
 async function fetchJson(url, init, timeoutMs) {
@@ -725,10 +793,16 @@ function geminiHttpError(status, data, text) {
   return `Gemini HTTP ${status}${msg ? `: ${msg}` : text ? `: ${String(text).slice(0, 120)}` : ''}`;
 }
 
-async function callGeminiBrowser({ apiKey, models, mimeType, base64, prompt, budgetMs }) {
+async function callGeminiBrowser({ apiKey, models, mimeType, base64, prompt, budgetMs, images, schema }) {
   const tried = [];
   const t0 = Date.now();
   let lastErr = '';
+  const parts = [{ text: prompt }, { inlineData: { mimeType: mimeType || 'image/jpeg', data: base64 } }];
+  (images || []).forEach((img) => {
+    if (img?.base64) {
+      parts.push({ inlineData: { mimeType: img.mimeType || 'image/jpeg', data: img.base64 } });
+    }
+  });
   for (let i = 0; i < models.length; i += 1) {
     const left = budgetMs - (Date.now() - t0);
     if (left < 1500) break;
@@ -736,24 +810,17 @@ async function callGeminiBrowser({ apiKey, models, mimeType, base64, prompt, bud
     tried.push(m);
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent?key=${encodeURIComponent(apiKey)}`;
     const makeBody = (withSchema) => ({
-      contents: [
-        {
-          parts: [
-            { text: prompt },
-            { inlineData: { mimeType: mimeType || 'image/jpeg', data: base64 } },
-          ],
-        },
-      ],
+      contents: [{ parts }],
       generationConfig: withSchema
         ? {
             temperature: 0.2,
             responseMimeType: 'application/json',
-            responseSchema: GEMINI_SUGGESTION_SCHEMA,
+            responseSchema: schema && typeof schema === 'object' ? schema : GEMINI_SUGGESTION_SCHEMA,
           }
         : { temperature: 0.2, responseMimeType: 'application/json' },
     });
     try {
-      const wantSchema = !/lite/i.test(m);
+      const wantSchema = schema !== false && !/lite/i.test(m);
       let res = await fetchJson(
         url,
         {
@@ -797,7 +864,7 @@ async function callGeminiBrowser({ apiKey, models, mimeType, base64, prompt, bud
   throw e;
 }
 
-async function callOpenAiBrowser({ apiKey, model, mimeType, base64, prompt, timeoutMs }) {
+async function callOpenAiBrowser({ apiKey, model, mimeType, base64, prompt, timeoutMs, images, detail }) {
   const m = String(model || '').trim() || DEFAULT_OPENAI_MODEL;
   const body = {
     model: m,
@@ -813,9 +880,18 @@ async function callOpenAiBrowser({ apiKey, model, mimeType, base64, prompt, time
             type: 'image_url',
             image_url: {
               url: `data:${mimeType || 'image/jpeg'};base64,${base64}`,
-              detail: 'low',
+              detail: detail || 'low',
             },
           },
+          ...(images || [])
+            .filter((img) => img?.base64)
+            .map((img) => ({
+              type: 'image_url',
+              image_url: {
+                url: `data:${img.mimeType || 'image/jpeg'};base64,${img.base64}`,
+                detail: detail || 'low',
+              },
+            })),
         ],
       },
     ],
@@ -866,15 +942,38 @@ export async function loadAiPrompt() {
   aiKeys.openai = String(data.openaiKey || '').trim();
   aiKeys.geminiModel = canonicalizeGeminiModel(data.model);
   aiKeys.openaiModel = String(data.openaiModel || '').trim() || DEFAULT_OPENAI_MODEL;
+  const preferRaw = String(data.prefer || '').trim();
+  const preferSep = preferRaw.indexOf(':');
+  if (preferSep > 0) {
+    aiKeys.prefer = preferRaw.slice(0, preferSep) === 'openai' ? 'openai' : 'gemini';
+    const preferId = preferRaw.slice(preferSep + 1);
+    if (aiKeys.prefer === 'openai' && preferId) aiKeys.openaiModel = preferId;
+    if (aiKeys.prefer === 'gemini' && preferId) aiKeys.geminiModel = canonicalizeGeminiModel(preferId);
+  }
   const stored = String(data.template || '').trim();
   return {
     template: stored || data.defaultTemplate || DEFAULT_RECEIPT_PROMPT_TEMPLATE,
     stored: Boolean(stored),
     defaultTemplate: data.defaultTemplate || DEFAULT_RECEIPT_PROMPT_TEMPLATE,
     model: aiKeys.geminiModel,
+    models: parseAiModels(data.models),
+    prefer: `${aiKeys.prefer}:${aiKeys.prefer === 'openai' ? aiKeys.openaiModel : aiKeys.geminiModel}`,
     hasGemini: Boolean(aiKeys.gemini),
     hasOpenAI: Boolean(aiKeys.openai),
   };
+}
+
+export async function saveAiModelChoice(provider, id) {
+  const which = provider === 'openai' ? 'openai' : 'gemini';
+  const modelId = String(id || '').trim();
+  if (!modelId) throw new Error('沒有模型');
+  aiKeys.prefer = which;
+  if (which === 'openai') aiKeys.openaiModel = modelId;
+  else aiKeys.geminiModel = canonicalizeGeminiModel(modelId);
+  const value = `${which}:${which === 'gemini' ? aiKeys.geminiModel : aiKeys.openaiModel}`;
+  const data = await postGasJson({ action: 'setKeyValue', group: 'AI', key: 'Prefer', value }, 20000);
+  if (!data || data.success !== true) throw new Error(data?.error || '模型沒寫進設定');
+  return value;
 }
 
 export async function saveAiPrompt(template) {
@@ -918,51 +1017,58 @@ export async function analyzeReceiptPhoto(photo, { tag, title, promptTemplate, w
   }
 
   let lastErr = '';
-  if (aiKeys.gemini) {
-    try {
-      const gemini = await callGeminiBrowser({
-        apiKey: aiKeys.gemini,
-        models: geminiBrowserModels(aiKeys.geminiModel),
-        mimeType,
-        base64,
-        prompt,
-        budgetMs: GEMINI_BUDGET_MS,
-      });
-      tried.push(...(gemini.tried || [gemini.model]));
-      return {
-        suggestions: parseAiSuggestions(gemini.text),
-        model: gemini.model,
-        tried,
-        prompt,
-        photoHash: await photoHash(base64),
-      };
-    } catch (err) {
-      tried.push(...(err?.tried || ['gemini']));
-      lastErr = String(err?.message || err || 'Gemini 失敗');
+  const runGemini = async () => {
+    const gemini = await callGeminiBrowser({
+      apiKey: aiKeys.gemini,
+      models: geminiBrowserModels(aiKeys.geminiModel),
+      mimeType,
+      base64,
+      prompt,
+      budgetMs: GEMINI_BUDGET_MS,
+    });
+    tried.push(...(gemini.tried || [gemini.model]));
+    return {
+      suggestions: parseAiSuggestions(gemini.text),
+      model: gemini.model,
+      tried,
+      prompt,
+      photoHash: await photoHash(base64),
+    };
+  };
+  const runOpenAi = async () => {
+    const openai = await callOpenAiBrowser({
+      apiKey: aiKeys.openai,
+      model: aiKeys.openaiModel,
+      mimeType,
+      base64,
+      prompt,
+      timeoutMs: OPENAI_BUDGET_MS,
+    });
+    tried.push(openai.model);
+    return {
+      suggestions: parseAiSuggestions(openai.text),
+      model: openai.model,
+      tried,
+      prompt,
+      photoHash: await photoHash(base64),
+    };
+  };
+  for (const provider of aiProviderOrder()) {
+    if (provider === 'gemini' && aiKeys.gemini) {
+      try {
+        return await runGemini();
+      } catch (err) {
+        tried.push(...(err?.tried || ['gemini']));
+        lastErr = String(err?.message || err || 'Gemini 失敗');
+      }
     }
-  }
-
-  if (aiKeys.openai) {
-    try {
-      const openai = await callOpenAiBrowser({
-        apiKey: aiKeys.openai,
-        model: aiKeys.openaiModel,
-        mimeType,
-        base64,
-        prompt,
-        timeoutMs: OPENAI_BUDGET_MS,
-      });
-      tried.push(openai.model);
-      return {
-        suggestions: parseAiSuggestions(openai.text),
-        model: openai.model,
-        tried,
-        prompt,
-        photoHash: await photoHash(base64),
-      };
-    } catch (err) {
-      tried.push(aiKeys.openaiModel || DEFAULT_OPENAI_MODEL);
-      lastErr = [lastErr, String(err?.message || err || 'OpenAI 失敗')].filter(Boolean).join(' · ');
+    if (provider === 'openai' && aiKeys.openai) {
+      try {
+        return await runOpenAi();
+      } catch (err) {
+        tried.push(aiKeys.openaiModel || DEFAULT_OPENAI_MODEL);
+        lastErr = [lastErr, String(err?.message || err || 'OpenAI 失敗')].filter(Boolean).join(' · ');
+      }
     }
   }
 
@@ -1062,4 +1168,181 @@ export function applyAiSuggestion(s, setters) {
     });
     if (hit?.card_num) setters.setPaymentMethod(hit.card_num);
   }
+}
+
+export const TELEGRAM_TOPICS = ['General', 'Foods', 'Receipts', 'Med', 'Viridien', 'Car'];
+
+const LIFE_THREADS = { General: '*1', Foods: 6, Receipts: 11, Med: 35, Viridien: 55, Car: 102 };
+const LIFE_TPL_KEY = 'lifePhotoPromptTpl';
+
+/** 記錄用。{{when}} {{latlng}} {{kg}} {{dailyKcal}} 會在預覽和送出時代入。 */
+export const DEFAULT_LIFE_PROMPT_TEMPLATE = [
+  '你是照片記錄助手。只根據實際看得到的照片內容，回傳一個 JSON。',
+  '讀不到圖：caption 空字串，topic 用 General，other 寫「無法讀取照片內容」。不要用「一張日常生活照片」充數。',
+  'caption 用簡體中文，描述主體和場景，不要用「这是一张照片」開頭。不要猜拍攝時間。',
+  '拍攝時間（只有食物才可用來加 hashtag，禁止用現在時間代替）：{{when}}',
+  '目前位置：{{latlng}}',
+  '體重 kg：{{kg}}。步行 5km/h 約 3.5 MET，慢跑 8km/h 約 8.3 MET。每分鐘 kcal ≈ MET×3.5×體重÷200。步行約 1300 步/公里。結果取整數。',
+  '只有畫面裡真的有食物或飲料才加這段，非食物禁止出現：',
+  '🍽️ 热量：约XXX kcal',
+  '🍬 糖分：约XX g',
+  '🚶 步行消耗：约XXXX步',
+  '🏃 慢跑消耗：约XX分钟',
+  '依據體重，食物照片再加一行：每日建議攝取：约{{dailyKcal}} kcal（體重×30 的粗估，不是醫囑）。',
+  '份量看不清就寫估算。糖分是估計總糖，不是游離糖。不要用一餐判斷全天超標。',
+  '食物 hashtag 只在有可靠拍攝時間時加，前面一個空格：05:00–10:59 #breakfast，11:00–16:59 #lunch，17:00–21:59 #dinner，22:00–04:59 #supper。',
+  '不要辨認車牌，不要抄寫車牌，不要加任何車牌 hashtag。',
+  'topic 只能是 General、Foods、Receipts、Med、Viridien、Car。收據優先 Receipts。食物優先 Foods。照片主要是汽車、維修或路況才用 Car。不確定用 General。',
+  '有經緯度才在 caption 最後加「 - http://maps.google.com/maps?q=lat,lng」。不要猜座標。',
+  '只回 JSON：{"caption":"","topic":"General","other":""}',
+  `topic 對照（General 的 thread 是 *1 不是 1）：${JSON.stringify(LIFE_THREADS)}`,
+].join('\n');
+
+export function loadLifePromptTemplate() {
+  try {
+    const saved = sessionStorage.getItem(LIFE_TPL_KEY);
+    if (saved && saved.trim()) return saved;
+  } catch {
+    /* ignore */
+  }
+  return DEFAULT_LIFE_PROMPT_TEMPLATE;
+}
+
+export function saveLifePromptTemplate(text) {
+  const next = String(text || '');
+  try {
+    if (!next.trim() || next === DEFAULT_LIFE_PROMPT_TEMPLATE) sessionStorage.removeItem(LIFE_TPL_KEY);
+    else sessionStorage.setItem(LIFE_TPL_KEY, next);
+  } catch {
+    /* ignore */
+  }
+  return next;
+}
+
+export function lifePromptVars({ when, lat, lng, kg } = {}) {
+  const weight = Number(kg) > 0 ? Number(kg) : 65;
+  const latlng = lat != null && lng != null ? `${lat},${lng}` : '';
+  return {
+    when: String(when || '').trim(),
+    latlng,
+    kg: String(weight),
+    dailyKcal: String(Math.round(weight * 30)),
+  };
+}
+
+/** Replace {{key}} for preview marks or the text actually sent. Empty slots become 無. */
+export function promptParts(template, vars) {
+  const src = String(template || '');
+  const bag = vars && typeof vars === 'object' ? vars : {};
+  const re = /\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g;
+  const parts = [];
+  let last = 0;
+  let match = re.exec(src);
+  while (match) {
+    if (match.index > last) parts.push({ kind: 'text', text: src.slice(last, match.index) });
+    const key = match[1];
+    const value = bag[key] != null ? String(bag[key]) : '';
+    parts.push({
+      kind: 'slot',
+      key,
+      text: value.trim() ? value : '無',
+      empty: !value.trim(),
+    });
+    last = match.index + match[0].length;
+    match = re.exec(src);
+  }
+  if (last < src.length) parts.push({ kind: 'text', text: src.slice(last) });
+  return parts;
+}
+
+export function fillPromptSlots(template, vars) {
+  return promptParts(template, vars)
+    .map((part) => part.text)
+    .join('');
+}
+
+/** 記錄用。記帳收據 prompt 分開，不混在這支。沿用這一頁改過的模板。 */
+export function lifePhotoPrompt({ when, lat, lng, kg } = {}) {
+  return fillPromptSlots(loadLifePromptTemplate(), lifePromptVars({ when, lat, lng, kg }));
+}
+
+export function parseLifePhotoJson(text) {
+  const raw = String(text || '').trim().replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
+  const start = raw.indexOf('{');
+  const end = raw.lastIndexOf('}');
+  if (start < 0 || end < start) throw new Error('AI 沒有回 JSON');
+  const data = JSON.parse(raw.slice(start, end + 1));
+  const topic = TELEGRAM_TOPICS.includes(data.topic) ? data.topic : 'General';
+  return {
+    caption: String(data.caption || '').trim(),
+    topic,
+    other: String(data.other || '').trim(),
+  };
+}
+
+export async function analyzeLifePhoto(photos, prompt) {
+  const list = (Array.isArray(photos) ? photos : [photos]).filter((p) => p?.base64).slice(0, 6);
+  const photo = list[0];
+  if (!photo?.base64) throw new Error('沒有圖片');
+  if (!aiKeys.gemini && !aiKeys.openai) {
+    try {
+      await loadAiPrompt();
+    } catch {
+      /* keys may still be empty */
+    }
+  }
+  const mimeType = photo.type || 'image/jpeg';
+  const images = list.slice(1).map((p) => ({ mimeType: p.type || 'image/jpeg', base64: p.base64 }));
+  let text = '';
+  let geminiErr = '';
+  for (const provider of aiProviderOrder()) {
+    if (text) break;
+    if (provider === 'gemini' && aiKeys.gemini) {
+      try {
+        const gemini = await callGeminiBrowser({
+          apiKey: aiKeys.gemini,
+          models: geminiBrowserModels(aiKeys.geminiModel),
+          mimeType,
+          base64: photo.base64,
+          images,
+          prompt,
+          schema: false,
+          budgetMs: 22000,
+        });
+        text = gemini.text;
+      } catch (err) {
+        geminiErr = String(err?.message || err || '');
+      }
+    }
+    if (provider === 'openai' && aiKeys.openai && !text) {
+      const openai = await callOpenAiBrowser({
+        apiKey: aiKeys.openai,
+        model: aiKeys.openaiModel,
+        mimeType,
+        base64: photo.base64,
+        images,
+        detail: 'auto',
+        prompt,
+        timeoutMs: 25000,
+      });
+      text = openai.text;
+    }
+  }
+  if (!text) throw new Error(geminiErr || 'KeyValueConfig AI 未設 APIKey / OPENAPIKey');
+  return parseLifePhotoJson(text);
+}
+
+export async function sendTelegramPhotos({ photos, caption, topic, mode }) {
+  const data = await postGasJson(
+    {
+      action: 'sendTelegram',
+      photos: (photos || []).map((p) => ({ base64: p.base64, mime: p.type || 'image/jpeg' })),
+      caption: caption || '',
+      topic: topic || 'General',
+      mode: mode || '',
+    },
+    90000
+  );
+  if (!data || data.success !== true) throw new Error(data?.error || 'Telegram 發送失敗');
+  return data;
 }

@@ -8,6 +8,7 @@
 export const ROUTES = {
   HOME: '/',
   EXPENSE: '/expense',
+  PHOTO: '/photo',
   CALENDAR: '/calendar',
   PARKING: '/parking',
   VEHICLES: '/vehicles',
@@ -115,6 +116,31 @@ export function hrefFor(path, query) {
   });
   const s = qs.toString();
   return s ? `#${next}?${s}` : `#${next}`;
+}
+
+/** Readable form of an encoded URL. `access` is omitted from the display. */
+export function prettyUrl(href) {
+  const s = String(href || '');
+  const q = s.indexOf('?');
+  if (q < 0) return s;
+  const dec = (raw) => {
+    try {
+      return decodeURIComponent(String(raw).replace(/\+/g, ' '));
+    } catch {
+      return raw;
+    }
+  };
+  const query = s
+    .slice(q + 1)
+    .split('&')
+    .filter((part) => part && !/^access=/i.test(part))
+    .map((part) => {
+      const i = part.indexOf('=');
+      if (i < 0) return dec(part);
+      return `${dec(part.slice(0, i))}=${dec(part.slice(i + 1))}`;
+    })
+    .join('&');
+  return `${s.slice(0, q)}${query ? `?${query}` : ''}`;
 }
 
 const overlayStack = [];

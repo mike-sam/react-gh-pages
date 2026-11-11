@@ -76,6 +76,14 @@ function EntryPage() {
             </div>
           </a>
         ))}
+        <a className="entry-action-card" href={hrefFor(ROUTES.PHOTO)}>
+          <div className="entry-action-icon">📷</div>
+          <div className="entry-action-body">
+            <div className="entry-action-title">拍照記錄</div>
+            <div className="entry-action-desc">拍照後可記錄到 Telegram，或帶去記帳。</div>
+            <code className="entry-action-url">#/photo</code>
+          </div>
+        </a>
         <button type="button" className="entry-action-card" onClick={() => setEatOpen(true)}>
           <div className="entry-action-icon">🍜</div>
           <div className="entry-action-body">

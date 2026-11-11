@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { FloatingStackItem } from '../context/FloatingStackContext';
-import { hrefFor, ROUTES } from '../utils/routing';
+import { hrefFor, prettyUrl, ROUTES } from '../utils/routing';
 import { EXPENSE_URL_PARAMS } from '../utils/expenseQuickUrl';
 import HelpParamTable from './HelpParamTable';
 
@@ -143,7 +143,7 @@ function EntryUrlExamples() {
                     <a className="entry-help-link" href={href} onClick={() => setOpen(false)}>
                       <span className="entry-help-item-title">{ex.title}</span>
                       <span className="entry-help-item-note">{ex.note}</span>
-                      <code className="entry-help-item-url">{href}</code>
+                      <code className="entry-help-item-url">{prettyUrl(href)}</code>
                     </a>
                   </li>
                 );

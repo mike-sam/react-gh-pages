@@ -4,12 +4,15 @@ import { useSmartLocation } from '../hooks/useSmartLocation';
 import { useOfflineQueue } from '../context/QueueContext';
 import { isIOS, openShortcut, stringifyCalendarTrackInput } from '../utils/platform';
 import CalendarUrlExamples from './CalendarUrlExamples';
+import UrlTemplateBar from './UrlTemplateBar';
+import { hrefFor, ROUTES } from '../utils/routing';
 import MobileFriendlyDateTime from './MobileFriendlyDateTime';
 import { PinIcon } from './LocationPinButton';
 import {
   CALENDAR_LOOKBACK_DAY_CHOICES,
   CALENDAR_PREFIXES,
   CALENDAR_TITLES,
+  mealEventForDate,
   buildCalendarTrailPreview,
   buildCalendarTrackUrl,
   loadCalendarLookbackDays,
@@ -70,6 +73,7 @@ function CalendarTracker() {
   const onIOS = useMemo(() => isIOS(), []);
   const shortcutName = SHORTCUTS?.CALENDAR_TRACK || 'CalendarTrack';
   const resolvedTitle = title === '__custom__' ? customTitle.trim() : title;
+  const mealEvent = mealEventForDate(actionTime);
   const selectEventTitle = (name) => {
     const next = String(name || '').trim();
     if (!next) return;
@@ -133,6 +137,22 @@ function CalendarTracker() {
     params.days = lookbackDays;
     params.lookbackDays = lookbackDays;
     return buildCalendarTrackUrl(params);
+  }, [resolvedTitle, prefix, location, placeName, actionTime, lookbackDays]);
+
+  const pageTrackUrl = useMemo(() => {
+    const params = {
+      op: 'append',
+      event: resolvedTitle || undefined,
+      prefix: prefix.trim() || undefined,
+      timestamp: stampCalendarTimestamp(actionTime),
+      days: lookbackDays,
+    };
+    if (location?.lat != null && location?.lng != null) {
+      params.lat = location.lat;
+      params.lng = location.lng;
+    }
+    if (placeName) params.placeName = placeName;
+    return `${window.location.origin}${window.location.pathname}${hrefFor(ROUTES.CALENDAR, params)}`;
   }, [resolvedTitle, prefix, location, placeName, actionTime, lookbackDays]);
 
   const prevTrailAt = useMemo(() => {
@@ -233,7 +253,6 @@ function CalendarTracker() {
       longitude: coords?.lng ?? null,
       placeName: coords ? labelFromCoveringPlace(coords) || coords.label || placeName : placeName,
       days,
-      lookbackDays: days,
     });
 
     if (onIOS && useShortcut) {
@@ -337,6 +356,14 @@ function CalendarTracker() {
             ))}
             <button
               type="button"
+              className={`entry-chip ${resolvedTitle === mealEvent ? 'active' : ''}`}
+              title="依軌跡時間：5–10 Breakfast，10–12 Brunch，12–16 Lunch，16–21 Dinner，其餘 Supper"
+              onClick={() => selectEventTitle(mealEvent)}
+            >
+              {mealEvent}
+            </button>
+            <button
+              type="button"
               className={`entry-chip ${title === '__custom__' ? 'active' : ''}`}
               onClick={() => setTitle('__custom__')}
             >
@@ -433,7 +460,7 @@ function CalendarTracker() {
             checked={useShortcut}
             onChange={(e) => setUseShortcut(e.target.checked)}
           />
-          改走 iOS Shortcuts「{shortcutName}」（自動化請用下方 GAS URL）
+          改走 iOS Shortcuts「{shortcutName}」（會打開捷徑。不想開畫面就用下方 GAS URL 的 Get Contents）
         </label>
       )}
 
@@ -579,6 +606,13 @@ function CalendarTracker() {
           {pendingCount > 0 ? ` · ${pendingCount} 筆背景送出中` : ''}
         </div>
       )}
+
+      <UrlTemplateBar
+        pageUrl={pageTrackUrl}
+        gasUrl={liveUrl}
+        pageNote="只打開行事曆頁，不會送出。畫面上是原文，複製的是 encoded。"
+        gasNote="Shortcuts 用 Get Contents 打這條才會寫進行事曆。"
+      />
 
       <CalendarUrlExamples liveUrl={liveUrl} />
     </div>
