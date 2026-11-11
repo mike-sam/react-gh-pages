@@ -424,6 +424,7 @@ function attachAiMeta(err, extra) {
   if (extra?.model != null) e.model = extra.model;
   if (extra?.prompt != null) e.prompt = extra.prompt;
   if (extra?.tried != null) e.tried = extra.tried;
+  if (extra?.submitted != null) e.submitted = extra.submitted;
   if (extra?.httpStatus != null) e.httpStatus = extra.httpStatus;
   if (extra?.responseHead != null) e.responseHead = extra.responseHead;
   return e;
@@ -1042,15 +1043,16 @@ export async function analyzeReceiptPhoto(photo, { tag, title, promptTemplate, w
   const mimeType = photo.type || 'image/jpeg';
   const base64 = photo.base64;
   const tried = [];
-  const fail = (err, model) => {
+  const fail = (err, model, submitted) => {
     throw attachAiMeta(err instanceof Error ? err : new Error(String(err?.message || err || 'AI 建議失敗')), {
       model: model || '',
       prompt,
       tried,
+      submitted: Boolean(submitted),
     });
   };
   if (!aiKeys.gemini && !aiKeys.openai) {
-    fail(new Error('按「讀取設定」才會打 getAiPrompt'));
+    fail(new Error('按「讀取設定」才會打 getAiPrompt。這次沒送到模型，Telegram 也不會發'), '', false);
   }
 
   let lastErr = '';
@@ -1114,7 +1116,7 @@ export async function analyzeReceiptPhoto(photo, { tag, title, promptTemplate, w
     }
   }
 
-  fail(new Error(lastErr || 'AI 建議失敗'), tried[tried.length - 1] || '');
+  fail(new Error(lastErr || 'AI 建議失敗'), tried[tried.length - 1] || '', true);
 }
 
 export function recordAiSuggestion(body) {
@@ -1407,7 +1409,11 @@ export async function analyzeLifePhoto(photos, prompt) {
   const list = (Array.isArray(photos) ? photos : [photos]).filter((p) => p?.base64).slice(0, 6);
   const photo = list[0];
   if (!photo?.base64) throw new Error('沒有圖片');
-  if (!aiKeys.gemini && !aiKeys.openai) throw new Error('按「讀取設定」才會打 getAiPrompt');
+  if (!aiKeys.gemini && !aiKeys.openai) {
+    const err = new Error('按「讀取設定」才會打 getAiPrompt。這次沒送到模型，Telegram 也不會發');
+    err.submitted = false;
+    throw err;
+  }
   const mimeType = photo.type || 'image/jpeg';
   const images = list.slice(1).map((p) => ({ mimeType: p.type || 'image/jpeg', base64: p.base64 }));
   let text = '';

@@ -213,57 +213,61 @@ function HomeQuickAccess() {
         </button>
       ) : (
         <>
-          {tools.map((tool) => {
-            const backToPhoto = cameFromPhoto && tool.id === 'photo';
-            return (
-              <button
-                key={tool.id}
-                type="button"
-                className={`home-quick-item${backToPhoto ? ' is-return' : ''}`}
-                aria-label={backToPhoto ? '回拍照記錄' : tool.title}
-                title={backToPhoto ? '回拍照記錄' : tool.title}
-                onClick={() => openTool(tool.path)}
-              >
-                <span className="home-quick-icon" aria-hidden="true">{tool.icon}</span>
-                <span className="home-quick-name">{backToPhoto ? '← 返回' : tool.title}</span>
-              </button>
-            );
-          })}
-          <button
-            type="button"
-            className="home-quick-tool"
-            aria-label="縮小，只留圖示"
-            title="縮小，只留圖示"
-            disabled={size === 'icons'}
-            onClick={() => {
-              lastOpenSize.current = 'icons';
-              setSize('icons');
-            }}
-          >
-            −
-          </button>
-          <button
-            type="button"
-            className="home-quick-tool"
-            aria-label="放大，顯示名稱"
-            title="放大，顯示名稱"
-            disabled={size === 'full'}
-            onClick={() => {
-              lastOpenSize.current = 'full';
-              setSize('full');
-            }}
-          >
-            +
-          </button>
-          <button
-            type="button"
-            className="home-quick-tool"
-            aria-label="收合"
-            title="收合"
-            onClick={minimize}
-          >
-            _
-          </button>
+          <div className="home-quick-scroll">
+            {tools.map((tool) => {
+              const backToPhoto = cameFromPhoto && tool.id === 'photo';
+              return (
+                <button
+                  key={tool.id}
+                  type="button"
+                  className={`home-quick-item${backToPhoto ? ' is-return' : ''}`}
+                  aria-label={backToPhoto ? '回拍照記錄' : tool.title}
+                  title={backToPhoto ? '回拍照記錄' : tool.title}
+                  onClick={() => openTool(tool.path)}
+                >
+                  <span className="home-quick-icon" aria-hidden="true">{tool.icon}</span>
+                  <span className="home-quick-name">{backToPhoto ? '← 返回' : tool.title}</span>
+                </button>
+              );
+            })}
+          </div>
+          <div className="home-quick-controls">
+            <button
+              type="button"
+              className="home-quick-tool"
+              aria-label="縮小，只留圖示"
+              title="縮小，只留圖示"
+              disabled={size === 'icons'}
+              onClick={() => {
+                lastOpenSize.current = 'icons';
+                setSize('icons');
+              }}
+            >
+              −
+            </button>
+            <button
+              type="button"
+              className="home-quick-tool"
+              aria-label="放大，顯示名稱"
+              title="放大，顯示名稱"
+              disabled={size === 'full'}
+              onClick={() => {
+                lastOpenSize.current = 'full';
+                setSize('full');
+              }}
+            >
+              +
+            </button>
+            <button
+              type="button"
+              className="home-quick-tool"
+              aria-label="收合"
+              title="收合"
+              onClick={minimize}
+            >
+              _
+            </button>
+          </div>
         </>
       )}
     </nav>

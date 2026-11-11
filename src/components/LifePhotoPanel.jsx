@@ -16,6 +16,7 @@ import {
   formatWhen,
   lifePhotoPrompt,
   lifePromptVars,
+  DEFAULT_AI_MODELS,
   defaultPromptLibrary,
   loadAiPrompt,
   peekAiPrompt,
@@ -23,6 +24,7 @@ import {
   promptParts,
   promptLibraryWarn,
   promptsForContext,
+  saveAiModelChoice,
   savePromptLibrary,
   sendTelegramPhotos,
 } from '../utils/aiSuggest';
@@ -112,11 +114,18 @@ function LifePhotoPanel() {
   const [promptBusy, setPromptBusy] = useState(false);
   const [promptId, setPromptId] = useState(seeded.current.id);
   const [promptScope, setPromptScope] = useState('any');
+  const [promptManage, setPromptManage] = useState(false);
   const [draftCat, setDraftCat] = useState(() => loadExpenseDraft()?.selectedTag || '');
   const [draftSub, setDraftSub] = useState(() => loadExpenseDraft()?.input || '');
   const [promptView, setPromptView] = useState('preview');
   const [promptPending, setPromptPending] = useState(false);
   const promptRef = useRef(null);
+  const runLock = useRef(false);
+  const modelSeed = useRef(peekAiPrompt());
+  const [models, setModels] = useState(
+    modelSeed.current?.models?.length ? modelSeed.current.models : DEFAULT_AI_MODELS
+  );
+  const [prefer, setPrefer] = useState(modelSeed.current?.prefer || 'gemini:gemini-3.5-flash-lite');
 
   useEffect(() => {
     if (!photosReady.current) {
@@ -150,6 +159,8 @@ function LifePhotoPanel() {
     try {
       const data = await loadAiPrompt();
       const list = Array.isArray(data.prompts) ? data.prompts : [];
+      if (Array.isArray(data.models) && data.models.length) setModels(data.models);
+      if (data.prefer) setPrefer(data.prefer);
       setPromptList(list);
       setPromptFetched(true);
       if (lifeTpl === lifeSaved) {
@@ -214,14 +225,28 @@ function LifePhotoPanel() {
     }
   };
 
+  const pickModel = async (value) => {
+    const sep = String(value || '').indexOf(':');
+    if (sep < 1) return;
+    setPrefer(value);
+    try {
+      const saved = await saveAiModelChoice(value.slice(0, sep), value.slice(sep + 1));
+      setPrefer(saved);
+      setMsg('模型已存');
+    } catch (err) {
+      setMsg(String(err?.message || '模型沒存成').slice(0, 80));
+    }
+  };
+
   const runRecord = async () => {
-    if (busy) return;
+    if (runLock.current || busy) return;
     if (!photos.length) {
       setMsg('先拍照或從相冊選圖');
       return;
     }
+    runLock.current = true;
     setBusy(true);
-    setMsg('辨識中…');
+    setMsg('已送出，辨識中…');
     setReady(null);
     setPromptPending(false);
     try {
@@ -248,10 +273,14 @@ function LifePhotoPanel() {
       const extra = parsed.other ? ` · ${parsed.other}` : '';
       setPhotos(nextPhotos);
       setReady({ caption: parsed.caption, photos: nextPhotos });
-      setMsg(`${parsed.topic}${logToTelegram ? ' · 已發到 Telegram' : ''}${extra}`);
+      setMsg(
+        `${parsed.topic}${logToTelegram ? ' · 已發到 Telegram' : ' · 已分析，未推 Telegram'}${extra}`
+      );
     } catch (err) {
-      setMsg(String(err?.message || '分析失敗').split('\n')[0].slice(0, 180));
+      const text = String(err?.message || '分析失敗').split('\n')[0].slice(0, 180);
+      setMsg(logToTelegram && !/Telegram/.test(text) ? `${text} · Telegram 未發` : text);
     } finally {
+      runLock.current = false;
       setBusy(false);
     }
   };
@@ -317,15 +346,34 @@ function LifePhotoPanel() {
                 <option value="individual">分張</option>
               </select>
             ) : null}
+            <label className="ai-model-pick">
+              模型
+              <select value={prefer} disabled={busy} onChange={(e) => pickModel(e.target.value)}>
+                {models.map((model) => (
+                  <option key={`${model.provider}:${model.id}`} value={`${model.provider}:${model.id}`}>
+                    {`${model.provider === 'openai' ? 'OpenAI' : 'Gemini'} ${model.label}${model.tier ? ` · ${model.tier}` : ''}`}
+                  </option>
+                ))}
+              </select>
+            </label>
             <button
               type="button"
               className="camera-ai-btn"
               disabled={busy || !logToTelegram}
+              onClick={runRecord}
+            >
+              {busy ? '辨識中…' : '分析照片'}
+            </button>
+            <button
+              type="button"
+              className="photo-ai-btn"
+              disabled={busy || !logToTelegram}
               onClick={openPrompt}
             >
-              {busy ? '處理中…' : promptPending ? '確認 prompt' : '分析照片'}
+              確認 prompt
             </button>
           </div>
+          {msg ? <p className="camera-ai-hint">{msg}</p> : null}
           <details className="ai-photo-prompt" ref={promptRef}>
             <summary>
               <span className="ai-photo-prompt-title">AI prompt</span>
@@ -373,18 +421,53 @@ function LifePhotoPanel() {
                   </option>
                 ))}
               </select>
+              {promptManage ? (
+                <button
+                  type="button"
+                  className="ai-suggest-copy ai-suggest-delete"
+                  disabled={!promptId}
+                  onClick={() => {
+                    const row = promptList.find((item) => item.id === promptId);
+                    if (!row) return;
+                    if (!window.confirm(`確定刪除「${promptOptionLabel(row)}」？取消就保留。按儲存才寫進試算表。`)) return;
+                    const next = promptList.filter((item) => item.id !== row.id);
+                    const best = promptsForContext(next, { mode: 'record' })[0];
+                    setPromptList(next);
+                    if (best) {
+                      setPromptId(best.id);
+                      setLifeTpl(best.template);
+                    }
+                    setLifeSaved('');
+                    const warn = promptLibraryWarn(next.length);
+                    setMsg(warn ? `${warn}。按儲存才寫進試算表` : '已從清單移除，按儲存才寫進試算表');
+                  }}
+                >
+                  刪除
+                </button>
+              ) : null}
+              <button
+                type="button"
+                className={`ai-suggest-copy${promptManage ? ' is-on' : ''}`}
+                aria-expanded={promptManage}
+                onClick={() => setPromptManage((open) => !open)}
+              >
+                管理
+              </button>
+            </label>
+            {promptManage ? (
+              <div className="ai-model-pick">
               <select
-                value="any"
-                onChange={() => setPromptScope('any')}
+                value={promptScope}
+                onChange={(e) => setPromptScope(e.target.value)}
                 aria-label="新增範圍"
               >
                 <option value="any">通用</option>
-                <option value="cat" disabled>此分類</option>
-                <option value="sub" disabled>此子分類</option>
+                <option value="cat" disabled={!String(draftCat || '').trim()}>此分類</option>
+                <option value="sub" disabled={!String(draftSub || '').trim()}>此子分類</option>
               </select>
               <button
                 type="button"
-                className="ai-suggest-copy"
+                className="ai-suggest-copy ai-suggest-add"
                 onClick={() => {
                   const name = String(window.prompt('這份 prompt 的名稱') || '').trim();
                   if (!name) return;
@@ -412,32 +495,11 @@ function LifePhotoPanel() {
               >
                 新增
               </button>
-              <button
-                type="button"
-                className="ai-suggest-copy ai-suggest-delete"
-                disabled={!promptId}
-                onClick={() => {
-                  const row = promptList.find((item) => item.id === promptId);
-                  if (!row) return;
-                  if (!window.confirm(`刪除「${row.label}」？按儲存才寫進試算表。`)) return;
-                  const next = promptList.filter((item) => item.id !== row.id);
-                  const best = promptsForContext(next, { mode: 'record' })[0];
-                  setPromptList(next);
-                  if (best) {
-                    setPromptId(best.id);
-                    setLifeTpl(best.template);
-                  }
-                  setLifeSaved('');
-                  const warn = promptLibraryWarn(next.length);
-                  setMsg(warn ? `${warn}。按儲存才寫進試算表` : '已從清單移除，按儲存才寫進試算表');
-                }}
-              >
-                刪除
-              </button>
               {promptLibraryWarn(promptList.length) ? (
                 <span className="ai-suggest-hint">{promptLibraryWarn(promptList.length)}</span>
               ) : null}
-            </label>
+              </div>
+            ) : null}
             <div className="ai-prompt-tabs" role="tablist">
               <button
                 type="button"
@@ -528,7 +590,6 @@ function LifePhotoPanel() {
       ) : (
         <p className="camera-ai-hint">先拍照或從相冊選圖。勾記賬會進入記帳頁，上方可回到這裡。</p>
       )}
-      {msg ? <p className="camera-ai-hint">{msg}</p> : null}
       {ready ? (
         <button
           type="button"

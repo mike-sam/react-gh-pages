@@ -192,6 +192,7 @@ function ExpensePage() {
   const [aiPrompts, setAiPrompts] = useState(aiSeed.prompts);
   const [aiPromptId, setAiPromptId] = useState('');
   const [aiPromptScope, setAiPromptScope] = useState('any');
+  const [aiPromptManage, setAiPromptManage] = useState(false);
   const [recordToTelegram, setRecordToTelegram] = useState(() => {
     try {
       return sessionStorage.getItem('lifePhotoRecord') === '1';
@@ -200,7 +201,10 @@ function ExpensePage() {
     }
   });
   const [aiAskIndex, setAiAskIndex] = useState(-1);
+  const [aiAskPack, setAiAskPack] = useState(false);
+  const [aiStatus, setAiStatus] = useState('');
   const aiPromptRef = useRef(null);
+  const aiLock = useRef(false);
 
   const hasUnsavedInput = useMemo(() => {
     const amt = String(amount || '').trim();
@@ -343,7 +347,7 @@ function ExpensePage() {
   const deletePrompt = () => {
     const row = aiPrompts.find((item) => item.id === aiPromptId);
     if (!row) return;
-    if (!window.confirm(`刪除「${row.label}」？按儲存才寫進試算表。`)) return;
+    if (!window.confirm(`確定刪除「${promptOptionLabel(row)}」？取消就保留。按儲存才寫進試算表。`)) return;
     const next = aiPrompts.filter((item) => item.id !== row.id);
     const best = promptsForContext(next, { mode: promptMode, cat: selectedTag, subcat: input })[0];
     setAiPrompts(next);
@@ -393,10 +397,11 @@ function ExpensePage() {
     plateTagRef.current = tag;
   }, [selectedTag, carPlate]);
 
-  const reviewAiPrompt = (index) => {
+  const reviewAiPrompt = (index, pack = false) => {
     const photo = photos[index];
-    if (!photo?.base64 || aiBusyIndex >= 0) return;
+    if (!photo?.base64 || aiLock.current || aiBusyIndex >= 0) return;
     setAiAskIndex(index);
+    setAiAskPack(pack);
     setAiPromptView('preview');
     const el = aiPromptRef.current;
     if (el) {
@@ -405,19 +410,25 @@ function ExpensePage() {
     }
   };
 
-  const askAiForPhoto = async (index) => {
+  const askAiForPhoto = async (index, { pack = false } = {}) => {
     const photo = photos[index];
-    if (!photo?.base64 || aiBusyIndex >= 0) return;
+    if (!photo?.base64 || aiLock.current || aiBusyIndex >= 0) return;
+    aiLock.current = true;
     const tpl = aiTemplate;
     const whenStr = formatWhen(selectedDateTime);
     const localPrompt = receiptPromptFor(selectedTag, input, tpl, whenStr);
     setAiBusyIndex(index);
+    setAiAskIndex(-1);
     setAiError('');
     setAiSuggestions([]);
     setAiCopied('');
     setAiLocMsg('');
-    setAiMeta({ model: '', prompt: localPrompt, photoHash: '', photoIndex: index });
+    setAiStatus(pack ? '已送出全部，辨識中…' : '已送出，辨識中…');
+    setAiMeta({ model: '', prompt: localPrompt, photoHash: '', photoIndex: index, submitted: false, tried: [] });
     try {
+      const extras = (pack ? photos : [])
+        .filter((p) => p && p !== photo && p.base64 && p.base64 !== photo.base64)
+        .slice(0, 5);
       const shots = recordToTelegram ? (photos.length ? photos : [photo]).filter((p) => p?.base64) : [];
       const result = await analyzeReceiptPhoto(photo, {
         tag: selectedTag,
@@ -427,10 +438,7 @@ function ExpensePage() {
         lat: smartLoc?.lat,
         lng: smartLoc?.lng,
         schema: recordToTelegram ? false : undefined,
-        images: shots
-          .filter((p) => p !== photo && p.base64 !== photo.base64)
-          .slice(0, 5)
-          .map((p) => ({ mimeType: p.type || 'image/jpeg', base64: p.base64 })),
+        images: extras.map((p) => ({ mimeType: p.type || 'image/jpeg', base64: p.base64 })),
       });
       setAiSuggestions(result.suggestions);
       setAiMeta({
@@ -439,8 +447,10 @@ function ExpensePage() {
         photoHash: result.photoHash,
         photoIndex: index,
         tried: result.tried || [],
+        submitted: true,
       });
       if (!result.suggestions.length) setAiError('沒有建議');
+      else if (!recordToTelegram) setAiStatus('已回傳');
       if (recordToTelegram) {
         if (!shots.length) {
           setAiError('沒有可推上 Telegram 的照片');
@@ -456,19 +466,24 @@ function ExpensePage() {
             if (life.caption) {
               setSimpleDescription((cur) => (String(cur || '').trim() ? cur : life.caption));
             }
+            setAiStatus(`已回傳 · 已推 Telegram · ${life.topic}`);
             setAiTplMsg(`已推 Telegram · ${life.topic}`);
           } catch (err) {
+            setAiStatus('已回傳 · Telegram 沒推成');
             setAiError(`記帳建議已回來，Telegram 沒推成：${String(err?.message || err).split('\n')[0].slice(0, 120)}`);
           }
         }
       }
     } catch (err) {
+      const submitted = Boolean(err?.submitted) || (err?.tried || []).length > 0 || /逾時/.test(String(err?.message || ''));
       setAiMeta((m) => ({
         ...m,
-        model: err?.model || m.model,
+        model: '',
         prompt: err?.prompt || m.prompt,
         tried: err?.tried || m.tried || [],
+        submitted,
       }));
+      setAiStatus(submitted ? '已送出，模型沒回' : '未送出');
       setAiError(
         err?.name === 'AbortError' || /逾時/.test(String(err.message || ''))
           ? `逾時（壓縮後 ${formatFileSize(photo.compressedSize || photo.base64?.length || 0)}；Gemini 8s 後改 OpenAI）`
@@ -477,6 +492,7 @@ function ExpensePage() {
               .slice(0, 240)
       );
     } finally {
+      aiLock.current = false;
       setAiBusyIndex(-1);
     }
   };
@@ -1456,10 +1472,10 @@ function ExpensePage() {
               onClear={clearDescriptionSection}
               leading={
                 <CameraAICapture
-                  onPhotoReady={(photoData) => {
+                  onPhotoReady={(photoData, meta) => {
                     setPhotos((prev) => {
                       const next = [...prev, photoData];
-                      setEditPhotoIndex(next.length - 1);
+                      if (meta?.openEditor !== false) setEditPhotoIndex(next.length - 1);
                       return next;
                     });
                   }}
@@ -1510,21 +1526,36 @@ function ExpensePage() {
                     </option>
                   ))}
                 </select>
-                <select value={aiPromptScope} onChange={(e) => setAiPromptScope(e.target.value)} aria-label="新增範圍">
-                  <option value="any">通用</option>
-                  <option value="cat" disabled={!String(selectedTag || '').trim()}>此分類</option>
-                  <option value="sub" disabled={!String(input || '').trim()}>此子分類</option>
-                </select>
-                <button type="button" className="ai-suggest-copy" onClick={addPrompt}>
-                  新增
-                </button>
-                <button type="button" className="ai-suggest-copy ai-suggest-delete" disabled={!aiPromptId} onClick={deletePrompt}>
-                  刪除
-                </button>
-                {promptLibraryWarn(aiPrompts.length) ? (
-                  <span className="ai-suggest-hint">{promptLibraryWarn(aiPrompts.length)}</span>
+                {aiPromptManage ? (
+                  <button type="button" className="ai-suggest-copy ai-suggest-delete" disabled={!aiPromptId} onClick={deletePrompt}>
+                    刪除
+                  </button>
                 ) : null}
+                <button
+                  type="button"
+                  className={`ai-suggest-copy${aiPromptManage ? ' is-on' : ''}`}
+                  aria-expanded={aiPromptManage}
+                  title="管理 prompt"
+                  onClick={() => setAiPromptManage((open) => !open)}
+                >
+                  管理
+                </button>
               </label>
+              {aiPromptManage ? (
+                <div className="ai-model-pick">
+                  <select value={aiPromptScope} onChange={(e) => setAiPromptScope(e.target.value)} aria-label="新增範圍">
+                    <option value="any">通用</option>
+                    <option value="cat" disabled={!String(selectedTag || '').trim()}>此分類</option>
+                    <option value="sub" disabled={!String(input || '').trim()}>此子分類</option>
+                  </select>
+                  <button type="button" className="ai-suggest-copy ai-suggest-add" onClick={addPrompt}>
+                    新增
+                  </button>
+                  {promptLibraryWarn(aiPrompts.length) ? (
+                    <span className="ai-suggest-hint">{promptLibraryWarn(aiPrompts.length)}</span>
+                  ) : null}
+                </div>
+              ) : null}
               <label className="ai-model-pick">
                 模型
                 <select value={aiPrefer} onChange={(e) => pickAiModel(e.target.value)}>
@@ -1542,9 +1573,9 @@ function ExpensePage() {
                     type="button"
                     className="ai-prompt-send-btn"
                     disabled={aiBusyIndex >= 0}
-                    onClick={() => askAiForPhoto(aiAskIndex)}
+                    onClick={() => askAiForPhoto(aiAskIndex, { pack: aiAskPack })}
                   >
-                    {aiBusyIndex === aiAskIndex ? '辨識中…' : '送出'}
+                    {aiBusyIndex >= 0 ? '辨識中…' : '送出'}
                   </button>
                   <button
                     type="button"
@@ -1686,6 +1717,27 @@ function ExpensePage() {
 
         {photos.length > 0 && (
           <div className="photos-display-row">
+            <div className="photo-ai-batch">
+              {photos.length > 1 ? (
+                <button
+                  type="button"
+                  className="photo-ai-btn"
+                  disabled={aiBusyIndex >= 0}
+                  onClick={() => askAiForPhoto(0, { pack: true })}
+                >
+                  {aiBusyIndex >= 0 ? '辨識中…' : '打包建議'}
+                </button>
+              ) : null}
+              <button
+                type="button"
+                className="photo-ai-btn"
+                disabled={aiBusyIndex >= 0 || !photos.some((p) => p?.base64)}
+                onClick={() => reviewAiPrompt(0, photos.length > 1)}
+              >
+                確認 prompt
+              </button>
+              {aiStatus ? <span className="photo-ai-status">{aiStatus}</span> : null}
+            </div>
             <div className="photos-grid">
               {photos.map((photo, index) => (
                 <div
@@ -1720,10 +1772,10 @@ function ExpensePage() {
                     <button
                       type="button"
                       className="photo-ai-btn"
-                      disabled={aiBusyIndex >= 0}
-                      onClick={() => reviewAiPrompt(index)}
+                      disabled={aiBusyIndex >= 0 || !photo?.base64}
+                      onClick={() => askAiForPhoto(index)}
                     >
-                      {aiBusyIndex === index ? '辨識中…' : aiAskIndex === index ? '確認 prompt' : '建議'}
+                      {aiBusyIndex === index ? '辨識中…' : '建議'}
                     </button>
                   </div>
                   <button
@@ -1759,21 +1811,26 @@ function ExpensePage() {
             }}
           />
         ) : null}
-        {(aiError || aiMeta.prompt || aiSuggestions.length > 0 || aiCalAsk || aiPicked) && (
+        {(aiError || aiStatus || aiMeta.prompt || aiSuggestions.length > 0 || aiCalAsk || aiPicked) && (
           <div className="ai-suggest-follow">
-            {(aiError || aiMeta.prompt || aiSuggestions.length > 0) && (
+            {(aiError || aiStatus || aiMeta.prompt || aiSuggestions.length > 0) && (
               <div className="ai-suggest-panel">
+                {aiStatus && !aiError ? <div className="ai-suggest-hint">{aiStatus}</div> : null}
                 {aiError ? <div className="ai-suggest-error">{aiError}</div> : null}
                 <div className="ai-suggest-meta">
-                  <span className="ai-suggest-model">
-                    {aiBusyIndex >= 0
-                      ? 'model 辨識中'
-                      : aiMeta.model
-                        ? aiMeta.tried && aiMeta.tried.length > 1 && aiMeta.tried[0] !== aiMeta.model
-                          ? `${aiMeta.model}（備援）`
-                          : aiMeta.model
-                        : 'model 未回傳'}
-                  </span>
+                  {aiBusyIndex >= 0 || aiMeta.model || aiMeta.submitted || aiError ? (
+                    <span className="ai-suggest-model">
+                      {aiBusyIndex >= 0
+                        ? '辨識中…'
+                        : aiMeta.model
+                          ? aiMeta.tried && aiMeta.tried.length > 1 && aiMeta.tried[0] !== aiMeta.model
+                            ? `${aiMeta.model}（備援）`
+                            : aiMeta.model
+                          : aiMeta.submitted
+                            ? 'model 未回傳'
+                            : '未送出'}
+                    </span>
+                  ) : null}
                   {aiMeta.prompt ? (
                     <button type="button" className="ai-suggest-copy" onClick={copyAiPrompt}>
                       {aiCopied === '已複製 prompt' ? aiCopied : '複製 prompt'}

@@ -8,13 +8,13 @@ function CameraAICapture({ onPhotoReady, lighter }) {
   const [busy, setBusy] = useState(false);
   const [hint, setHint] = useState('');
 
-  const processFile = async (file) => {
+  const processFile = async (file, { openEditor = true } = {}) => {
     if (!file) return;
     setBusy(true);
     setHint('處理中…');
     try {
       const photo = await compressReceiptFile(file, lighter ? TELEGRAM_COMPRESS : undefined);
-      onPhotoReady?.(photo);
+      onPhotoReady?.(photo, { openEditor });
       setHint(`${formatReceiptSizePair(photo.compressedSize, photo.originalSize)} · 可再裁切`);
     } catch (err) {
       setHint(err.message || '處理失敗');
@@ -27,14 +27,15 @@ function CameraAICapture({ onPhotoReady, lighter }) {
   const onCameraChange = (e) => {
     const file = e.target.files?.[0];
     e.target.value = '';
-    processFile(file);
+    processFile(file, { openEditor: true });
   };
 
   const onAlbumChange = async (e) => {
     const files = Array.from(e.target.files || []);
     e.target.value = '';
+    const openEditor = files.length <= 1;
     for (let i = 0; i < files.length; i += 1) {
-      await processFile(files[i]);
+      await processFile(files[i], { openEditor });
     }
   };
 
