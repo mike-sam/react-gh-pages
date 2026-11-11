@@ -5124,6 +5124,11 @@ input,textarea {
   font-size: 10px;
   word-break: break-all;
 }
+.entry-help-default {
+  margin-top: 2px;
+  font-size: 10px;
+  color: var(--text-muted, #9aa0a6);
+}
 .entry-help-table tbody tr:last-child th,
 .entry-help-table tbody tr:last-child td {
   border-bottom: none;
@@ -5783,10 +5788,34 @@ input,textarea {
   letter-spacing: 0.06em;
   color: var(--text-muted, #9aa3b2);
 }
+.calendar-endall-actions {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: stretch;
+  gap: 6px;
+}
+.calendar-endall-wfh {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  padding: 0 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border, #333945);
+  font-size: 12px;
+  color: var(--text-muted, #9aa3b2);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.calendar-endall-wfh.is-on {
+  border-color: #a94442;
+  color: #f3d6d6;
+  background: rgba(109, 27, 27, 0.45);
+}
 .calendar-endall .entry-btn-end-all {
   flex: 0 0 auto;
-  margin-left: auto;
-  padding: 8px 14px;
+  margin: 0;
+  padding: 6px 14px;
 }
 .calendar-status {
   margin: 8px 0 4px;

@@ -101,6 +101,7 @@ export function stringifyCalendarTrackInput(payload) {
     latitude: payload.latitude ?? payload.lat ?? null,
     longitude: payload.longitude ?? payload.lng ?? null,
     placeName: payload.placeName || '',
+    include: payload.include || '',
     days: payload.days,
   });
 }

@@ -12,6 +12,8 @@ import {
   CALENDAR_LOOKBACK_DAY_CHOICES,
   CALENDAR_PREFIXES,
   CALENDAR_TITLES,
+  CALENDAR_WFH_MARKER,
+  isWfhTitle,
   mealEventForDate,
   buildCalendarTrailPreview,
   buildCalendarTrackUrl,
@@ -64,6 +66,7 @@ function CalendarTracker() {
   const [status, setStatus] = useState(() => loadCalendarStatus());
   const [actionTime, setActionTime] = useState(() => new Date());
   const [lookbackDays, setLookbackDays] = useState(() => loadCalendarLookbackDays());
+  const [endAllWfh, setEndAllWfh] = useState(false);
   const timeEditedRef = useRef(false);
   const editorOpenRef = useRef(false);
   const actionTimeRef = useRef(actionTime);
@@ -174,9 +177,10 @@ function CalendarTracker() {
         lat: location?.lat,
         lng: location?.lng,
         placeName,
+        marker: isWfhTitle(resolvedTitle) ? CALENDAR_WFH_MARKER : '**start**',
         prevWhen: prevTrailAt,
       }),
-    [actionTime, prefix, location, placeName, prevTrailAt]
+    [actionTime, prefix, location, placeName, prevTrailAt, resolvedTitle]
   );
 
   const pickLookbackDays = (n) => {
@@ -235,6 +239,7 @@ function CalendarTracker() {
         endScope,
         endExisting: flags.endExisting !== undefined ? flags.endExisting : true,
         startHome: flags.startHome === true,
+        includeWfh: flags.includeWfh === true,
         queued: true,
         when,
       })
@@ -253,6 +258,7 @@ function CalendarTracker() {
       longitude: coords?.lng ?? null,
       placeName: coords ? labelFromCoveringPlace(coords) || coords.label || placeName : placeName,
       days,
+      ...(flags.includeWfh ? { include: 'wfh' } : {}),
     });
 
     if (onIOS && useShortcut) {
@@ -327,14 +333,30 @@ function CalendarTracker() {
             </button>
           ))}
         </span>
-        <button
-          type="button"
-          className="entry-btn-end-all"
-          onClick={() => handleOp('end', { all: true, endScope: 'all', uiLabel: 'End All' })}
-        >
-          End All
-          <small className="calendar-btn-note">end all events within {lookbackDays} days</small>
-        </button>
+        <div className="calendar-endall-actions">
+          <label className={`calendar-endall-wfh${endAllWfh ? ' is-on' : ''}`}>
+            <input
+              type="checkbox"
+              checked={endAllWfh}
+              onChange={(e) => setEndAllWfh(e.target.checked)}
+            />
+            含 WFH
+          </label>
+          <button
+            type="button"
+            className="entry-btn-end-all"
+            onClick={() =>
+              handleOp('end', {
+                all: true,
+                endScope: 'all',
+                includeWfh: endAllWfh,
+                uiLabel: 'End All',
+              })
+            }
+          >
+            End All
+          </button>
+        </div>
       </section>
 
       <div className="calendar-fields">
@@ -378,6 +400,9 @@ function CalendarTracker() {
               placeholder="自行輸入標題"
             />
           )}
+          {isWfhTitle(resolvedTitle) ? (
+            <p className="entry-hint">第一行寫 **wfh**。End、End+Start 會關。End All 要勾「含 WFH」才關。</p>
+          ) : null}
         </section>
 
         <section className="calendar-field">
@@ -496,7 +521,9 @@ function CalendarTracker() {
                   onClick={() => selectEventTitle(ev.title)}
                 >
                   <strong>{ev.title}</strong>
-                  {ev.marker !== '**start**' ? (
+                  {ev.marker === '**wfh**' ? (
+                    <span className="calendar-status-adopted">手動</span>
+                  ) : ev.marker !== '**start**' ? (
                     <span className="calendar-status-adopted">既有</span>
                   ) : null}
                   {ev.start ? <span>從 {formatCalendarClock(ev.start)}</span> : null}

@@ -16,7 +16,7 @@
 
 GET 或 POST 都可，參數相同。網址：`<GAS exec URL>?action=trackCalendar&op=...&event=...`
 
-GAS 只認日曆上**描述第一行是 `**start**`** 的行程為「進行中」。各裝置的本地畫面只是預覽，真正判斷都在 GAS。
+GAS 只認日曆上**描述第一行是 `**start**`** 的行程為「進行中」。標題 `WFH` 例外，第一行是 `**wfh**`，捷徑的 End All 不會關它。各裝置的本地畫面只是預覽，真正判斷都在 GAS。
 
 ### action
 
@@ -37,14 +37,22 @@ GAS 只認日曆上**描述第一行是 `**start**`** 的行程為「進行中�
 | Start New | `startNew` | 要 | 直接新開，舊的全部不動 |
 | End+Start | `endStart` | 要（新的那個） | 關掉**最近一筆**進行中的，再開 event |
 | End | `end` | 要 | 只關這個 event；它沒開著就什麼都不做 |
-| End All | `endAll` | 不用 | 關掉過去 `days` 天內全部進行中的 |
+| End All | `endAll` | 不用 | 關掉過去 `days` 天內全部 `**start**`。不關 WFH |
+| End All（頁面） | `endAll&include=wfh` | 不用 | 同上，並連 `**wfh**` 一起關 |
 | （無按鈕） | `start` | 要 | 關掉**全部**進行中的，再開 event。舊捷徑的預設行為 |
 
 - op 不分大小寫，`_`、`+`、空格都可，例如 `endStart` = `end+start` = `end_start` = `end start`；`endAll` = `end all`；`appendIf` = `appendIfExists`。
 - 只寫 op 名稱就好，不必再組 `endScope`。
-- op 也可以直接是標題別名：`op=work` 等同 `op=start&event=Work`（`work / commute / driving / trip / sleep`）；`op=end work` 只關 Work。
+- op 也可以直接是標題別名：`op=work` 等同 `op=start&event=Work`（`work / wfh / commute / driving / trip / sleep`）；`op=end work` 只關 Work。`op=end wfh` 只關 `**wfh**`。
+
+### WFH
+
+選 WFH 再按 Start/Append、Start New、End、End+Start，對象都是第一行 `**wfh**` 的行程，不會去動 `**start**`。End+Start 會關掉最近一筆（`**start**` 或 `**wfh**` 誰比較新），新開的 WFH 仍寫 `**wfh**`。
+
+回家捷徑維持 `op=endAll`，不要加 `include`。頁面 End All 預設也不關 WFH；勾了「含 WFH」才帶 `include=wfh`。
+
 - 沒帶 op 時當作 `append`。
-- 其他：`home`（關掉全部並寫 `[home]`，`startHome=1` 另開 Home）、`block`（記帳用，直接建一段 start→end 的行程）、`check`、`ping`。
+- 其他：`home`（關掉全部 `**start**`，軌跡行標成 `[home]`，第一行改成 `**end**`。不關 WFH。`startHome=1` 才另開一筆標題 Home、第一行 `**home**`。頁面沒有這個按鈕）、`block`（記帳用，直接建一段 start→end 的行程）、`check`、`ping`。
 
 ### 時間
 

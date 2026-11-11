@@ -20,7 +20,12 @@ function HelpParamTable({ rows = [] }) {
               </td>
               <td>{row.required}</td>
               <td>
-                <code>{row.example}</code>
+                {row.example ? <code>{row.example}</code> : null}
+                {'fallback' in row ? (
+                  <div className="entry-help-default">
+                    {`預設 ${row.fallback == null || row.fallback === '' ? '空' : row.fallback}`}
+                  </div>
+                ) : null}
               </td>
               <td>{row.note}</td>
             </tr>

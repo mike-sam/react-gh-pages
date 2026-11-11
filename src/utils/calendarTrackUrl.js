@@ -1,6 +1,12 @@
 import { API_ENDPOINTS } from '../config';
 
-export const CALENDAR_TITLES = ['Work', 'Commute', 'Driving', 'Trip', 'Sleep'];
+export const CALENDAR_TITLES = ['Work', 'WFH', 'Commute', 'Driving', 'Trip', 'Sleep'];
+
+export const CALENDAR_WFH_MARKER = '**wfh**';
+
+export function isWfhTitle(title) {
+  return String(title || '').trim().toLowerCase() === 'wfh';
+}
 
 /** One meal name for the track time. Covers the whole day. */
 export function mealEventForDate(date) {
@@ -102,8 +108,14 @@ export const CALENDAR_TRACK_PARAMS = [
     example: 'TSX',
     note: '軌跡地名。空白則 GAS 用地圖管理的區域反查。place 同義',
   },
-  {
-    name: 'days',
+    {
+      name: 'include',
+      required: 'optional',
+      example: 'wfh',
+      note: '只有頁面的 End All 會帶。帶了才連 **wfh** 一起關。捷徑的 endAll 不要帶，回家才不會關掉 WFH',
+    },
+    {
+      name: 'days',
     required: 'optional',
     example: '3',
     note: '搜尋過去 N 天（1–14，預設 3）。也可用 lookbackDays',
@@ -253,6 +265,7 @@ export function buildCalendarTrackUrlFromPayload(payload, base = calendarTrackEn
       latlong: p.latlong ?? p.latlng,
       placeName: p.placeName || p.place,
       event: p.event || p.title,
+      include: p.include,
       days: p.days ?? p.lookbackDays,
     },
     base
@@ -281,6 +294,7 @@ export function buildCalendarTrackUrl(params, base = calendarTrackEndpoint()) {
     'lng',
     'latlong',
     'placeName',
+    'include',
     'days',
   ];
   keys.forEach((k) => {
@@ -361,9 +375,19 @@ export function calendarTrackUrlExamples() {
     },
     {
       title: 'End All',
-      note: '不用 event。關掉過去 days 天內全部進行中的，結束時間＝timestamp',
+      note: '不用 event。只關 **start**。WFH 不受影響',
       params: {
         op: 'endAll',
+        days: 3,
+        timestamp: ts,
+      },
+    },
+    {
+      title: 'End All · 含 WFH（頁面按鈕）',
+      note: '捷徑不要用這條。include=wfh 才會連 WFH 一起關',
+      params: {
+        op: 'endAll',
+        include: 'wfh',
         days: 3,
         timestamp: ts,
       },

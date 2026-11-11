@@ -3713,6 +3713,7 @@ var GEOFENCES = [
 var CALENDAR_START_MARKER = '**start**';
 var CALENDAR_END_MARKER = '**end**';
 var CALENDAR_HOME_MARKER = '**home**';
+var CALENDAR_WFH_MARKER = '**wfh**';
 var CALENDAR_DEFAULT_DURATION_MS = 60 * 60 * 1000; // start 新建預設 1 小時
 var CALENDAR_EXTEND_MS = 30 * 60 * 1000; // append：結束時間至少 timestamp+30 分鐘
 var CALENDAR_START_DEDUP_MS = 120 * 1000;
@@ -3937,8 +3938,22 @@ var CALENDAR_TITLE_ALIASES_ = {
   work: 'Work',
   commute: 'Commute',
   trip: 'Trip',
-  sleep: 'Sleep'
+  sleep: 'Sleep',
+  wfh: 'WFH'
 };
+
+function isWfhTitle_(title) {
+  return String(title || '').trim().toLowerCase() === 'wfh';
+}
+
+function markerForTitle_(title) {
+  return isWfhTitle_(title) ? CALENDAR_WFH_MARKER : CALENDAR_START_MARKER;
+}
+
+function calendarIncludeWfh_(data) {
+  var raw = String((data && data.include) || '').toLowerCase();
+  return raw.indexOf('wfh') !== -1;
+}
 
 function calendarPhraseKey_(s) {
   return String(s || '')
@@ -4120,7 +4135,8 @@ function setFirstLineMarker(desc, marker) {
   if (
     first === CALENDAR_START_MARKER ||
     first === CALENDAR_END_MARKER ||
-    first === CALENDAR_HOME_MARKER
+    first === CALENDAR_HOME_MARKER ||
+    first === CALENDAR_WFH_MARKER
   ) {
     lines[0] = marker;
     return lines.join('\n');
@@ -4219,7 +4235,7 @@ function findLiveTimedEvents(calendar, when, lookbackMs) {
     var ev = events[i];
     if (ev.isAllDayEvent && ev.isAllDayEvent()) continue;
     var first = descriptionFirstLine(ev.getDescription());
-    if (first === CALENDAR_END_MARKER || first === CALENDAR_HOME_MARKER) continue;
+    if (first === CALENDAR_END_MARKER || first === CALENDAR_HOME_MARKER || first === CALENDAR_WFH_MARKER) continue;
     if (ev.getStartTime().getTime() <= t && ev.getEndTime().getTime() >= t) {
       out.push(ev);
     }
@@ -4472,6 +4488,7 @@ function handleCalendarTrack(data) {
     var title = (data.title || data.event || '').toString().trim();
     var rawOp = calendarPhraseKey_(data.op);
     if (!title && CALENDAR_TITLE_ALIASES_[rawOp]) title = CALENDAR_TITLE_ALIASES_[rawOp];
+    if (isWfhTitle_(title)) title = 'WFH';
     var coords = parseCalendarCoords(data);
     var lat = coords.lat;
     var lng = coords.lng;
@@ -4490,6 +4507,7 @@ function handleCalendarTrack(data) {
     var ts = formatCalendarStamp(when);
     var calendar = openTrackingCalendar();
     var starts = findStartMarkedEvents(calendar, when, lookbackMs);
+    var wfhs = findEventsByFirstLine(calendar, CALENDAR_WFH_MARKER, when, lookbackMs);
     var homes = findEventsByFirstLine(calendar, CALENDAR_HOME_MARKER, when, lookbackMs);
     var liveEvents = findLiveTimedEvents(calendar, when, lookbackMs);
     var appendable = filterStartsAt_(mergeCalendarEvents(starts, liveEvents), when);
@@ -4500,7 +4518,7 @@ function handleCalendarTrack(data) {
       var resultCheck = {
         success: true,
         mode: 'check',
-        starts: eventSummaries(starts),
+        starts: eventSummaries(mergeCalendarEvents(starts, wfhs)),
         homes: eventSummaries(homes)
       };
       return calendarJson(resultCheck);
@@ -4570,7 +4588,8 @@ function handleCalendarTrack(data) {
         appendLog(['Calendar start skipped (same title+time):', ts, title]);
         return calendarJson(result);
       }
-      var startClose = selectStartsToClose_(starts, endScope, title, when);
+      var closePool = endScope === 'latest' ? mergeCalendarEvents(starts, wfhs) : starts;
+      var startClose = selectStartsToClose_(closePool, endScope, title, when);
       if (endScope !== 'none') {
         if (endScope === 'all') {
           closeEvents(homes, when, 'end', placeName, lat, lng);
@@ -4587,7 +4606,7 @@ function handleCalendarTrack(data) {
       var createdStart = createMarkedEvent(
         calendar,
         title || 'Trip',
-        CALENDAR_START_MARKER,
+        markerForTitle_(title || 'Trip'),
         'start',
         when,
         placeName,
@@ -4617,7 +4636,15 @@ function handleCalendarTrack(data) {
         return calendarJson(result);
       }
       var appendPool = appendable;
-      if (title) {
+      var appendMarker = CALENDAR_START_MARKER;
+      if (isWfhTitle_(title)) {
+        appendPool = [];
+        appendMarker = CALENDAR_WFH_MARKER;
+        for (var wi = 0; wi < wfhs.length; wi++) {
+          if (wfhs[wi].getTitle() === title || isWfhTitle_(wfhs[wi].getTitle())) appendPool.push(wfhs[wi]);
+        }
+        appendPool = filterStartsAt_(appendPool, when);
+      } else if (title) {
         appendPool = [];
         for (var ai = 0; ai < appendable.length; ai++) {
           if (appendable[ai].getTitle() === title) appendPool.push(appendable[ai]);
@@ -4630,7 +4657,7 @@ function handleCalendarTrack(data) {
         var createdFromAppend = createMarkedEvent(
           calendar,
           title || 'Trip',
-          CALENDAR_START_MARKER,
+          appendMarker,
           prefix,
           when,
           placeName,
@@ -4661,7 +4688,8 @@ function handleCalendarTrack(data) {
         if (
           firstLine !== CALENDAR_START_MARKER &&
           firstLine !== CALENDAR_END_MARKER &&
-          firstLine !== CALENDAR_HOME_MARKER
+          firstLine !== CALENDAR_HOME_MARKER &&
+          firstLine !== CALENDAR_WFH_MARKER
         ) {
           nextDesc = setFirstLineMarker(nextDesc, CALENDAR_START_MARKER);
         }
@@ -4705,11 +4733,12 @@ function handleCalendarTrack(data) {
         result = { success: true, mode: 'skipped', reason: 'duplicate', op: op, timestamp: ts };
         return calendarJson(result);
       }
+      var ifSource = isWfhTitle_(title) ? wfhs : starts;
       var openNamed = [];
       var oi;
-      for (oi = 0; oi < starts.length; oi++) {
-        if (starts[oi].getTitle() === title && eventActionableAt_(starts[oi], when)) {
-          openNamed.push(starts[oi]);
+      for (oi = 0; oi < ifSource.length; oi++) {
+        if (ifSource[oi].getTitle() === title && eventActionableAt_(ifSource[oi], when)) {
+          openNamed.push(ifSource[oi]);
         }
       }
       var ifTarget = pickPrimaryEvent(openNamed, when, title);
@@ -4719,7 +4748,7 @@ function handleCalendarTrack(data) {
           mode: 'noop',
           op: op,
           title: title,
-          warning: 'no open **start** event titled ' + title
+          warning: 'no open ' + (isWfhTitle_(title) ? CALENDAR_WFH_MARKER : CALENDAR_START_MARKER) + ' event titled ' + title
         };
         appendLog(['Calendar appendIfExists noop:', title]);
         return calendarJson(result);
@@ -4753,8 +4782,10 @@ function handleCalendarTrack(data) {
     if (op === 'end') {
       var endPrefix = 'end';
       var closeAll = endScope === 'all';
-      var endTargets = selectStartsToClose_(starts, endScope, title, when);
+      var endPool = !closeAll && isWfhTitle_(title) ? wfhs : starts;
+      var endTargets = selectStartsToClose_(endPool, endScope, title, when);
       if (closeAll) {
+        if (calendarIncludeWfh_(data)) endTargets = mergeCalendarEvents(endTargets, filterStartsAt_(wfhs, when));
         endTargets = mergeCalendarEvents(endTargets, homes);
       } else if (!endTargets.length && endScope === 'title' && !title) {
         var endPrimary = pickPrimaryEvent(filterStartsAt_(starts, when), when, '');

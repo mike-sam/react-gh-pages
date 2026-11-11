@@ -83,7 +83,12 @@ export function applyOptimisticCalendarAction(prev, action) {
   let homes = [...(prev.homes || [])];
 
   if (action.op === 'start') {
-    const created = { title, start: nowIso, kind: 'start', marker: '**start**' };
+    const created = {
+      title,
+      start: nowIso,
+      kind: 'start',
+      marker: String(title).trim().toLowerCase() === 'wfh' ? '**wfh**' : '**start**',
+    };
     if (action.endScope === 'none' || action.endExisting === false) {
       starts = [created, ...starts];
     } else if (action.endScope === 'latest') {
@@ -100,10 +105,21 @@ export function applyOptimisticCalendarAction(prev, action) {
     /* 不開新行程；沒有 **start** 就維持原狀 */
   } else if (action.op === 'append') {
     if (!starts.some((e) => e.title === title)) {
-      starts = [{ title, start: nowIso, kind: 'start', marker: '**start**' }, ...starts];
+      starts = [
+        {
+          title,
+          start: nowIso,
+          kind: 'start',
+          marker: String(title).trim().toLowerCase() === 'wfh' ? '**wfh**' : '**start**',
+        },
+        ...starts,
+      ];
     }
   } else if (action.op === 'end') {
-    if (action.all || action.endScope === 'all' || action.endAny || !action.title) {
+    if (action.all && !action.includeWfh) {
+      starts = starts.filter((e) => e.marker === '**wfh**');
+      homes = [];
+    } else if (action.all || action.endScope === 'all' || action.endAny || !action.title) {
       starts = [];
       homes = [];
     } else {
