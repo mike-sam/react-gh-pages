@@ -19,14 +19,18 @@ import {
   DEFAULT_AI_MODELS,
   defaultPromptLibrary,
   loadAiPrompt,
+  loadRememberModel,
   peekAiPrompt,
   promptOptionLabel,
   promptParts,
   promptLibraryWarn,
   promptsForContext,
+  applyAiModelChoice,
   saveAiModelChoice,
+  saveRememberModel,
   savePromptLibrary,
   sendTelegramPhotos,
+  TELEGRAM_TOPICS,
 } from '../utils/aiSuggest';
 
 function draftPhotos(list) {
@@ -122,10 +126,17 @@ function LifePhotoPanel() {
   const promptRef = useRef(null);
   const runLock = useRef(false);
   const modelSeed = useRef(peekAiPrompt());
+  const seedPrefer = String(modelSeed.current?.prefer || '');
   const [models, setModels] = useState(
     modelSeed.current?.models?.length ? modelSeed.current.models : DEFAULT_AI_MODELS
   );
-  const [prefer, setPrefer] = useState(modelSeed.current?.prefer || 'gemini:gemini-3.5-flash-lite');
+  const [prefer, setPrefer] = useState(
+    seedPrefer.includes(':') ? seedPrefer.split('|')[0] : 'gemini:gemini-3.5-flash-lite'
+  );
+  const [rotate, setRotate] = useState(
+    Boolean(modelSeed.current?.rotate) || seedPrefer === 'auto' || seedPrefer.endsWith('|rotate')
+  );
+  const [rememberModel, setRememberModel] = useState(() => loadRememberModel());
 
   useEffect(() => {
     if (!photosReady.current) {
@@ -160,7 +171,8 @@ function LifePhotoPanel() {
       const data = await loadAiPrompt();
       const list = Array.isArray(data.prompts) ? data.prompts : [];
       if (Array.isArray(data.models) && data.models.length) setModels(data.models);
-      if (data.prefer) setPrefer(data.prefer);
+      if (data.prefer) setPrefer(String(data.prefer).split('|')[0]);
+      setRotate(Boolean(data.rotate));
       setPromptList(list);
       setPromptFetched(true);
       if (lifeTpl === lifeSaved) {
@@ -230,15 +242,47 @@ function LifePhotoPanel() {
     if (sep < 1) return;
     setPrefer(value);
     try {
-      const saved = await saveAiModelChoice(value.slice(0, sep), value.slice(sep + 1));
+      const saved = rememberModel
+        ? await saveAiModelChoice(value.slice(0, sep), value.slice(sep + 1), rotate)
+        : applyAiModelChoice(value.slice(0, sep), value.slice(sep + 1), rotate);
       setPrefer(saved);
-      setMsg('模型已存');
+      if (rememberModel) setMsg('模型已存');
     } catch (err) {
       setMsg(String(err?.message || '模型沒存成').slice(0, 80));
     }
   };
 
-  const runRecord = async () => {
+  const toggleRotate = async (checked) => {
+    const sep = String(prefer || '').indexOf(':');
+    if (sep < 1) return;
+    setRotate(checked);
+    try {
+      if (rememberModel) await saveAiModelChoice(prefer.slice(0, sep), prefer.slice(sep + 1), checked);
+      else applyAiModelChoice(prefer.slice(0, sep), prefer.slice(sep + 1), checked);
+      setMsg(checked ? '先用這個模型，失敗再試下一個' : '只用這個模型');
+    } catch (err) {
+      setMsg(String(err?.message || '模型沒存成').slice(0, 80));
+    }
+  };
+
+  const toggleRemember = async (checked) => {
+    setRememberModel(checked);
+    saveRememberModel(checked);
+    if (!checked) {
+      setMsg('這次更換不寫進試算表');
+      return;
+    }
+    const sep = String(prefer || '').indexOf(':');
+    if (sep < 1) return;
+    try {
+      await saveAiModelChoice(prefer.slice(0, sep), prefer.slice(sep + 1), rotate);
+      setMsg('已存。之後更換也會寫進設定');
+    } catch (err) {
+      setMsg(String(err?.message || '模型沒存成').slice(0, 80));
+    }
+  };
+
+  const runRecord = async ({ keep = false } = {}) => {
     if (runLock.current || busy) return;
     if (!photos.length) {
       setMsg('先拍照或從相冊選圖');
@@ -247,7 +291,7 @@ function LifePhotoPanel() {
     runLock.current = true;
     setBusy(true);
     setMsg('已送出，辨識中…');
-    setReady(null);
+    if (!keep) setReady(null);
     setPromptPending(false);
     try {
       const prompt = lifePhotoPrompt(
@@ -260,25 +304,60 @@ function LifePhotoPanel() {
         lifeTpl
       );
       const parsed = await analyzeLifePhoto(photos, prompt);
-      let nextPhotos = photos;
-      if (logToTelegram) {
-        setMsg('上傳 Telegram…');
-        await sendTelegramPhotos({
-          photos,
-          caption: parsed.caption,
-          topic: parsed.topic,
-          mode: photos.length > 1 ? lifeMode : 'individual',
-        });
-      }
+      setReady((prev) => ({
+        caption: String(parsed.caption || '').trim(),
+        topic: parsed.topic || 'General',
+        other: parsed.other || '',
+        text: parsed.text || '',
+        sent: keep && prev?.sent ? prev.sent : false,
+        sentCaption: keep && prev?.sent ? prev.sentCaption : '',
+      }));
       const extra = parsed.other ? ` · ${parsed.other}` : '';
-      setPhotos(nextPhotos);
-      setReady({ caption: parsed.caption, photos: nextPhotos });
-      setMsg(
-        `${parsed.topic}${logToTelegram ? ' · 已發到 Telegram' : ' · 已分析，未推 Telegram'}${extra}`
-      );
+      setMsg(`${parsed.topic || 'General'} · 已回傳。可改 caption，再上傳 Telegram 或再 prompt${extra}`);
     } catch (err) {
+      if (err?.raw) {
+        setReady((prev) => ({
+          caption: keep && prev ? prev.caption : '',
+          topic: keep && prev ? prev.topic : 'General',
+          other: keep && prev ? prev.other : '',
+          text: String(err.raw),
+          sent: keep && prev?.sent ? prev.sent : false,
+          sentCaption: keep && prev?.sent ? prev.sentCaption : '',
+        }));
+      }
       const text = String(err?.message || '分析失敗').split('\n')[0].slice(0, 180);
-      setMsg(logToTelegram && !/Telegram/.test(text) ? `${text} · Telegram 未發` : text);
+      setMsg(err?.raw ? '模型有回，但不是預期的 JSON。原文在下面，可自己改 caption。' : text);
+    } finally {
+      runLock.current = false;
+      setBusy(false);
+    }
+  };
+
+  const pushTelegram = async () => {
+    if (runLock.current || busy) return;
+    const caption = String(ready?.caption || '').trim();
+    if (!caption) {
+      setMsg('caption 是空的。Telegram 只會有照片、沒有說明，先寫一句再發。');
+      return;
+    }
+    if (!photos.length) {
+      setMsg('沒有照片可發');
+      return;
+    }
+    runLock.current = true;
+    setBusy(true);
+    setMsg('上傳 Telegram…');
+    try {
+      await sendTelegramPhotos({
+        photos,
+        caption,
+        topic: ready.topic || 'General',
+        mode: photos.length > 1 ? lifeMode : 'individual',
+      });
+      setReady((row) => (row ? { ...row, sent: true, sentCaption: caption } : row));
+      setMsg(`已發到 Telegram · ${ready.topic || 'General'}`);
+    } catch (err) {
+      setMsg(String(err?.message || 'Telegram 發送失敗').split('\n')[0].slice(0, 180));
     } finally {
       runLock.current = false;
       setBusy(false);
@@ -319,6 +398,7 @@ function LifePhotoPanel() {
             onChange={setWhenAt}
           />
           <div className="life-photo-bar">
+            <div className="life-photo-options">
             <label className="life-photo-check">
               <input
                 type="checkbox"
@@ -346,6 +426,8 @@ function LifePhotoPanel() {
                 <option value="individual">分張</option>
               </select>
             ) : null}
+            </div>
+            <div className="life-photo-flags">
             <label className="ai-model-pick">
               模型
               <select value={prefer} disabled={busy} onChange={(e) => pickModel(e.target.value)}>
@@ -356,29 +438,58 @@ function LifePhotoPanel() {
                 ))}
               </select>
             </label>
+            <label className="life-photo-check">
+              <input
+                type="checkbox"
+                checked={rotate}
+                disabled={busy}
+                onChange={(e) => toggleRotate(e.target.checked)}
+              />
+              自動輪試
+            </label>
+            <label className="life-photo-check">
+              <input
+                type="checkbox"
+                checked={rememberModel}
+                disabled={busy}
+                onChange={(e) => toggleRemember(e.target.checked)}
+              />
+              選擇後保存
+            </label>
+            </div>
+            <div className="life-photo-actions">
             <button
               type="button"
-              className="camera-ai-btn"
+              className="life-photo-action is-go"
               disabled={busy || !logToTelegram}
-              onClick={runRecord}
+              onClick={() => runRecord()}
             >
+              <svg viewBox="0 0 16 16" aria-hidden="true">
+                <path fill="currentColor" stroke="none" d="M8 1.2l1.1 3.2h3.4L10.2 6.6l1.1 3.2L8 7.8 4.7 9.8l1.1-3.2L3.5 4.4h3.4L8 1.2z" />
+                <path d="M3.2 12.4h9.6M4.6 14.2h6.8" />
+              </svg>
               {busy ? '辨識中…' : '分析照片'}
             </button>
             <button
               type="button"
-              className="photo-ai-btn"
+              className="life-photo-action"
               disabled={busy || !logToTelegram}
               onClick={openPrompt}
             >
+              <svg viewBox="0 0 16 16" aria-hidden="true">
+                <path d="M3 2.5h7.2L13 5.3V13.5H3z" />
+                <path d="M10 2.6V5.4h2.8M5 8h6M5 10.5h4" />
+              </svg>
               確認 prompt
             </button>
+            </div>
           </div>
           {msg ? <p className="camera-ai-hint">{msg}</p> : null}
           <details className="ai-photo-prompt" ref={promptRef}>
             <summary>
               <span className="ai-photo-prompt-title">AI prompt</span>
               <span className="ai-photo-prompt-sub">
-                {logToTelegram ? '記錄 · 送出時推 Telegram' : '記錄沒勾 · 不會推'}
+                {logToTelegram ? '回傳後可改，再上傳 Telegram' : '記錄沒勾 · 不會分析'}
               </span>
               {lifeTpl !== lifeSaved ? <span className="ai-photo-prompt-chip">未儲存</span> : null}
             </summary>
@@ -389,7 +500,7 @@ function LifePhotoPanel() {
                   type="button"
                   className="ai-prompt-send-btn"
                   disabled={busy || !logToTelegram}
-                  onClick={runRecord}
+                  onClick={() => runRecord()}
                 >
                   {busy ? '辨識中…' : '送出'}
                 </button>
@@ -591,17 +702,61 @@ function LifePhotoPanel() {
         <p className="camera-ai-hint">先拍照或從相冊選圖。勾記賬會進入記帳頁，上方可回到這裡。</p>
       )}
       {ready ? (
-        <button
-          type="button"
-          className="camera-ai-btn"
-          onClick={() => {
-            if (!openExpense(ready.caption, ready.photos, '說明已帶入。選分類後可記帳。', logToTelegram, whenAt)) {
-              setMsg('照片沒能帶進記帳，請再試一次');
-            }
-          }}
-        >
-          帶到記帳
-        </button>
+        <div className="life-photo-result">
+          <label className="life-photo-result-field">
+            caption
+            <textarea
+              rows={4}
+              value={ready.caption}
+              spellCheck={false}
+              onChange={(e) => setReady((row) => (row ? { ...row, caption: e.target.value } : row))}
+            />
+          </label>
+          <label className="life-photo-result-field">
+            topic
+            <select
+              value={ready.topic}
+              onChange={(e) => setReady((row) => (row ? { ...row, topic: e.target.value } : row))}
+            >
+              {TELEGRAM_TOPICS.map((topic) => (
+                <option key={topic} value={topic}>
+                  {topic}
+                </option>
+              ))}
+            </select>
+          </label>
+          {ready.other ? <p className="camera-ai-hint">other：{ready.other}</p> : null}
+          <p className="camera-ai-hint">
+            {ready.sent
+              ? `已發到 Telegram 的 caption：${ready.sentCaption || '（空白）'}`
+              : '還沒發到 Telegram'}
+          </p>
+          {ready.text ? (
+            <details className="ai-suggest-prompt-wrap">
+              <summary>模型原文</summary>
+              <pre className="ai-suggest-prompt">{ready.text}</pre>
+            </details>
+          ) : null}
+          <div className="life-photo-result-actions">
+            <button type="button" className="camera-ai-btn" disabled={busy} onClick={pushTelegram}>
+              {ready.sent ? '再上傳 Telegram' : '上傳 Telegram'}
+            </button>
+            <button type="button" className="camera-ai-btn" disabled={busy} onClick={() => runRecord({ keep: true })}>
+              {busy ? '辨識中…' : '再 prompt'}
+            </button>
+          </div>
+          <button
+            type="button"
+            className="camera-ai-btn"
+            onClick={() => {
+              if (!openExpense(ready.caption, photos, '說明已帶入。選分類後可記帳。', logToTelegram, whenAt)) {
+                setMsg('照片沒能帶進記帳，請再試一次');
+              }
+            }}
+          >
+            帶到記帳
+          </button>
+        </div>
       ) : null}
     </div>
   );

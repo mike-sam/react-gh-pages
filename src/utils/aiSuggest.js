@@ -462,6 +462,7 @@ const aiKeys = {
   geminiModel: '',
   openaiModel: DEFAULT_OPENAI_MODEL,
   prefer: 'gemini',
+  rotate: false,
 };
 
 function canonicalizeGeminiModel(name) {
@@ -477,20 +478,29 @@ function canonicalizeGeminiModel(name) {
   return /^gemini-[\w.-]+$/.test(slug) ? slug : 'gemini-3.5-flash-lite';
 }
 
-function geminiBrowserModels(preferred) {
-  const p = canonicalizeGeminiModel(preferred);
-  const out = [];
-  const push = (m) => {
-    if (m && out.indexOf(m) === -1) out.push(m);
-  };
-  push(p || 'gemini-3.5-flash-lite');
-  push('gemini-3.5-flash-lite');
-  return out;
+function currentPreferValue() {
+  const which = aiKeys.prefer === 'openai' ? 'openai' : 'gemini';
+  const id = which === 'openai' ? aiKeys.openaiModel || DEFAULT_OPENAI_MODEL : canonicalizeGeminiModel(aiKeys.geminiModel);
+  return `${which}:${id}`;
 }
 
-function aiProviderOrder() {
-  const first = aiKeys.prefer === 'openai' ? 'openai' : 'gemini';
-  return first === 'openai' ? ['openai', 'gemini'] : ['gemini', 'openai'];
+function modelsToTry() {
+  const first = aiKeys.prefer === 'openai'
+    ? { provider: 'openai', id: aiKeys.openaiModel || DEFAULT_OPENAI_MODEL }
+    : { provider: 'gemini', id: canonicalizeGeminiModel(aiKeys.geminiModel) };
+  const usable = (row) => (row.provider === 'gemini' && aiKeys.gemini) || (row.provider === 'openai' && aiKeys.openai);
+  if (!aiKeys.rotate) return usable(first) ? [first] : [];
+  const list = aiPromptSnapshot?.models?.length ? aiPromptSnapshot.models : DEFAULT_AI_MODELS;
+  const chain = [];
+  const push = (row) => {
+    if (!usable(row)) return;
+    const id = row.provider === 'gemini' ? canonicalizeGeminiModel(row.id) : row.id;
+    if (chain.some((item) => item.provider === row.provider && item.id === id)) return;
+    chain.push({ provider: row.provider, id });
+  };
+  push(first);
+  list.forEach(push);
+  return chain;
 }
 
 async function fetchJson(url, init, timeoutMs) {
@@ -873,6 +883,7 @@ async function callGeminiBrowser({ apiKey, models, mimeType, base64, prompt, bud
 
 async function callOpenAiBrowser({ apiKey, model, mimeType, base64, prompt, timeoutMs, images, detail }) {
   const m = String(model || '').trim() || DEFAULT_OPENAI_MODEL;
+  const textPrompt = /json/i.test(String(prompt || '')) ? prompt : `${prompt}\n只回 json。`;
   const body = {
     model: m,
     temperature: 0.2,
@@ -882,7 +893,7 @@ async function callOpenAiBrowser({ apiKey, model, mimeType, base64, prompt, time
       {
         role: 'user',
         content: [
-          { type: 'text', text: prompt },
+          { type: 'text', text: textPrompt },
           {
             type: 'image_url',
             image_url: {
@@ -931,6 +942,56 @@ async function callOpenAiBrowser({ apiKey, model, mimeType, base64, prompt, time
   }
 }
 
+async function runModelChain({ mimeType, base64, images, prompt, schema, geminiMs, openaiMs }) {
+  const chain = modelsToTry();
+  if (!chain.length) {
+    const err = new Error('沒有可用的模型。按「讀取設定」才會打 getAiPrompt。這次沒送到模型，Telegram 也不會發');
+    err.submitted = false;
+    throw err;
+  }
+  const tried = [];
+  const errors = [];
+  for (let i = 0; i < chain.length; i += 1) {
+    const row = chain[i];
+    try {
+      if (row.provider === 'gemini') {
+        if (!aiKeys.gemini) throw new Error('沒有 Gemini key');
+        const gemini = await callGeminiBrowser({
+          apiKey: aiKeys.gemini,
+          models: [canonicalizeGeminiModel(row.id)],
+          mimeType,
+          base64,
+          images,
+          prompt,
+          schema,
+          budgetMs: geminiMs || GEMINI_BUDGET_MS,
+        });
+        return { text: gemini.text, model: gemini.model, tried: tried.concat(gemini.tried || [row.id]) };
+      }
+      if (!aiKeys.openai) throw new Error('沒有 OpenAI key');
+      const openai = await callOpenAiBrowser({
+        apiKey: aiKeys.openai,
+        model: row.id,
+        mimeType,
+        base64,
+        images,
+        detail: 'auto',
+        prompt,
+        timeoutMs: openaiMs || OPENAI_BUDGET_MS,
+      });
+      return { text: openai.text, model: openai.model, tried: tried.concat(openai.model) };
+    } catch (err) {
+      tried.push(row.id);
+      errors.push(String(err?.message || err || '模型失敗'));
+      if (!aiKeys.rotate) break;
+    }
+  }
+  const err = new Error(errors.filter(Boolean).join(' · ') || '模型沒回');
+  err.submitted = true;
+  err.tried = tried;
+  throw err;
+}
+
 async function photoHash(b64) {
   try {
     const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(String(b64 || '').slice(0, 12000)));
@@ -957,10 +1018,12 @@ export async function loadAiPrompt() {
   aiKeys.geminiModel = canonicalizeGeminiModel(data.model);
   aiKeys.openaiModel = String(data.openaiModel || '').trim() || DEFAULT_OPENAI_MODEL;
   const preferRaw = String(data.prefer || '').trim();
-  const preferSep = preferRaw.indexOf(':');
+  aiKeys.rotate = preferRaw === 'auto' || preferRaw.endsWith('|rotate');
+  const preferCore = preferRaw.replace(/\|rotate$/, '');
+  const preferSep = preferCore.indexOf(':');
   if (preferSep > 0) {
-    aiKeys.prefer = preferRaw.slice(0, preferSep) === 'openai' ? 'openai' : 'gemini';
-    const preferId = preferRaw.slice(preferSep + 1);
+    aiKeys.prefer = preferCore.slice(0, preferSep) === 'openai' ? 'openai' : 'gemini';
+    const preferId = preferCore.slice(preferSep + 1);
     if (aiKeys.prefer === 'openai' && preferId) aiKeys.openaiModel = preferId;
     if (aiKeys.prefer === 'gemini' && preferId) aiKeys.geminiModel = canonicalizeGeminiModel(preferId);
   }
@@ -981,7 +1044,8 @@ export async function loadAiPrompt() {
     model: aiKeys.geminiModel,
     models: parseAiModels(data.models),
     prompts: parsePromptLibrary(promptsRaw, stored || data.defaultTemplate || DEFAULT_RECEIPT_PROMPT_TEMPLATE),
-    prefer: `${aiKeys.prefer}:${aiKeys.prefer === 'openai' ? aiKeys.openaiModel : aiKeys.geminiModel}`,
+    prefer: currentPreferValue(),
+    rotate: aiKeys.rotate,
     hasGemini: Boolean(aiKeys.gemini),
     hasOpenAI: Boolean(aiKeys.openai),
   };
@@ -989,17 +1053,47 @@ export async function loadAiPrompt() {
   return result;
 }
 
-export async function saveAiModelChoice(provider, id) {
+export function applyAiModelChoice(provider, id, rotate) {
   const which = provider === 'openai' ? 'openai' : 'gemini';
   const modelId = String(id || '').trim();
   if (!modelId) throw new Error('沒有模型');
   aiKeys.prefer = which;
+  aiKeys.rotate = rotate == null ? Boolean(aiKeys.rotate) : Boolean(rotate);
   if (which === 'openai') aiKeys.openaiModel = modelId;
   else aiKeys.geminiModel = canonicalizeGeminiModel(modelId);
-  const value = `${which}:${which === 'gemini' ? aiKeys.geminiModel : aiKeys.openaiModel}`;
+  const shown = currentPreferValue();
+  if (aiPromptSnapshot) {
+    aiPromptSnapshot.prefer = shown;
+    aiPromptSnapshot.rotate = aiKeys.rotate;
+  }
+  return shown;
+}
+
+const REMEMBER_MODEL_KEY = 'aiRememberModel';
+
+export function loadRememberModel() {
+  try {
+    return sessionStorage.getItem(REMEMBER_MODEL_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export function saveRememberModel(on) {
+  try {
+    if (on) sessionStorage.setItem(REMEMBER_MODEL_KEY, '1');
+    else sessionStorage.removeItem(REMEMBER_MODEL_KEY);
+  } catch {
+    /* 只記這次分頁 */
+  }
+}
+
+export async function saveAiModelChoice(provider, id, rotate) {
+  const shown = applyAiModelChoice(provider, id, rotate);
+  const value = `${shown}${aiKeys.rotate ? '|rotate' : ''}`;
   const data = await postGasJson({ action: 'setKeyValue', group: 'AI', key: 'Prefer', value }, 20000);
   if (!data || data.success !== true) throw new Error(data?.error || '模型沒寫進設定');
-  return value;
+  return shown;
 }
 
 export async function savePromptLibrary(list) {
@@ -1055,68 +1149,21 @@ export async function analyzeReceiptPhoto(photo, { tag, title, promptTemplate, w
     fail(new Error('按「讀取設定」才會打 getAiPrompt。這次沒送到模型，Telegram 也不會發'), '', false);
   }
 
-  let lastErr = '';
-  const runGemini = async () => {
-    const gemini = await callGeminiBrowser({
-      apiKey: aiKeys.gemini,
-      models: geminiBrowserModels(aiKeys.geminiModel),
-      mimeType,
-      base64,
-      prompt,
-      budgetMs: GEMINI_BUDGET_MS,
-      schema,
-      images,
-    });
-    tried.push(...(gemini.tried || [gemini.model]));
+  try {
+    const run = await runModelChain({ mimeType, base64, images, prompt, schema });
+    tried.push(...(run.tried || []));
     return {
-      suggestions: parseAiSuggestions(gemini.text),
-      text: gemini.text,
-      model: gemini.model,
+      suggestions: parseAiSuggestions(run.text),
+      text: run.text,
+      model: run.model,
       tried,
       prompt,
       photoHash: await photoHash(base64),
     };
-  };
-  const runOpenAi = async () => {
-    const openai = await callOpenAiBrowser({
-      apiKey: aiKeys.openai,
-      model: aiKeys.openaiModel,
-      mimeType,
-      base64,
-      prompt,
-      timeoutMs: OPENAI_BUDGET_MS,
-      images,
-    });
-    tried.push(openai.model);
-    return {
-      suggestions: parseAiSuggestions(openai.text),
-      text: openai.text,
-      model: openai.model,
-      tried,
-      prompt,
-      photoHash: await photoHash(base64),
-    };
-  };
-  for (const provider of aiProviderOrder()) {
-    if (provider === 'gemini' && aiKeys.gemini) {
-      try {
-        return await runGemini();
-      } catch (err) {
-        tried.push(...(err?.tried || ['gemini']));
-        lastErr = String(err?.message || err || 'Gemini 失敗');
-      }
-    }
-    if (provider === 'openai' && aiKeys.openai) {
-      try {
-        return await runOpenAi();
-      } catch (err) {
-        tried.push(aiKeys.openaiModel || DEFAULT_OPENAI_MODEL);
-        lastErr = [lastErr, String(err?.message || err || 'OpenAI 失敗')].filter(Boolean).join(' · ');
-      }
-    }
+  } catch (err) {
+    tried.push(...(err?.tried || []));
+    fail(err, (err?.tried || [])[err?.tried?.length - 1] || '', err?.submitted !== false);
   }
-
-  fail(new Error(lastErr || 'AI 建議失敗'), tried[tried.length - 1] || '', true);
 }
 
 export function recordAiSuggestion(body) {
@@ -1416,43 +1463,21 @@ export async function analyzeLifePhoto(photos, prompt) {
   }
   const mimeType = photo.type || 'image/jpeg';
   const images = list.slice(1).map((p) => ({ mimeType: p.type || 'image/jpeg', base64: p.base64 }));
-  let text = '';
-  let geminiErr = '';
-  for (const provider of aiProviderOrder()) {
-    if (text) break;
-    if (provider === 'gemini' && aiKeys.gemini) {
-      try {
-        const gemini = await callGeminiBrowser({
-          apiKey: aiKeys.gemini,
-          models: geminiBrowserModels(aiKeys.geminiModel),
-          mimeType,
-          base64: photo.base64,
-          images,
-          prompt,
-          schema: false,
-          budgetMs: 22000,
-        });
-        text = gemini.text;
-      } catch (err) {
-        geminiErr = String(err?.message || err || '');
-      }
-    }
-    if (provider === 'openai' && aiKeys.openai && !text) {
-      const openai = await callOpenAiBrowser({
-        apiKey: aiKeys.openai,
-        model: aiKeys.openaiModel,
-        mimeType,
-        base64: photo.base64,
-        images,
-        detail: 'auto',
-        prompt,
-        timeoutMs: 25000,
-      });
-      text = openai.text;
-    }
+  const run = await runModelChain({
+    mimeType,
+    base64: photo.base64,
+    images,
+    prompt,
+    schema: false,
+    geminiMs: 22000,
+    openaiMs: 25000,
+  });
+  try {
+    return { ...parseLifePhotoJson(run.text), text: run.text };
+  } catch (err) {
+    err.raw = run.text;
+    throw err;
   }
-  if (!text) throw new Error(geminiErr || '按「讀取設定」才會打 getAiPrompt');
-  return parseLifePhotoJson(text);
 }
 
 export async function sendTelegramPhotos({ photos, caption, topic, mode }) {

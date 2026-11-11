@@ -23,6 +23,7 @@ import {
   formatAiFallbackCopy,
   formatWhen,
   loadAiPrompt,
+  loadRememberModel,
   peekAiPrompt,
   parseAiSuggestions,
   parseLifePhotoJson,
@@ -33,7 +34,9 @@ import {
   receiptPromptFor,
   receiptPromptParts,
   resolveSuggestionTimes,
+  applyAiModelChoice,
   saveAiModelChoice,
+  saveRememberModel,
   savePromptLibrary,
   sendTelegramPhotos,
   suggestionSummary,
@@ -100,6 +103,7 @@ function expenseAiSeed() {
     template: cached?.template || general?.template || DEFAULT_RECEIPT_PROMPT_TEMPLATE,
     models: cached?.models?.length ? cached.models : DEFAULT_AI_MODELS,
     prefer: cached?.prefer || 'gemini:gemini-3.5-flash-lite',
+    rotate: Boolean(cached?.rotate),
   };
 }
 
@@ -188,7 +192,14 @@ function ExpensePage() {
   const [aiPaste, setAiPaste] = useState('');
   const [aiPromptView, setAiPromptView] = useState('edit');
   const [aiModels, setAiModels] = useState(aiSeed.models);
-  const [aiPrefer, setAiPrefer] = useState(aiSeed.prefer);
+  const aiSeedPrefer = String(aiSeed.prefer || '');
+  const [aiPrefer, setAiPrefer] = useState(
+    aiSeedPrefer.includes(':') ? aiSeedPrefer.split('|')[0] : 'gemini:gemini-3.5-flash-lite'
+  );
+  const [aiRotate, setAiRotate] = useState(
+    Boolean(aiSeed.rotate) || aiSeedPrefer === 'auto' || aiSeedPrefer.endsWith('|rotate')
+  );
+  const [aiRememberModel, setAiRememberModel] = useState(() => loadRememberModel());
   const [aiPrompts, setAiPrompts] = useState(aiSeed.prompts);
   const [aiPromptId, setAiPromptId] = useState('');
   const [aiPromptScope, setAiPromptScope] = useState('any');
@@ -248,7 +259,8 @@ function ExpensePage() {
         setAiMeta((m) => (m.model ? m : { ...m, model: data.model }));
       }
       if (Array.isArray(data.models) && data.models.length) setAiModels(data.models);
-      if (data.prefer) setAiPrefer(data.prefer);
+      if (data.prefer) setAiPrefer(String(data.prefer).split('|')[0]);
+      setAiRotate(Boolean(data.rotate));
       if (Array.isArray(data.prompts) && data.prompts.length) setAiPrompts(data.prompts);
       const bits = [];
       if (data.hasGemini) bits.push('Gemini');
@@ -274,9 +286,46 @@ function ExpensePage() {
     if (sep < 1) return;
     setAiPrefer(value);
     try {
-      const saved = await saveAiModelChoice(value.slice(0, sep), value.slice(sep + 1));
+      const saved = aiRememberModel
+        ? await saveAiModelChoice(value.slice(0, sep), value.slice(sep + 1), aiRotate)
+        : applyAiModelChoice(value.slice(0, sep), value.slice(sep + 1), aiRotate);
       setAiPrefer(saved);
-      setAiTplMsg('模型已存');
+      if (aiRememberModel) {
+        setAiTplMsg('模型已存');
+        window.setTimeout(() => setAiTplMsg(''), 1600);
+      }
+    } catch (err) {
+      setAiTplMsg(String(err.message || '模型沒存成').slice(0, 80));
+    }
+  };
+
+  const toggleAiRotate = async (checked) => {
+    const sep = String(aiPrefer || '').indexOf(':');
+    if (sep < 1) return;
+    setAiRotate(checked);
+    try {
+      if (aiRememberModel) await saveAiModelChoice(aiPrefer.slice(0, sep), aiPrefer.slice(sep + 1), checked);
+      else applyAiModelChoice(aiPrefer.slice(0, sep), aiPrefer.slice(sep + 1), checked);
+      setAiTplMsg(checked ? '先用這個模型，失敗再試下一個' : '只用這個模型');
+      window.setTimeout(() => setAiTplMsg(''), 1600);
+    } catch (err) {
+      setAiTplMsg(String(err.message || '模型沒存成').slice(0, 80));
+    }
+  };
+
+  const toggleAiRemember = async (checked) => {
+    setAiRememberModel(checked);
+    saveRememberModel(checked);
+    if (!checked) {
+      setAiTplMsg('這次更換不寫進試算表');
+      window.setTimeout(() => setAiTplMsg(''), 1600);
+      return;
+    }
+    const sep = String(aiPrefer || '').indexOf(':');
+    if (sep < 1) return;
+    try {
+      await saveAiModelChoice(aiPrefer.slice(0, sep), aiPrefer.slice(sep + 1), aiRotate);
+      setAiTplMsg('已存。之後更換也會寫進設定');
       window.setTimeout(() => setAiTplMsg(''), 1600);
     } catch (err) {
       setAiTplMsg(String(err.message || '模型沒存成').slice(0, 80));
@@ -1556,7 +1605,7 @@ function ExpensePage() {
                   ) : null}
                 </div>
               ) : null}
-              <label className="ai-model-pick">
+              <div className="ai-model-pick">
                 模型
                 <select value={aiPrefer} onChange={(e) => pickAiModel(e.target.value)}>
                   {aiModels.map((model) => (
@@ -1565,7 +1614,23 @@ function ExpensePage() {
                     </option>
                   ))}
                 </select>
-              </label>
+                <label className="life-photo-check">
+                  <input
+                    type="checkbox"
+                    checked={aiRotate}
+                    onChange={(e) => toggleAiRotate(e.target.checked)}
+                  />
+                  自動輪試
+                </label>
+                <label className="life-photo-check">
+                  <input
+                    type="checkbox"
+                    checked={aiRememberModel}
+                    onChange={(e) => toggleAiRemember(e.target.checked)}
+                  />
+                  選擇後保存
+                </label>
+              </div>
               {aiAskIndex >= 0 ? (
                 <div className="ai-prompt-send">
                   <span>還沒送出。可先看 Preview 或改 Edit，按送出才會用 token。</span>
