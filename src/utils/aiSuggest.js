@@ -806,6 +806,44 @@ export function parseAiSuggestions(text) {
   return best;
 }
 
+function finiteCount(n) {
+  const v = Number(n);
+  return Number.isFinite(v) ? v : null;
+}
+
+function usageTriplet(input, output, total) {
+  const i = finiteCount(input);
+  const o = finiteCount(output);
+  const t = finiteCount(total);
+  if (i == null && o == null && t == null) return null;
+  return {
+    input: i,
+    output: o,
+    total: t != null ? t : i != null && o != null ? i + o : null,
+  };
+}
+
+function usageFromGemini(data) {
+  const u = data && data.usageMetadata;
+  if (!u) return null;
+  const thoughts = finiteCount(u.thoughtsTokenCount) || 0;
+  const candidates = finiteCount(u.candidatesTokenCount);
+  const output = candidates == null ? thoughts || null : candidates + thoughts;
+  return usageTriplet(u.promptTokenCount, output, u.totalTokenCount);
+}
+
+function usageFromChat(data) {
+  const u = data && data.usage;
+  if (!u) return null;
+  return usageTriplet(u.prompt_tokens, u.completion_tokens, u.total_tokens);
+}
+
+export function formatTokenUsage(usage) {
+  if (!usage) return '';
+  const n = (v) => (v == null ? '—' : String(v));
+  return `input ${n(usage.input)} / output ${n(usage.output)} / total ${n(usage.total)}`;
+}
+
 function extractGeminiText(data) {
   const parts = ((((data || {}).candidates || [])[0] || {}).content || {}).parts || [];
   let out = '';
@@ -876,7 +914,7 @@ async function callGeminiBrowser({ apiKey, models, mimeType, base64, prompt, bud
         }
       }
       if (res.ok && res.data) {
-        return { text: extractGeminiText(res.data), model: m, tried };
+        return { text: extractGeminiText(res.data), model: m, tried, usage: usageFromGemini(res.data) };
       }
       lastErr = geminiHttpError(res.status, res.data, res.text);
       if (res.status === 401 || res.status === 403) break;
@@ -957,7 +995,7 @@ async function callOpenAiBrowser({ apiKey, model, mimeType, base64, prompt, time
     if (!res.ok) throw new Error(`OpenAI HTTP ${res.status}${msg ? `: ${msg}` : ''}`);
     const text = String(((((res.data || {}).choices || [])[0] || {}).message || {}).content || '');
     if (!text.trim()) throw new Error('OpenAI 無內容');
-    return { text, model: m };
+    return { text, model: m, usage: usageFromChat(res.data) };
   } catch (err) {
     const msg = String(err?.message || err || '');
     if (err?.name === 'AbortError' || /aborted/i.test(msg)) throw new Error('OpenAI 逾時');
@@ -1005,7 +1043,7 @@ async function callMistralBrowser({ apiKey, model, mimeType, base64, prompt, tim
     }
     const text = String(((((res.data || {}).choices || [])[0] || {}).message || {}).content || '');
     if (!text.trim()) throw new Error('Mistral 無內容');
-    return { text, model: m };
+    return { text, model: m, usage: usageFromChat(res.data) };
   } catch (err) {
     const msg = String(err?.message || err || '');
     if (err?.name === 'AbortError' || /aborted/i.test(msg)) throw new Error('Mistral 逾時');
@@ -1038,7 +1076,7 @@ async function runModelChain({ mimeType, base64, images, prompt, schema, geminiM
           schema,
           budgetMs: geminiMs || GEMINI_BUDGET_MS,
         });
-        return { text: gemini.text, model: gemini.model, tried: tried.concat(gemini.tried || [row.id]) };
+        return { text: gemini.text, model: gemini.model, usage: gemini.usage || null, tried: tried.concat(gemini.tried || [row.id]) };
       }
       if (row.provider === 'mistral') {
         if (!aiKeys.mistral) throw new Error('沒有 Mistral key');
@@ -1051,7 +1089,7 @@ async function runModelChain({ mimeType, base64, images, prompt, schema, geminiM
           prompt,
           timeoutMs: openaiMs || OPENAI_BUDGET_MS,
         });
-        return { text: mistral.text, model: mistral.model, tried: tried.concat(mistral.model) };
+        return { text: mistral.text, model: mistral.model, usage: mistral.usage || null, tried: tried.concat(mistral.model) };
       }
       if (!aiKeys.openai) throw new Error('沒有 OpenAI key');
       const openai = await callOpenAiBrowser({
@@ -1064,7 +1102,7 @@ async function runModelChain({ mimeType, base64, images, prompt, schema, geminiM
         prompt,
         timeoutMs: openaiMs || OPENAI_BUDGET_MS,
       });
-      return { text: openai.text, model: openai.model, tried: tried.concat(openai.model) };
+      return { text: openai.text, model: openai.model, usage: openai.usage || null, tried: tried.concat(openai.model) };
     } catch (err) {
       tried.push(row.id);
       errors.push(String(err?.message || err || '模型失敗'));
@@ -1214,6 +1252,17 @@ export function aiModelStatusLabel(models, prefer) {
   return `${who} ${hit.label}${hit.tier ? ` · ${hit.tier}` : ''}`;
 }
 
+/** 這次真正回 caption 的模型。找不到名單就用 id。 */
+export function aiModelAnswerLabel(modelId) {
+  const id = String(modelId || '').trim();
+  if (!id) return '';
+  const models = aiPromptSnapshot?.models || [];
+  const hit = models.find((row) => row.id === id || `${row.provider}:${row.id}` === id);
+  if (!hit) return id;
+  const who = hit.provider === 'openai' ? 'OpenAI' : hit.provider === 'mistral' ? 'Mistral' : 'Gemini';
+  return `${who} ${hit.label || hit.id}`;
+}
+
 export function applyAiModelChoice(provider, id, rotate) {
   const which = provider === 'openai' || provider === 'mistral' ? provider : 'gemini';
   const modelId = String(id || '').trim();
@@ -1319,6 +1368,7 @@ export async function analyzeReceiptPhoto(photo, { tag, title, promptTemplate, w
       suggestions: parseAiSuggestions(run.text),
       text: run.text,
       model: run.model,
+      usage: run.usage || null,
       tried,
       prompt,
       photoHash: await photoHash(base64),
@@ -1636,14 +1686,21 @@ export async function analyzeLifePhoto(photos, prompt) {
     openaiMs: 25000,
   });
   try {
-    return { ...parseLifePhotoJson(run.text), text: run.text };
+    return {
+      ...parseLifePhotoJson(run.text),
+      text: run.text,
+      model: run.model || '',
+      usage: formatTokenUsage(run.usage),
+    };
   } catch (err) {
     err.raw = run.text;
+    err.model = run.model || '';
+    err.usage = formatTokenUsage(run.usage);
     throw err;
   }
 }
 
-export async function sendTelegramPhotos({ photos, caption, topic, mode }) {
+export async function sendTelegramPhotos({ photos, caption, topic, mode, model, usage }) {
   const data = await postGasJson(
     {
       action: 'sendTelegram',
@@ -1651,6 +1708,8 @@ export async function sendTelegramPhotos({ photos, caption, topic, mode }) {
       caption: caption || '',
       topic: topic || 'General',
       mode: mode || '',
+      model: model || '',
+      usage: usage || '',
     },
     90000
   );

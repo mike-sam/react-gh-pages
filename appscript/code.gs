@@ -1278,12 +1278,38 @@ function handleSendTelegram(data) {
         sendOne(blobs[s], s === 0 || mode === 'individual' ? caption : '');
       }
     }
+    var modelNote = String(data.model || '').trim();
+    var usageNote = String(data.usage || '').trim();
+    var noteLines = [];
+    if (modelNote) noteLines.push('模型：' + modelNote);
+    if (usageNote) noteLines.push('token：' + usageNote);
+    var modelSent = false;
+    var modelError = '';
+    if (noteLines.length) {
+      try {
+        var textPayload = { chat_id: chatId, text: noteLines.join('\n').slice(0, 500) };
+        if (thread) textPayload.message_thread_id = thread;
+        var textRes = UrlFetchApp.fetch(api + 'sendMessage', {
+          method: 'post',
+          contentType: 'application/json',
+          payload: JSON.stringify(textPayload),
+          muteHttpExceptions: true
+        });
+        var textJson = JSON.parse(textRes.getContentText() || '{}');
+        if (!textJson.ok) modelError = String(textJson.description || 'sendMessage 失敗');
+        else modelSent = true;
+      } catch (textErr) {
+        modelError = textErr.toString();
+      }
+    }
     return jsonOut({
       success: true,
       mode: mode,
       topic: data.topic || 'General',
       threadId: thread || '*1',
-      urls: urls
+      urls: urls,
+      modelSent: modelSent,
+      modelError: modelError
     });
   } catch (error) {
     appendLog(['sendTelegram', error.toString()]);

@@ -18,6 +18,7 @@ import {
   lifePromptVars,
   DEFAULT_AI_MODELS,
   defaultPromptLibrary,
+  aiModelAnswerLabel,
   aiModelStatusLabel,
   loadAiPrompt,
   loadRememberModel,
@@ -310,6 +311,8 @@ function LifePhotoPanel() {
         topic: parsed.topic || 'General',
         other: parsed.other || '',
         text: parsed.text || '',
+        model: aiModelAnswerLabel(parsed.model),
+        usage: parsed.usage || '',
         sent: keep && prev?.sent ? prev.sent : false,
         sentCaption: keep && prev?.sent ? prev.sentCaption : '',
       }));
@@ -322,6 +325,8 @@ function LifePhotoPanel() {
           topic: keep && prev ? prev.topic : 'General',
           other: keep && prev ? prev.other : '',
           text: String(err.raw),
+          model: aiModelAnswerLabel(err.model) || (keep && prev ? prev.model : ''),
+          usage: err.usage || (keep && prev ? prev.usage : ''),
           sent: keep && prev?.sent ? prev.sent : false,
           sentCaption: keep && prev?.sent ? prev.sentCaption : '',
         }));
@@ -349,14 +354,21 @@ function LifePhotoPanel() {
     setBusy(true);
     setMsg('上傳 Telegram…');
     try {
-      await sendTelegramPhotos({
+      const sent = await sendTelegramPhotos({
         photos,
         caption,
         topic: ready.topic || 'General',
         mode: photos.length > 1 ? lifeMode : 'individual',
+        model: ready.model || '',
+        usage: ready.usage || '',
       });
       setReady((row) => (row ? { ...row, sent: true, sentCaption: caption } : row));
-      setMsg(`已發到 Telegram · ${ready.topic || 'General'}`);
+      const modelNote = sent?.modelSent
+        ? ` · 已另發模型：${ready.model}`
+        : ready.model
+          ? ' · 照片已發，模型名稱沒送出'
+          : '';
+      setMsg(`已發到 Telegram · ${ready.topic || 'General'}${modelNote}`);
     } catch (err) {
       setMsg(String(err?.message || 'Telegram 發送失敗').split('\n')[0].slice(0, 180));
     } finally {
@@ -704,6 +716,8 @@ function LifePhotoPanel() {
       )}
       {ready ? (
         <div className="life-photo-result">
+          {ready.model ? <p className="camera-ai-hint">模型：{ready.model}</p> : null}
+          {ready.usage ? <p className="camera-ai-hint">token：{ready.usage}</p> : null}
           <label className="life-photo-result-field">
             caption
             <textarea

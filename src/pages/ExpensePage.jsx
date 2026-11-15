@@ -14,6 +14,7 @@ import CameraAICapture from '../components/CameraAICapture';
 import ReceiptPhotoEditor from '../components/ReceiptPhotoEditor';
 import { useOfflineQueue } from '../context/QueueContext';
 import {
+  aiModelAnswerLabel,
   aiModelStatusLabel,
   analyzeReceiptPhoto,
   applyAiSuggestion,
@@ -22,6 +23,7 @@ import {
   DEFAULT_RECEIPT_PROMPT_TEMPLATE,
   formatAiCurlCopy,
   formatAiFallbackCopy,
+  formatTokenUsage,
   formatWhen,
   loadAiPrompt,
   loadRememberModel,
@@ -505,17 +507,23 @@ function ExpensePage() {
         } else {
           try {
             const life = parseLifePhotoJson(result.text || '');
-            await sendTelegramPhotos({
+            const sent = await sendTelegramPhotos({
               photos: shots,
               caption: life.caption,
               topic: life.topic,
               mode: shots.length > 1 ? 'album' : 'individual',
+              model: aiModelAnswerLabel(result.model),
+              usage: formatTokenUsage(result.usage),
             });
             if (life.caption) {
               setSimpleDescription((cur) => (String(cur || '').trim() ? cur : life.caption));
             }
-            setAiStatus(`已回傳 · 已推 Telegram · ${life.topic}`);
-            setAiTplMsg(`已推 Telegram · ${life.topic}`);
+            const usageBit = formatTokenUsage(result.usage);
+            const modelBit = sent?.modelSent
+              ? ` · 已另發模型：${aiModelAnswerLabel(result.model)}${usageBit ? ` · ${usageBit}` : ''}`
+              : '';
+            setAiStatus(`已回傳 · 已推 Telegram · ${life.topic}${modelBit}`);
+            setAiTplMsg(`已推 Telegram · ${life.topic}${modelBit}`);
           } catch (err) {
             setAiStatus('已回傳 · Telegram 沒推成');
             setAiError(`記帳建議已回來，Telegram 沒推成：${String(err?.message || err).split('\n')[0].slice(0, 120)}`);
