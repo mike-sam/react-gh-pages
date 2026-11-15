@@ -140,12 +140,18 @@ function AmountTripleRow({
   const handleClear = () => setAmount('');
   const handleBackspace = () => setAmount(amount.length > 0 ? amount.slice(0, -1) || '' : '');
   const handleDecimal = () => {
-    if (/[/+\-*÷×]/.test(amount)) {
-      setAmount(amount + '0.');
-      return;
-    }
-    if (amount.includes('.')) return;
-    setAmount(amount === '' || amount === '0' ? '0.' : amount + '.');
+    const expr = String(amount || '');
+    const lastOp = Math.max(
+      expr.lastIndexOf('+'),
+      expr.lastIndexOf('-'),
+      expr.lastIndexOf('×'),
+      expr.lastIndexOf('÷'),
+      expr.lastIndexOf('*'),
+      expr.lastIndexOf('/')
+    );
+    const tail = lastOp >= 0 ? expr.slice(lastOp + 1) : expr;
+    if (tail.includes('.')) return;
+    setAmount(tail === '' ? `${expr}0.` : `${expr}.`);
   };
 
   const closeDone = () => {

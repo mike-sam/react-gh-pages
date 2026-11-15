@@ -917,13 +917,16 @@ async function callOpenAiBrowser({ apiKey, model, mimeType, base64, prompt, time
         },
       })),
   ];
-  const makeBody = (tokenField) => ({
-    model: m,
-    temperature: 0.2,
-    [tokenField]: 2500,
-    response_format: { type: 'json_object' },
-    messages: [{ role: 'user', content }],
-  });
+  const makeBody = (tokenField, temperature) => {
+    const body = {
+      model: m,
+      [tokenField]: 2500,
+      response_format: { type: 'json_object' },
+      messages: [{ role: 'user', content }],
+    };
+    if (temperature != null) body.temperature = temperature;
+    return body;
+  };
   const post = (body) => fetchJson(
     'https://api.openai.com/v1/chat/completions',
     {
@@ -937,10 +940,18 @@ async function callOpenAiBrowser({ apiKey, model, mimeType, base64, prompt, time
     timeoutMs
   );
   try {
-    let res = await post(makeBody('max_tokens'));
+    let tokenField = 'max_tokens';
+    let temperature = 0.2;
+    let res = await post(makeBody(tokenField, temperature));
     let msg = String((res.data && res.data.error && res.data.error.message) || '').trim();
     if (!res.ok && /max_completion_tokens/i.test(msg)) {
-      res = await post(makeBody('max_completion_tokens'));
+      tokenField = 'max_completion_tokens';
+      res = await post(makeBody(tokenField, temperature));
+      msg = String((res.data && res.data.error && res.data.error.message) || '').trim();
+    }
+    if (!res.ok && /temperature/i.test(msg)) {
+      temperature = null;
+      res = await post(makeBody(tokenField, temperature));
       msg = String((res.data && res.data.error && res.data.error.message) || '').trim();
     }
     if (!res.ok) throw new Error(`OpenAI HTTP ${res.status}${msg ? `: ${msg}` : ''}`);

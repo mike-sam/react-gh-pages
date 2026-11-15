@@ -7987,6 +7987,16 @@ input,textarea {
   border-color: var(--accent, #1a73e8);
   color: var(--accent, #1a73e8);
 }
+.parking-map-action-btn.is-locate {
+  background: #1a73e8;
+  border-color: #1a73e8;
+  color: #fff;
+}
+.parking-map-action-btn.is-locate:hover:not(:disabled) {
+  background: #1765cc;
+  border-color: #1765cc;
+  color: #fff;
+}
 .parking-map-action-btn:disabled {
   opacity: 0.45;
   cursor: not-allowed;

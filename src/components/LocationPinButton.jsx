@@ -39,6 +39,7 @@ function LocationPinButton({ compact = false }) {
     setLocationMode,
   } = useSmartLocation();
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [gpsRequest, setGpsRequest] = useState(0);
   const [menuOpen, setMenuOpen] = useState(false);
   const [flash, setFlash] = useState('');
   const clickTimer = useRef(null);
@@ -148,6 +149,17 @@ function LocationPinButton({ compact = false }) {
             className="location-mode-item"
             onClick={() => {
               setMenuOpen(false);
+              setGpsRequest((n) => n + 1);
+              setPickerOpen(true);
+            }}
+          >
+            定位目前位置
+          </button>
+          <button
+            type="button"
+            className="location-mode-item"
+            onClick={() => {
+              setMenuOpen(false);
               setPickerOpen(true);
             }}
           >
@@ -181,6 +193,7 @@ function LocationPinButton({ compact = false }) {
         initialLabel={location?.label || ''}
         onClose={() => setPickerOpen(false)}
         onRefreshGps={refreshLocation}
+        requestGps={gpsRequest}
         onSave={(next) => {
           setCachedLocation({ ...next, manual: true });
           setLocationMode('cache');

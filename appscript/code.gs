@@ -928,6 +928,26 @@ function normalizeExpenseAmountToMyr(obj) {
   return obj;
 }
 
+function applyExpenseAliases_(obj) {
+  obj = obj || {};
+  if (!obj.tag && obj.cat) obj.tag = obj.cat;
+  if (!obj.title && (obj.subcat || obj.txt)) obj.title = obj.subcat || obj.txt;
+  var note = obj.remark || obj.desc || obj.description || '';
+  if (note && !obj.remark) obj.remark = note;
+  if (note && !obj.description) obj.description = note;
+  var pay = obj.payment_method || obj.paymentmethod || obj.paymentmethid || obj.payment || '';
+  if (pay && !obj.payment_method) obj.payment_method = pay;
+  if ((!obj.latitude || !obj.longitude) && obj.latlong) {
+    var parts = String(obj.latlong).split(',');
+    if (!obj.latitude) obj.latitude = String(parts[0] || '').trim();
+    if (!obj.longitude) obj.longitude = String(parts[1] || '').trim();
+  }
+  ['cat', 'subcat', 'txt', 'desc', 'latlong', 'paymentmethod', 'paymentmethid', 'payment'].forEach(function (k) {
+    delete obj[k];
+  });
+  return obj;
+}
+
 /**
  * 費用寫入：Replace Into + 附帶 Location / Mileage / Photo 副作用
  */
@@ -970,7 +990,7 @@ function handleUpsertExpense(data) {
     appendLog(['upsertExpense lock wait', lockErr.toString()]);
   }
   try {
-    const recordsData = {...data};
+    const recordsData = applyExpenseAliases_({ ...data });
     delete recordsData.action;
     delete recordsData.carPlate;
     delete recordsData.mileage;

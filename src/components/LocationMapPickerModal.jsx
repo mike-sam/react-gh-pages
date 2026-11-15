@@ -50,6 +50,7 @@ function LocationMapPickerModal({
   onClose,
   onSave,
   onRefreshGps,
+  requestGps = 0,
 }) {
   useHistoryOverlay(open, onClose);
 
@@ -188,7 +189,7 @@ function LocationMapPickerModal({
         setSelectedMatchId(null);
         setPosition([coords.lat, coords.lng]);
         setFocusNonce((n) => n + 1);
-        setGpsHint('已更新為 GPS 座標，可再拖曳微調');
+        setGpsHint('已更新為目前位置，可再拖曳微調');
         const hits = refreshMatches(coords.lat, coords.lng);
         applyMatchAutofill(hits, { force: true });
       }
@@ -198,6 +199,14 @@ function LocationMapPickerModal({
       setGpsLoading(false);
     }
   };
+
+  const gpsRequestRef = useRef(0);
+  useEffect(() => {
+    if (!open || !requestGps || requestGps === gpsRequestRef.current) return undefined;
+    gpsRequestRef.current = requestGps;
+    handleGps();
+    return undefined;
+  }, [open, requestGps]);
 
   const returnToPin = () => setFocusNonce((n) => n + 1);
 
@@ -389,7 +398,7 @@ function LocationMapPickerModal({
                 disabled={gpsLoading}
                 title="重新以 GPS 定位並移到標記"
               >
-                {gpsLoading ? '定位中…' : '📍 GPS'}
+                {gpsLoading ? '定位中…' : '定位目前位置'}
               </button>
             )}
             <a
@@ -471,13 +480,24 @@ function LocationMapPickerModal({
             </div>
 
             <div className="parking-map-actions" role="group" aria-label="地圖檢視">
+              {onRefreshGps && (
+                <button
+                  type="button"
+                  className="parking-map-action-btn is-locate"
+                  onClick={handleGps}
+                  disabled={gpsLoading}
+                  title="用 GPS 把標記移到目前位置"
+                >
+                  {gpsLoading ? '定位中…' : '定位目前位置'}
+                </button>
+              )}
               <button
                 type="button"
                 className="parking-map-action-btn"
                 onClick={returnToPin}
-                title="視角返回目前標記"
+                title="視角回到標記，不重新定位"
               >
-                返回定位
+                回到標記
               </button>
               <button
                 type="button"

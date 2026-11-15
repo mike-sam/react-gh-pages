@@ -98,23 +98,18 @@ const MobileCalculator = ({ amount, setAmount, currency, setCurrency, onAmountFo
   };
 
   const handleDecimal = () => {
-    // If there's an operator in the amount, add decimal to new number
-    if(/[/+\-*÷×]/.test(amount)) {
-      setAmount(amount + '0.');
-      return;
-    }
-
-    // Don't add decimal if it already exists
-    if (amount.includes('.')) {
-      return;
-    }
-
-    // If amount is empty or '0', start with '0.'
-    if (amount === '' || amount === '0') {
-      setAmount('0.');
-    } else {
-      setAmount(amount + '.');
-    }
+    const expr = String(amount || '');
+    const lastOp = Math.max(
+      expr.lastIndexOf('+'),
+      expr.lastIndexOf('-'),
+      expr.lastIndexOf('×'),
+      expr.lastIndexOf('÷'),
+      expr.lastIndexOf('*'),
+      expr.lastIndexOf('/')
+    );
+    const tail = lastOp >= 0 ? expr.slice(lastOp + 1) : expr;
+    if (tail.includes('.')) return;
+    setAmount(tail === '' ? `${expr}0.` : `${expr}.`);
   };
 
   const handleCurrencyChange = (newCurrency) => {
